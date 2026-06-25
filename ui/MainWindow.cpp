@@ -508,9 +508,41 @@ void MainWindow::closeEvent(QCloseEvent* event) {
                              "An algorithm is currently running in the background.\n"
                              "Please wait for it to complete before closing the application.");
         event->ignore();
-    } else {
-        QMainWindow::closeEvent(event);
+        return;
     }
+
+    // Check for active workspace items if not running in CLI test/load-plugin mode
+    bool isCliMode = QCoreApplication::arguments().contains("--test-load") || 
+                     QCoreApplication::arguments().contains("--load-plugin");
+                     
+    if (!isCliMode) {
+        bool hasActiveItems = false;
+        for (auto* subWindow : m_workspaceArea->subWindowList()) {
+            if (subWindow && subWindow->widget()) {
+                if (qobject_cast<WorkspaceImageWindow*>(subWindow->widget()) ||
+                    qobject_cast<BatchImageWidget*>(subWindow->widget())) {
+                    hasActiveItems = true;
+                    break;
+                }
+            }
+        }
+        
+        if (hasActiveItems) {
+            auto result = QMessageBox::question(this, "Unsaved Modifications",
+                                                 "There are active images in the workspace. Any unsaved modifications will be lost.\n"
+                                                 "Are you sure you want to exit?",
+                                                 QMessageBox::Yes | QMessageBox::No,
+                                                 QMessageBox::No);
+            if (result == QMessageBox::No) {
+                event->ignore();
+                return;
+            }
+        }
+    }
+
+    m_pclBridge.reset(); // Cleanly unload the PCL module
+    QMainWindow::closeEvent(event);
+    QApplication::quit(); // Explicitly terminate the process
 }
 
 void MainWindow::executeAlgorithmSlot(const std::string& name, const std::map<std::string, std::string>& config) {
@@ -650,17 +682,34 @@ void MainWindow::loadAndShowPlugin(const QString& path) {
     if (!m_pclBridge) {
         m_pclBridge = std::make_unique<PCLBridge>();
     }
+    bool success = false;
     if (m_pclBridge->loadModule(path)) {
         if (m_pclBridge->isProcessRegistered("DeepSNR")) {
             m_runDeepSNRAct->setEnabled(true);
             qDebug() << "[MainWindow] DeepSNR process is registered. Launching interface...";
-            m_pclBridge->launchInterface("DeepSNR", this);
+            success = m_pclBridge->launchInterface("DeepSNR", this);
         } else {
             qWarning() << "[MainWindow] DeepSNR process not found in loaded module.";
         }
     } else {
         qWarning() << "[MainWindow] Failed to load module from:" << path;
     }
+
+    if (!success) {
+        if (QCoreApplication::arguments().contains("--test-load") || 
+            QCoreApplication::arguments().contains("--load-plugin")) {
+            qCritical() << "[MainWindow] Plugin load or launch failed. Exiting.";
+            QApplication::exit(1);
+        }
+    }
+}
+
+QMdiSubWindow* MainWindow::createPluginSubWindow(QWidget* widget, const QString& title) {
+    QMdiSubWindow* subWindow = m_workspaceArea->addSubWindow(widget);
+    subWindow->setWindowTitle(title);
+    subWindow->setAttribute(Qt::WA_DeleteOnClose);
+    subWindow->show();
+    return subWindow;
 }
 
 void MainWindow::onLoadPCLModule() {

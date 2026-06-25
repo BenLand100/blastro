@@ -47,6 +47,7 @@ public:
     ~MainWindow() override = default;
 
     void loadAndShowPlugin(const QString& path);
+    QMdiSubWindow* createPluginSubWindow(QWidget* widget, const QString& title);
 
 protected:
     void closeEvent(QCloseEvent* event) override;

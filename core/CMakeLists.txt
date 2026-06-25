@@ -12,7 +12,7 @@ target_include_directories(blastro_core PUBLIC
     ${CMAKE_SOURCE_DIR}/thirdparty/PCL/include
 )
 target_link_libraries(blastro_core 
-    PUBLIC Qt6::Core 
+    PUBLIC Qt6::Core Qt6::Gui Qt6::Widgets
     PRIVATE ${CMAKE_DL_LIBS}
 )
 

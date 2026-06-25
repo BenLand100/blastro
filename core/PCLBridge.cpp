@@ -1,4 +1,5 @@
 #include "core/PCLBridge.h"
+#include "ui/MainWindow.h"
 #include "core/PCLStubs.h"
 #include <pcl/api/APIInterface.h>
 #include <dlfcn.h>
@@ -1445,14 +1446,13 @@ bool PCLBridge::launchInterface(const QString& processId, QWidget* parentWindow)
     qDebug() << "  Interface (hMeta):" << hMeta;
     qDebug() << "  Parent Window:    " << parentWindow;
 
-    // Create a parent dialog to serve as the host window
-    QDialog* parentDialog = new QDialog(parentWindow);
-    parentDialog->setWindowTitle(processId + " Process Interface");
-    parentDialog->resize(600, 450);
+    // Create a parent widget to serve as the host window inside the MDI subwindow
+    QWidget* hostWidget = new QWidget();
+    hostWidget->setWindowTitle(processId + " Process Interface");
+    hostWidget->resize(600, 450);
 
     // Apply dark theme stylesheet to match application dark mode
-    parentDialog->setStyleSheet(
-        "QDialog { background-color: #121212; color: #ffffff; }"
+    hostWidget->setStyleSheet(
         "QWidget { background-color: #121212; color: #ffffff; }"
         "QPushButton { background-color: #2a2a2a; border: 1px solid #444; border-radius: 4px; padding: 6px 12px; color: #ffffff; }"
         "QPushButton:hover { background-color: #3a3a3a; }"
@@ -1468,7 +1468,7 @@ bool PCLBridge::launchInterface(const QString& processId, QWidget* parentWindow)
     // 1. Call the interface's initialization callback!
     // The C-API initialization routine expects (interface_handle, control_handle)
     interface_handle hInterface = const_cast<void*>(hMeta);
-    control_handle hParentControl = reinterpret_cast<control_handle>(parentDialog);
+    control_handle hParentControl = reinterpret_cast<control_handle>(hostWidget);
 
     qDebug() << "[PCL Bridge] Calling interface initialization callback (initFn)...";
     info.initFn(hInterface, hParentControl);
@@ -1497,11 +1497,13 @@ bool PCLBridge::launchInterface(const QString& processId, QWidget* parentWindow)
         qDebug() << "[PCL Bridge] Interface launch routine returned:" << launchOk << ", dynamic:" << (bool)dynamic;
     }
 
-    // Show the dialog modally!
-    qDebug() << "[PCL Bridge] Showing process interface dialog modally...";
-    parentDialog->exec();
+    MainWindow* mainWin = qobject_cast<MainWindow*>(parentWindow);
+    if (mainWin) {
+        mainWin->createPluginSubWindow(hostWidget, processId + " Process Interface");
+    } else {
+        hostWidget->show();
+    }
 
-    delete parentDialog;
     return true;
 }
 
