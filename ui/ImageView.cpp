@@ -51,6 +51,13 @@ void ImageView::setImage(const ImageVariant& image) {
     }
     m_scene->setSceneRect(0, 0, w, h);
     
+    // Auto-fit to the MDI window on load
+    if (viewport()->width() > 100 && viewport()->height() > 100) {
+        fitToWindow();
+    } else {
+        m_fitOnNextResize = true;
+    }
+    
     if (m_displayMode == Autostretch) {
         runAutostretch();
     } else {
@@ -247,6 +254,39 @@ void ImageView::zoomOut() {
 void ImageView::resetZoom() {
     resetTransform();
     m_zoomFactor = 1.0;
+}
+
+void ImageView::fitToWindow() {
+    int imgW = 0, imgH = 0;
+    if (std::holds_alternative<GrayscaleImagePtr>(m_currentImage)) {
+        auto img = std::get<GrayscaleImagePtr>(m_currentImage);
+        if (img) { imgW = img->width(); imgH = img->height(); }
+    } else if (std::holds_alternative<RGBImagePtr>(m_currentImage)) {
+        auto img = std::get<RGBImagePtr>(m_currentImage);
+        if (img) { imgW = img->width(); imgH = img->height(); }
+    }
+    
+    if (imgW <= 0 || imgH <= 0) return;
+    
+    int vpW = viewport()->width();
+    int vpH = viewport()->height();
+    if (vpW <= 100 || vpH <= 100) return;
+    
+    resetTransform();
+    double scaleX = static_cast<double>(vpW) / imgW;
+    double scaleY = static_cast<double>(vpH) / imgH;
+    double factor = std::min(scaleX, scaleY);
+    
+    scale(factor, factor);
+    m_zoomFactor = factor;
+}
+
+void ImageView::resizeEvent(QResizeEvent* event) {
+    QGraphicsView::resizeEvent(event);
+    if (m_fitOnNextResize) {
+        fitToWindow();
+        m_fitOnNextResize = false;
+    }
 }
 
 void ImageView::wheelEvent(QWheelEvent* event) {

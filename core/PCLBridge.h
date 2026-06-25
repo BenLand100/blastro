@@ -77,6 +77,9 @@ public:
     // Execute a registered process by ID on a set of Blastro image buffers
     bool executeProcess(const QString& processId, std::vector<ImageBufferPtr>& buffers);
 
+    // Execute a registered process instance by ID on a set of Blastro image buffers
+    bool executeProcessInstance(const QString& processId, void* hProcess, std::vector<ImageBufferPtr>& buffers);
+
     // Launch a process interface in a host-provided parent widget/dialog
     bool launchInterface(const QString& processId, QWidget* parentWindow);
 

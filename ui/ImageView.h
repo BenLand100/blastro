@@ -39,6 +39,7 @@ public:
     void zoomIn();
     void zoomOut();
     void resetZoom();
+    void fitToWindow();
 
     void setFrameSelectedStatus(bool selected);
 
@@ -53,6 +54,7 @@ protected:
     void mouseMoveEvent(QMouseEvent* event) override;
     void drawBackground(QPainter* painter, const QRectF& rect) override;
     void keyPressEvent(QKeyEvent* event) override;
+    void resizeEvent(QResizeEvent* event) override;
 
 private:
     void updateView();
@@ -74,6 +76,7 @@ private:
     bool m_isPanning;
     QPoint m_lastMousePos;
     bool m_isFrameSelected;
+    bool m_fitOnNextResize = false;
 };
 
 } // namespace blastro

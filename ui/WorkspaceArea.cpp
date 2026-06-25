@@ -63,21 +63,29 @@ void WorkspaceArea::renameElementView(const QString& oldName, const QString& new
 }
 
 ImageVariant WorkspaceArea::getActiveImage() const {
-    QMdiSubWindow* activeSub = activeSubWindow();
-    if (!activeSub) return ImageVariant();
-
-    QWidget* widget = activeSub->widget();
-    if (auto win = qobject_cast<WorkspaceImageWindow*>(widget)) {
-        return win->currentImage();
+    // Search in activation history order (most recently active first)
+    QList<QMdiSubWindow*> windows = subWindowList(QMdiArea::ActivationHistoryOrder);
+    for (QMdiSubWindow* sub : windows) {
+        if (!sub) continue;
+        QWidget* widget = sub->widget();
+        if (auto win = qobject_cast<WorkspaceImageWindow*>(widget)) {
+            return win->currentImage();
+        }
     }
-    
     return ImageVariant();
 }
 
 QString WorkspaceArea::getActiveImageName() const {
-    QMdiSubWindow* activeSub = activeSubWindow();
-    if (!activeSub) return QString();
-    return activeSub->windowTitle();
+    // Search in activation history order (most recently active first)
+    QList<QMdiSubWindow*> windows = subWindowList(QMdiArea::ActivationHistoryOrder);
+    for (QMdiSubWindow* sub : windows) {
+        if (!sub) continue;
+        QWidget* widget = sub->widget();
+        if (auto win = qobject_cast<WorkspaceImageWindow*>(widget)) {
+            return sub->windowTitle();
+        }
+    }
+    return QString();
 }
 
 } // namespace blastro

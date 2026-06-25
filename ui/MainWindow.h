@@ -48,6 +48,9 @@ public:
 
     void loadAndShowPlugin(const QString& path);
     QMdiSubWindow* createPluginSubWindow(QWidget* widget, const QString& title);
+    bool executePCLProcessOnActiveImage(const QString& processId, void* hProcess);
+    void testProcessOnImage(const QString& pluginPath, const QString& imagePath);
+    bool loadImageDirectly(const QString& filepath, const QString& refName);
 
 protected:
     void closeEvent(QCloseEvent* event) override;
@@ -68,7 +71,6 @@ private slots:
     
     // Plugins
     void onLoadPCLModule();
-    void onRunDeepSNR();
 
 private:
     void createMenus();
@@ -82,14 +84,11 @@ private:
     QProgressBar* m_progressBar = nullptr;
     bool m_algorithmRunning = false;
 
-    // Plugins
-    QAction* m_runDeepSNRAct = nullptr;
     std::unique_ptr<PCLBridge> m_pclBridge;
 
     // Menus
     QMenu* m_fileMenu;
     QMenu* m_algoMenu;
-    QMenu* m_pluginsMenu = nullptr;
 
     // Actions
     QAction* m_openAct;

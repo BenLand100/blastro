@@ -12,8 +12,11 @@
 #include <vector>
 #include <cstring>
 #include <algorithm>
+#include <thread>
+#include <chrono>
 #include <QWidget>
 #include <QDialog>
+#include <QFrame>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QGroupBox>
@@ -55,6 +58,12 @@ static meta_interface_handle g_currentDefiningInterface = nullptr;
 // Map from interface/process ID to the top-level QWidget handle created for it
 static std::unordered_map<std::string, control_handle> g_interfaceControls;
 
+// Map from Qt widget pointer (control_handle) to the PCL client object pointer (api_handle).
+// The PCL Create* functions pass `client = this` (the PCL UIObject pointer).
+// PCL event dispatchers cast hSender back to Button*/Slider*/etc. and access m_handlers,
+// so we MUST pass the PCL client pointer as hSender, not the Qt widget pointer.
+static std::unordered_map<control_handle, api_handle> g_widgetToClient;
+
 struct ParameterKey {
     meta_parameter_handle param;
     pcl::size_type rowIndex;
@@ -83,6 +92,7 @@ struct hash<blastro::ParameterKey> {
 namespace blastro {
 
 static std::unordered_map<process_handle, std::unordered_map<ParameterKey, ParameterValue>> g_processParameters;
+static PCLImageMock* g_activeImage = nullptr;
 
 // ----------------------------------------------------------------------------
 // PixelTraits LUT Mock
@@ -315,9 +325,19 @@ static void mock_EndProcessDefinition() {
     g_currentDefiningProcess = nullptr;
 }
 
+static const PCLImageMock* resolveImageMock(const_image_handle h) {
+    if (!h) return nullptr;
+    return reinterpret_cast<const PCLImageMock*>(h);
+}
+
+static PCLImageMock* resolveImageMockMutable(image_handle h) {
+    if (!h) return nullptr;
+    return reinterpret_cast<PCLImageMock*>(h);
+}
+
 static api_bool mock_GetImageGeometry(const_image_handle h, uint32* w, uint32* h_out, uint32* n) {
-    if (!h) return false;
-    auto* img = reinterpret_cast<const PCLImageMock*>(h);
+    const auto* img = resolveImageMock(h);
+    if (!img) return false;
     if (w) *w = img->width;
     if (h_out) *h_out = img->height;
     if (n) *n = img->numChannels;
@@ -325,16 +345,16 @@ static api_bool mock_GetImageGeometry(const_image_handle h, uint32* w, uint32* h
 }
 
 static api_bool mock_GetImageFormat(const_image_handle h, uint32* nbits, api_bool* flt) {
-    if (!h) return false;
-    auto* img = reinterpret_cast<const PCLImageMock*>(h);
+    const auto* img = resolveImageMock(h);
+    if (!img) return false;
     if (nbits) *nbits = img->bitsPerSample;
     if (flt) *flt = img->isFloat;
     return true;
 }
 
 static api_bool mock_GetImagePixelData(image_handle h, void*** data) {
-    if (!h || !data) return false;
-    auto* img = reinterpret_cast<PCLImageMock*>(h);
+    auto* img = resolveImageMockMutable(h);
+    if (!img || !data) return false;
     img->updatePointers();
     *data = img->channelDataPointers.data();
     return true;
@@ -344,16 +364,273 @@ static api_bool mock_SetImagePixelData(image_handle, void**) {
     return true;
 }
 
+static api_bool mock_SetImageGeometry(image_handle h, uint32 w, uint32 h_out, uint32 n) {
+    qDebug() << "[PCL Bridge] mock_SetImageGeometry called: image =" << h << "w =" << w << "h =" << h_out << "n =" << n;
+    auto* img = resolveImageMockMutable(h);
+    if (img) {
+        img->width = w;
+        img->height = h_out;
+        img->numChannels = n;
+        if (img->wrappedBuffers.empty()) {
+            img->ownedChannels.resize(n);
+            for (uint32 i = 0; i < n; ++i) {
+                img->ownedChannels[i].resize(w * h_out, 0.0f);
+            }
+        }
+        img->updatePointers();
+        return true;
+    }
+    return false;
+}
+
+static api_bool mock_SetImageColorSpace(image_handle h, uint32 cs) {
+    qDebug() << "[PCL Bridge] mock_SetImageColorSpace called: image =" << h << "colorSpace =" << cs;
+    auto* img = resolveImageMockMutable(h);
+    if (img) {
+        img->colorSpace = cs;
+        return true;
+    }
+    return false;
+}
+
 static image_handle mock_GetViewImage(view_handle hView) {
     if (!hView) return nullptr;
     auto* view = reinterpret_cast<PCLViewMock*>(hView);
     return view->hImage;
 }
 
+static api_bool mock_GetViewScreenTransferFunctions(const_view_handle hView, double* m, double* c0, double* c1, double* r0, double* r1) {
+    qDebug() << "[PCL Bridge] mock_GetViewScreenTransferFunctions called: view =" << hView;
+
+    // Compute per-channel STF parameters from the actual image data.
+    // PixInsight autostretch: c0 = max(0, median - 2.8*MAD), midtone m places background at targetBkg.
+    // We compute statistics for channels 0..N-1 and set channel 3 as the average (luminance joint channel).
+
+    const double targetBkg = 0.25; // PixInsight default target background level
+    const double kMAD = 2.8;       // Shadow clipping factor
+
+    int nChan = g_activeImage ? (int)g_activeImage->numChannels : 3;
+
+    // Autostretch: midtone balance is solved analytically below — no MTF lambda needed.
+
+    // Initialize all 4 channels to neutral defaults
+    for (int i = 0; i < 4; ++i) {
+        if (m)  m[i]  = 0.5;
+        if (c0) c0[i] = 0.0;
+        if (c1) c1[i] = 1.0;
+        if (r0) r0[i] = 0.0;
+        if (r1) r1[i] = 1.0;
+    }
+
+    if (!g_activeImage) return true;
+
+    double sumM[3]  = {0,0,0};
+    double sumC0[3] = {0,0,0};
+    int validChans = 0;
+
+    for (int c = 0; c < nChan && c < 3; ++c) {
+        const float* data = nullptr;
+        int N = g_activeImage->width * g_activeImage->height;
+        if (!g_activeImage->wrappedBuffers.empty() && c < (int)g_activeImage->wrappedBuffers.size()) {
+            data = g_activeImage->wrappedBuffers[c]->data();
+        } else if (c < (int)g_activeImage->ownedChannels.size()) {
+            data = g_activeImage->ownedChannels[c].data();
+        }
+        if (!data || N == 0) continue;
+
+        // Compute mean and a robust MAD approximation using sampled pixels
+        int sampleStep = std::max(1, N / 10000);
+        double sum = 0;
+        int count = 0;
+        for (int p = 0; p < N; p += sampleStep) { sum += data[p]; ++count; }
+        double mean = count > 0 ? sum / count : 0.0;
+
+        // Approximate MAD as mean absolute deviation from mean (fast, no sort needed)
+        double madSum = 0;
+        for (int p = 0; p < N; p += sampleStep) { madSum += std::abs(data[p] - mean); }
+        double mad = count > 0 ? madSum / count : 0.01;
+
+        // Compute shadow clipping
+        double shadows = std::max(0.0, mean - kMAD * mad);
+        double clippedMean = (mean - shadows) / (1.0 - shadows);
+
+        // Midtone balance: find m such that MTF(clippedMean, m) = targetBkg
+        // Solving: targetBkg*(2*m-1)*x - targetBkg*m = (m-1)*x
+        // => m = (targetBkg*x - x) / (targetBkg*2*x - targetBkg - x) ... algebraically:
+        // m = (x - targetBkg*x) / (x - 2*targetBkg*x + targetBkg)
+        //   = x*(1-targetBkg) / (x*(1-2*targetBkg) + targetBkg)
+        double midtone = 0.5;
+        if (clippedMean > 0.0 && clippedMean < 1.0) {
+            double x = clippedMean;
+            double d = x * (1.0 - 2.0*targetBkg) + targetBkg;
+            if (std::abs(d) > 1e-10)
+                midtone = std::max(0.001, std::min(0.999, x*(1.0 - targetBkg) / d));
+        }
+
+        if (m)  m[c]  = midtone;
+        if (c0) c0[c] = shadows;
+        if (c1) c1[c] = 1.0;
+        if (r0) r0[c] = 0.0;
+        if (r1) r1[c] = 1.0;
+
+        sumM[c]  = midtone;
+        sumC0[c] = shadows;
+        ++validChans;
+
+        qDebug() << "[PCL Bridge] STF ch" << c << ": mean=" << mean << "mad=" << mad
+                 << "shadows=" << shadows << "midtone=" << midtone;
+    }
+
+    // Channel 3: joint luminance — average of R/G/B
+    if (validChans > 0) {
+        double avgM  = 0, avgC0 = 0;
+        for (int c = 0; c < validChans; ++c) { avgM += sumM[c]; avgC0 += sumC0[c]; }
+        avgM  /= validChans;
+        avgC0 /= validChans;
+        if (m)  m[3]  = avgM;
+        if (c0) c0[3] = avgC0;
+        if (c1) c1[3] = 1.0;
+        if (r0) r0[3] = 0.0;
+        if (r1) r1[3] = 1.0;
+    }
+
+    return true;
+}
+
+static api_bool mock_GetViewScreenTransferFunctionsEnabled(view_handle hView) {
+    qDebug() << "[PCL Bridge] mock_GetViewScreenTransferFunctionsEnabled called: view =" << hView;
+    return true; // STF always enabled — DeepSNR needs it to calibrate noise model
+}
+
 static api_bool mock_GetImageColorSpace(const_image_handle h, uint32* cs) {
     if (!h) return false;
     auto* img = reinterpret_cast<const PCLImageMock*>(h);
     if (cs) *cs = img->colorSpace;
+    return true;
+}
+
+static api_bool mock_LockView(const_view_handle hView) {
+    qDebug() << "[PCL Bridge] mock_LockView called: view =" << hView;
+    return true;
+}
+
+static api_bool mock_UnlockView(const_view_handle hView) {
+    qDebug() << "[PCL Bridge] mock_UnlockView called: view =" << hView;
+    return true;
+}
+
+static api_bool mock_AttachToImage(image_handle hImage, const_view_handle hView, api_bool readOnly) {
+    qDebug() << "[PCL Bridge] mock_AttachToImage called: image =" << hImage << "view =" << hView << "readOnly =" << readOnly;
+    if (!hImage) {
+        qWarning() << "[PCL Bridge] mock_AttachToImage: null image handle passed!";
+        return false;
+    }
+    
+    if (g_activeImage) {
+        qDebug() << "[PCL Bridge] mock_AttachToImage: successfully associated SharedImage" << hImage << "with active image mock" << g_activeImage;
+    } else {
+        qWarning() << "[PCL Bridge] mock_AttachToImage: no active image mock registered!";
+        return false;
+    }
+    
+    return true;
+}
+
+static api_bool mock_GetImageRGBWS(const_image_handle hImage, api_RGBWS* rgbws) {
+    qDebug() << "[PCL Bridge] mock_GetImageRGBWS called: image =" << hImage << "rgbws =" << rgbws;
+    if (!rgbws) return false;
+    
+    rgbws->gamma = 2.2f;
+    rgbws->isSRGBGamma = true;
+    
+    // Default sRGB chromaticity coordinates (Rx, Gx, Bx) and (Ry, Gy, By)
+    rgbws->x[0] = 0.64f;  rgbws->y[0] = 0.33f;
+    rgbws->x[1] = 0.30f;  rgbws->y[1] = 0.60f;
+    rgbws->x[2] = 0.15f;  rgbws->y[2] = 0.06f;
+    
+    // Default sRGB luminance coefficients
+    rgbws->Y[0] = 0.212639f;
+    rgbws->Y[1] = 0.715168f;
+    rgbws->Y[2] = 0.072193f;
+    
+    return true;
+}
+
+static api_bool mock_DetachFromImage(image_handle hImage) {
+    qDebug() << "[PCL Bridge] mock_DetachFromImage called: image =" << hImage;
+    return true;
+}
+
+static api_bool mock_Abort() {
+    qDebug() << "[PCL Bridge] mock_Abort called";
+    return true;
+}
+
+static api_bool mock_DisableAbort() {
+    qDebug() << "[PCL Bridge] mock_DisableAbort called";
+    return true;
+}
+
+static api_bool mock_EnableAbort() {
+    qDebug() << "[PCL Bridge] mock_EnableAbort called";
+    return true;
+}
+
+static void fillPropertyValue(api_property_value* value, const std::string& id) {
+    if (!value) return;
+    std::memset(value, 0, sizeof(api_property_value));
+    
+    int numChannels = g_activeImage ? g_activeImage->numChannels : 3;
+    
+    if (id == "MAD") {
+        static std::vector<double> s_mad(16, 0.01);
+        value->type = 0x0000000000280000; // VTYPE_DVECTOR
+        value->dimX = numChannels;
+        value->data.blockValue = s_mad.data();
+    } else if (id == "Median") {
+        static std::vector<double> s_median(16, 0.1);
+        value->type = 0x0000000000280000; // VTYPE_DVECTOR
+        value->dimX = numChannels;
+        value->data.blockValue = s_median.data();
+    } else if (id == "Mean") {
+        static std::vector<double> s_mean(16, 0.1);
+        value->type = 0x0000000000280000; // VTYPE_DVECTOR
+        value->dimX = numChannels;
+        value->data.blockValue = s_mean.data();
+    } else {
+        value->type = 0; // VTYPE_INVALID
+    }
+}
+
+static api_bool mock_GetViewPropertyExists(api_handle hModule, const_view_handle hView, const char* id, uint64* type) {
+    qDebug() << "[PCL Bridge] mock_GetViewPropertyExists called: view =" << hView << "id =" << id;
+    std::string propId = id ? id : "";
+    if (type) {
+        if (propId == "MAD" || propId == "Median" || propId == "Mean") {
+            *type = 0x0000000000280000; // VTYPE_DVECTOR
+        } else {
+            *type = 0; // VTYPE_INVALID
+        }
+    }
+    return true;
+}
+
+static api_bool mock_ComputeViewProperty(api_handle hModule, view_handle hView, const char* id, api_bool notify, api_property_value* value) {
+    qDebug() << "[PCL Bridge] mock_ComputeViewProperty called: view =" << hView << "id =" << id;
+    std::string propId = id ? id : "";
+    fillPropertyValue(value, propId);
+    return true;
+}
+
+static api_bool mock_GetViewPropertyValue(api_handle hModule, const_view_handle hView, const char* id, api_property_value* value) {
+    qDebug() << "[PCL Bridge] mock_GetViewPropertyValue called: view =" << hView << "id =" << id;
+    std::string propId = id ? id : "";
+    fillPropertyValue(value, propId);
+    return true;
+}
+
+static api_bool mock_SetViewPropertyValue(api_handle hModule, view_handle hView, const char* id, const api_property_value* value, uint32 flags, api_bool notify) {
+    qDebug() << "[PCL Bridge] mock_SetViewPropertyValue called: view =" << hView << "id =" << id;
     return true;
 }
 
@@ -406,19 +683,21 @@ static void mock_EndInterfaceDefinition() {
 static control_handle mock_CreateControl(api_handle hModule, api_handle client, control_handle parent, uint32 flags) {
     QWidget* parentWidget = reinterpret_cast<QWidget*>(parent);
     QWidget* w = new QWidget(parentWidget);
+    control_handle ch = reinterpret_cast<control_handle>(w);
+    if (client) g_widgetToClient[ch] = client;
     qDebug() << "[PCL Bridge] CreateControl: client =" << client << "parent =" << parentWidget << "-> QWidget =" << w;
     if (!parentWidget) {
         qDebug() << "[PCL Bridge] Detected top-level control creation. Associating with pending interface.";
         for (const auto& pair : g_interfaces) {
             std::string id = pair.second.id.toStdString();
             if (g_interfaceControls.find(id) == g_interfaceControls.end()) {
-                g_interfaceControls[id] = reinterpret_cast<control_handle>(w);
+                g_interfaceControls[id] = ch;
                 qDebug() << "[PCL Bridge] Associated top-level control" << w << "with interface ID:" << pair.second.id;
                 break;
             }
         }
     }
-    return reinterpret_cast<control_handle>(w);
+    return ch;
 }
 
 static void mock_SetControlParent(control_handle h, control_handle parent) {
@@ -478,19 +757,21 @@ static void mock_AdjustControlToContents(control_handle h) {
 static control_handle mock_CreateDialog(api_handle hModule, api_handle client, control_handle parent, uint32 flags) {
     QWidget* parentWidget = reinterpret_cast<QWidget*>(parent);
     QDialog* dlg = new QDialog(parentWidget);
+    control_handle ch = reinterpret_cast<control_handle>(dlg);
+    if (client) g_widgetToClient[ch] = client;
     qDebug() << "[PCL Bridge] CreateDialog: client =" << client << "parent =" << parentWidget << "-> QDialog =" << dlg;
     if (!parentWidget) {
         qDebug() << "[PCL Bridge] Detected top-level dialog creation. Associating with pending interface.";
         for (const auto& pair : g_interfaces) {
             std::string id = pair.second.id.toStdString();
             if (g_interfaceControls.find(id) == g_interfaceControls.end()) {
-                g_interfaceControls[id] = reinterpret_cast<control_handle>(dlg);
+                g_interfaceControls[id] = ch;
                 qDebug() << "[PCL Bridge] Associated top-level dialog" << dlg << "with interface ID:" << pair.second.id;
                 break;
             }
         }
     }
-    return reinterpret_cast<control_handle>(dlg);
+    return ch;
 }
 
 static sizer_handle mock_CreateSizer(api_handle hModule, api_bool vertical) {
@@ -576,8 +857,10 @@ static control_handle mock_CreateGroupBox(api_handle hModule, api_handle client,
     if (title) {
         gb->setTitle(QString::fromUtf16(reinterpret_cast<const char16_t*>(title)));
     }
+    control_handle ch = reinterpret_cast<control_handle>(gb);
+    if (client) g_widgetToClient[ch] = client;
     qDebug() << "[PCL Bridge] CreateGroupBox: client =" << client << "title =" << gb->title() << "-> QGroupBox =" << gb;
-    return reinterpret_cast<control_handle>(gb);
+    return ch;
 }
 
 static control_handle mock_CreatePushButton(api_handle hModule, api_handle client, const char16_type* text, const_bitmap_handle bitmap, control_handle parent, uint32 flags) {
@@ -586,8 +869,10 @@ static control_handle mock_CreatePushButton(api_handle hModule, api_handle clien
     if (text) {
         btn->setText(QString::fromUtf16(reinterpret_cast<const char16_t*>(text)));
     }
+    control_handle ch = reinterpret_cast<control_handle>(btn);
+    if (client) g_widgetToClient[ch] = client;
     qDebug() << "[PCL Bridge] CreatePushButton: client =" << client << "text =" << btn->text() << "-> QPushButton =" << btn;
-    return reinterpret_cast<control_handle>(btn);
+    return ch;
 }
 
 static control_handle mock_CreateCheckBox(api_handle hModule, api_handle client, const char16_type* text, control_handle parent, uint32 flags) {
@@ -596,8 +881,10 @@ static control_handle mock_CreateCheckBox(api_handle hModule, api_handle client,
     if (text) {
         cb->setText(QString::fromUtf16(reinterpret_cast<const char16_t*>(text)));
     }
+    control_handle ch = reinterpret_cast<control_handle>(cb);
+    if (client) g_widgetToClient[ch] = client;
     qDebug() << "[PCL Bridge] CreateCheckBox: client =" << client << "text =" << cb->text() << "-> QCheckBox =" << cb;
-    return reinterpret_cast<control_handle>(cb);
+    return ch;
 }
 
 static void mock_SetButtonText(control_handle h, const char16_type* text) {
@@ -612,8 +899,10 @@ static void mock_SetButtonText(control_handle h, const char16_type* text) {
 static control_handle mock_CreateComboBox(api_handle hModule, api_handle client, control_handle parent, uint32 flags) {
     QWidget* parentWidget = reinterpret_cast<QWidget*>(parent);
     QComboBox* cb = new QComboBox(parentWidget);
+    control_handle ch = reinterpret_cast<control_handle>(cb);
+    if (client) g_widgetToClient[ch] = client;
     qDebug() << "[PCL Bridge] CreateComboBox: client =" << client << "parent =" << parentWidget << "-> QComboBox =" << cb;
-    return reinterpret_cast<control_handle>(cb);
+    return ch;
 }
 
 static void mock_InsertComboBoxItem(control_handle h, int32 index, const char16_type* text, const_bitmap_handle bitmap) {
@@ -637,7 +926,9 @@ static void mock_SetComboBoxCurrentItem(control_handle h, int32 index) {
     QComboBox* cb = reinterpret_cast<QComboBox*>(h);
     qDebug() << "[PCL Bridge] SetComboBoxCurrentItem:" << cb << "index =" << index;
     if (cb) {
+        cb->blockSignals(true);
         cb->setCurrentIndex(index);
+        cb->blockSignals(false);
     }
 }
 
@@ -651,15 +942,19 @@ static int32 mock_GetComboBoxCurrentItem(const_control_handle h) {
 static control_handle mock_CreateSpinBox(api_handle hModule, api_handle client, control_handle parent, uint32 flags) {
     QWidget* parentWidget = reinterpret_cast<QWidget*>(parent);
     QSpinBox* sb = new QSpinBox(parentWidget);
+    control_handle ch = reinterpret_cast<control_handle>(sb);
+    if (client) g_widgetToClient[ch] = client;
     qDebug() << "[PCL Bridge] CreateSpinBox: client =" << client << "parent =" << parentWidget << "-> QSpinBox =" << sb;
-    return reinterpret_cast<control_handle>(sb);
+    return ch;
 }
 
 static void mock_SetSpinBoxRange(control_handle h, int32 minVal, int32 maxVal) {
     QSpinBox* sb = reinterpret_cast<QSpinBox*>(h);
     qDebug() << "[PCL Bridge] SetSpinBoxRange:" << sb << "range = [" << minVal << "," << maxVal << "]";
     if (sb) {
+        sb->blockSignals(true);
         sb->setRange(minVal, maxVal);
+        sb->blockSignals(false);
     }
 }
 
@@ -667,7 +962,9 @@ static void mock_SetSpinBoxValue(control_handle h, int32 val) {
     QSpinBox* sb = reinterpret_cast<QSpinBox*>(h);
     qDebug() << "[PCL Bridge] SetSpinBoxValue:" << sb << "value =" << val;
     if (sb) {
+        sb->blockSignals(true);
         sb->setValue(val);
+        sb->blockSignals(false);
     }
 }
 
@@ -684,8 +981,10 @@ static control_handle mock_CreateLabel(api_handle hModule, api_handle client, co
     if (text) {
         lbl->setText(QString::fromUtf16(reinterpret_cast<const char16_t*>(text)));
     }
+    control_handle ch = reinterpret_cast<control_handle>(lbl);
+    if (client) g_widgetToClient[ch] = client;
     qDebug() << "[PCL Bridge] CreateLabel: client =" << client << "text =" << lbl->text() << "-> QLabel =" << lbl;
-    return reinterpret_cast<control_handle>(lbl);
+    return ch;
 }
 
 static void mock_SetLabelText(control_handle h, const char16_type* text) {
@@ -700,8 +999,10 @@ static void mock_SetLabelText(control_handle h, const char16_type* text) {
 static control_handle mock_CreateSlider(api_handle hModule, api_handle client, api_bool vertical, control_handle parent, uint32 flags) {
     QWidget* parentWidget = reinterpret_cast<QWidget*>(parent);
     QSlider* sl = new QSlider(vertical ? Qt::Vertical : Qt::Horizontal, parentWidget);
+    control_handle ch = reinterpret_cast<control_handle>(sl);
+    if (client) g_widgetToClient[ch] = client;
     qDebug() << "[PCL Bridge] CreateSlider: client =" << client << "vertical =" << (bool)vertical << "-> QSlider =" << sl;
-    return reinterpret_cast<control_handle>(sl);
+    return ch;
 }
 
 
@@ -711,8 +1012,10 @@ static control_handle mock_CreateEdit(api_handle hModule, api_handle client, con
     if (text) {
         edit->setText(QString::fromUtf16(reinterpret_cast<const char16_t*>(text)));
     }
+    control_handle ch = reinterpret_cast<control_handle>(edit);
+    if (client) g_widgetToClient[ch] = client;
     qDebug() << "[PCL Bridge] CreateEdit: client =" << client << "parent =" << parentWidget << "text =" << edit->text() << "-> QLineEdit =" << edit;
-    return reinterpret_cast<control_handle>(edit);
+    return ch;
 }
 
 static api_bool mock_GetEditText(const_control_handle h, char16_type* text, pcl::size_type* length) {
@@ -736,7 +1039,9 @@ static void mock_SetEditText(control_handle h, const char16_type* text) {
     QString str = text ? QString::fromUtf16(reinterpret_cast<const char16_t*>(text)) : QString();
     qDebug() << "[PCL Bridge] SetEditText:" << edit << "text =" << str;
     if (edit) {
+        edit->blockSignals(true);
         edit->setText(str);
+        edit->blockSignals(false);
     }
 }
 
@@ -757,8 +1062,132 @@ static pcl::size_type mock_GetUIObjectRefCount(const_api_handle h) {
     return h ? 1 : 0;
 }
 
+struct PCLThreadMock {
+    api_handle client = nullptr;
+    pcl::thread_exec_routine execFn = nullptr;
+    bool active = false;
+    uint32 status = 0;
+};
+
+static std::unordered_map<api_handle, PCLThreadMock*> g_threads;
+static thread_local thread_handle g_currentThread = nullptr;
+
+static thread_handle mock_CreateThread(api_handle hModule, api_handle client, uint32 flags) {
+    qDebug() << "[PCL Bridge] mock_CreateThread called: client =" << client;
+    auto* thread = new PCLThreadMock();
+    thread->client = client;
+    g_threads[client] = thread;
+    return client;
+}
+
+static api_bool mock_SetThreadExecRoutine(thread_handle hThread, pcl::thread_exec_routine execFn) {
+    qDebug() << "[PCL Bridge] mock_SetThreadExecRoutine called: thread =" << hThread;
+    auto it = g_threads.find(hThread);
+    if (it != g_threads.end()) {
+        it->second->execFn = execFn;
+        return true;
+    }
+    return false;
+}
+
+static void mock_StartThread(thread_handle hThread, uint32 priority) {
+    qDebug() << "[PCL Bridge] mock_StartThread called: thread =" << hThread << "priority =" << priority;
+    auto it = g_threads.find(hThread);
+    if (it != g_threads.end()) {
+        auto* thread = it->second;
+        if (thread && thread->execFn) {
+            thread->active = true;
+            qDebug() << "[PCL Bridge] Spawning background thread asynchronously...";
+            std::thread([hThread]() {
+                g_currentThread = hThread;
+                auto itInner = g_threads.find(hThread);
+                if (itInner != g_threads.end()) {
+                    auto* threadInner = itInner->second;
+                    if (threadInner && threadInner->execFn) {
+                        try {
+                            threadInner->execFn(hThread);
+                        } catch (...) {
+                            qWarning() << "[PCL Bridge] Exception in background thread";
+                        }
+                        threadInner->active = false;
+                        qDebug() << "[PCL Bridge] Background thread completed.";
+                    }
+                }
+            }).detach();
+        }
+    }
+}
+
+static api_bool mock_IsThreadActive(const_thread_handle hThread) {
+    auto it = g_threads.find(const_cast<thread_handle>(hThread));
+    if (it != g_threads.end()) {
+        return it->second->active;
+    }
+    return false;
+}
+
+static api_bool mock_WaitThread(thread_handle hThread, uint32 msec) {
+    qDebug() << "[PCL Bridge] mock_WaitThread called: thread =" << hThread << "msec =" << msec;
+    auto it = g_threads.find(hThread);
+    if (it != g_threads.end()) {
+        auto* thread = it->second;
+        if (thread) {
+            if (msec == 0xFFFFFFFF) {
+                while (thread->active) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+                }
+            } else {
+                uint32 elapsed = 0;
+                while (thread->active && elapsed < msec) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+                    elapsed += 5;
+                }
+            }
+        }
+    }
+    return true;
+}
+
+static void mock_SleepThread(thread_handle hThread, uint32 msec) {
+    qDebug() << "[PCL Bridge] mock_SleepThread called: thread =" << hThread << "msec =" << msec;
+    std::this_thread::sleep_for(std::chrono::milliseconds(msec));
+}
+
+static uint32 mock_GetThreadStatus(const_thread_handle hThread) {
+    auto it = g_threads.find(const_cast<thread_handle>(hThread));
+    if (it != g_threads.end()) {
+        return it->second->status;
+    }
+    return 0;
+}
+
+static void mock_SetThreadStatus(thread_handle hThread, uint32 status) {
+    auto it = g_threads.find(hThread);
+    if (it != g_threads.end()) {
+        it->second->status = status;
+    }
+}
+
+static void mock_KillThread(thread_handle hThread) {
+    qDebug() << "[PCL Bridge] mock_KillThread called: thread =" << hThread;
+    auto it = g_threads.find(hThread);
+    if (it != g_threads.end()) {
+        it->second->active = false;
+    }
+}
+
 static thread_handle mock_GetCurrentThread() {
-    return reinterpret_cast<thread_handle>(1);
+    return g_currentThread;
+}
+
+static void mock_AppendThreadConsoleOutputText(thread_handle, const char16_type* text, api_bool appendNewline) {
+    QString str = QString::fromUtf16(reinterpret_cast<const char16_t*>(text));
+    if (appendNewline) {
+        qDebug().noquote() << "[PCL Thread Console]" << str;
+    } else {
+        std::cout << str.toStdString();
+        std::flush(std::cout);
+    }
 }
 
 static api_bool mock_GetSizerDisplayPixelRatio(const_sizer_handle h, double* ratio) {
@@ -793,6 +1222,160 @@ static void mock_SetLabelAlignment(control_handle h, int32 align) {
 static api_bool mock_SetEventRoutine(control_handle h, api_handle receiver, void* routine) {
     qDebug() << "[PCL Bridge] SetEventRoutine: control =" << h << "receiver =" << receiver << "routine =" << routine;
     return true;
+}
+
+static api_bool mock_SetSliderValueUpdatedEventRoutine(control_handle h, api_handle receiver, pcl::value_event_routine routine) {
+    QSlider* slider = reinterpret_cast<QSlider*>(h);
+    qDebug() << "[PCL Bridge] SetSliderValueUpdatedEventRoutine: slider =" << slider << "receiver =" << receiver << "routine =" << routine;
+    if (slider) {
+        slider->setProperty("valueUpdatedRoutine", QVariant::fromValue(reinterpret_cast<void*>(routine)));
+        slider->setProperty("valueUpdatedReceiver", QVariant::fromValue(reinterpret_cast<void*>(receiver)));
+        // Store the PCL sender (client) so the dispatcher can cast it back to Slider*
+        auto clientIt = g_widgetToClient.find(h);
+        slider->setProperty("pclSender", QVariant::fromValue(clientIt != g_widgetToClient.end() ? clientIt->second : (api_handle)h));
+        
+        slider->disconnect(slider, &QSlider::valueChanged, nullptr, nullptr);
+        
+        QObject::connect(slider, &QSlider::valueChanged, [slider](int value) {
+            void* r = slider->property("valueUpdatedRoutine").value<void*>();
+            void* rec = slider->property("valueUpdatedReceiver").value<void*>();
+            void* snd = slider->property("pclSender").value<void*>();
+            if (r) {
+                auto callback = reinterpret_cast<pcl::value_event_routine>(r);
+                callback(reinterpret_cast<control_handle>(snd), reinterpret_cast<control_handle>(rec), value);
+            }
+        });
+        return true;
+    }
+    return false;
+}
+
+static api_bool mock_SetEditCompletedEventRoutine(control_handle h, api_handle receiver, pcl::event_routine routine) {
+    QLineEdit* edit = reinterpret_cast<QLineEdit*>(h);
+    qDebug() << "[PCL Bridge] SetEditCompletedEventRoutine: edit =" << edit << "receiver =" << receiver << "routine =" << routine;
+    if (edit) {
+        edit->setProperty("completedRoutine", QVariant::fromValue(reinterpret_cast<void*>(routine)));
+        edit->setProperty("completedReceiver", QVariant::fromValue(reinterpret_cast<void*>(receiver)));
+        auto clientIt = g_widgetToClient.find(h);
+        edit->setProperty("pclSender", QVariant::fromValue(clientIt != g_widgetToClient.end() ? clientIt->second : (api_handle)h));
+        
+        edit->disconnect(edit, &QLineEdit::editingFinished, nullptr, nullptr);
+        
+        QObject::connect(edit, &QLineEdit::editingFinished, [edit]() {
+            void* r = edit->property("completedRoutine").value<void*>();
+            void* rec = edit->property("completedReceiver").value<void*>();
+            void* snd = edit->property("pclSender").value<void*>();
+            if (r) {
+                auto callback = reinterpret_cast<pcl::event_routine>(r);
+                callback(reinterpret_cast<control_handle>(snd), reinterpret_cast<control_handle>(rec));
+            }
+        });
+        return true;
+    }
+    return false;
+}
+
+static api_bool mock_SetTextUpdatedEventRoutine(control_handle h, api_handle receiver, pcl::unicode_event_routine routine) {
+    QLineEdit* edit = reinterpret_cast<QLineEdit*>(h);
+    qDebug() << "[PCL Bridge] SetTextUpdatedEventRoutine: edit =" << edit << "receiver =" << receiver << "routine =" << routine;
+    if (edit) {
+        edit->setProperty("textUpdatedRoutine", QVariant::fromValue(reinterpret_cast<void*>(routine)));
+        edit->setProperty("textUpdatedReceiver", QVariant::fromValue(reinterpret_cast<void*>(receiver)));
+        auto clientIt = g_widgetToClient.find(h);
+        edit->setProperty("pclSender", QVariant::fromValue(clientIt != g_widgetToClient.end() ? clientIt->second : (api_handle)h));
+        
+        edit->disconnect(edit, &QLineEdit::textChanged, nullptr, nullptr);
+        
+        QObject::connect(edit, &QLineEdit::textChanged, [edit](const QString& text) {
+            void* r = edit->property("textUpdatedRoutine").value<void*>();
+            void* rec = edit->property("textUpdatedReceiver").value<void*>();
+            void* snd = edit->property("pclSender").value<void*>();
+            if (r) {
+                auto callback = reinterpret_cast<pcl::unicode_event_routine>(r);
+                callback(reinterpret_cast<control_handle>(snd), reinterpret_cast<control_handle>(rec), reinterpret_cast<const char16_type*>(text.utf16()));
+            }
+        });
+        return true;
+    }
+    return false;
+}
+
+static api_bool mock_SetComboBoxItemSelectedEventRoutine(control_handle h, api_handle receiver, pcl::value_event_routine routine) {
+    QComboBox* combo = reinterpret_cast<QComboBox*>(h);
+    qDebug() << "[PCL Bridge] SetComboBoxItemSelectedEventRoutine: combo =" << combo << "receiver =" << receiver << "routine =" << routine;
+    if (combo) {
+        combo->setProperty("itemSelectedRoutine", QVariant::fromValue(reinterpret_cast<void*>(routine)));
+        combo->setProperty("itemSelectedReceiver", QVariant::fromValue(reinterpret_cast<void*>(receiver)));
+        auto clientIt = g_widgetToClient.find(h);
+        combo->setProperty("pclSender", QVariant::fromValue(clientIt != g_widgetToClient.end() ? clientIt->second : (api_handle)h));
+        
+        combo->disconnect(combo, &QComboBox::currentIndexChanged, nullptr, nullptr);
+        
+        QObject::connect(combo, &QComboBox::currentIndexChanged, [combo](int index) {
+            void* r = combo->property("itemSelectedRoutine").value<void*>();
+            void* rec = combo->property("itemSelectedReceiver").value<void*>();
+            void* snd = combo->property("pclSender").value<void*>();
+            if (r) {
+                auto callback = reinterpret_cast<pcl::value_event_routine>(r);
+                callback(reinterpret_cast<control_handle>(snd), reinterpret_cast<control_handle>(rec), index);
+            }
+        });
+        return true;
+    }
+    return false;
+}
+
+static api_bool mock_SetButtonCheckEventRoutine(control_handle h, api_handle receiver, pcl::button_check_event_routine routine) {
+    QCheckBox* check = reinterpret_cast<QCheckBox*>(h);
+    qDebug() << "[PCL Bridge] SetButtonCheckEventRoutine: check =" << check << "receiver =" << receiver << "routine =" << routine;
+    if (check) {
+        check->setProperty("checkRoutine", QVariant::fromValue(reinterpret_cast<void*>(routine)));
+        check->setProperty("checkReceiver", QVariant::fromValue(reinterpret_cast<void*>(receiver)));
+        auto clientIt = g_widgetToClient.find(h);
+        check->setProperty("pclSender", QVariant::fromValue(clientIt != g_widgetToClient.end() ? clientIt->second : (api_handle)h));
+        
+        check->disconnect(check, &QCheckBox::stateChanged, nullptr, nullptr);
+        
+        QObject::connect(check, &QCheckBox::stateChanged, [check](int state) {
+            void* r = check->property("checkRoutine").value<void*>();
+            void* rec = check->property("checkReceiver").value<void*>();
+            void* snd = check->property("pclSender").value<void*>();
+            if (r) {
+                auto callback = reinterpret_cast<pcl::button_check_event_routine>(r);
+                int32 pclState = 0;
+                if (state == Qt::Checked) pclState = 1;
+                else if (state == Qt::PartiallyChecked) pclState = 2;
+                callback(reinterpret_cast<control_handle>(snd), reinterpret_cast<control_handle>(rec), pclState);
+            }
+        });
+        return true;
+    }
+    return false;
+}
+
+static api_bool mock_SetButtonClickEventRoutine(control_handle h, api_handle receiver, pcl::button_click_event_routine routine) {
+    QPushButton* btn = reinterpret_cast<QPushButton*>(h);
+    qDebug() << "[PCL Bridge] SetButtonClickEventRoutine: btn =" << btn << "receiver =" << receiver << "routine =" << routine;
+    if (btn) {
+        btn->setProperty("clickRoutine", QVariant::fromValue(reinterpret_cast<void*>(routine)));
+        btn->setProperty("clickReceiver", QVariant::fromValue(reinterpret_cast<void*>(receiver)));
+        auto clientIt = g_widgetToClient.find(h);
+        btn->setProperty("pclSender", QVariant::fromValue(clientIt != g_widgetToClient.end() ? clientIt->second : (api_handle)h));
+        
+        btn->disconnect(btn, &QPushButton::clicked, nullptr, nullptr);
+        
+        QObject::connect(btn, &QPushButton::clicked, [btn](bool checked) {
+            void* r = btn->property("clickRoutine").value<void*>();
+            void* rec = btn->property("clickReceiver").value<void*>();
+            void* snd = btn->property("pclSender").value<void*>();
+            if (r) {
+                auto callback = reinterpret_cast<pcl::button_click_event_routine>(r);
+                callback(reinterpret_cast<control_handle>(snd), reinterpret_cast<control_handle>(rec), checked);
+            }
+        });
+        return true;
+    }
+    return false;
 }
 
 static void mock_GetClientRect(const_control_handle h, int32* x1, int32* y1, int32* x2, int32* y2) {
@@ -845,7 +1428,9 @@ static void mock_SetSliderRange(control_handle h, int32 minVal, int32 maxVal) {
     QSlider* sl = reinterpret_cast<QSlider*>(h);
     qDebug() << "[PCL Bridge] SetSliderRange:" << sl << "range = [" << minVal << "," << maxVal << "]";
     if (sl) {
+        sl->blockSignals(true);
         sl->setRange(minVal, maxVal);
+        sl->blockSignals(false);
     }
 }
 
@@ -862,7 +1447,9 @@ static void mock_SetSliderValue(control_handle h, int32 val) {
     QSlider* sl = reinterpret_cast<QSlider*>(h);
     qDebug() << "[PCL Bridge] SetSliderValue:" << sl << "value =" << val;
     if (sl) {
+        sl->blockSignals(true);
         sl->setValue(val);
+        sl->blockSignals(false);
     }
 }
 
@@ -966,7 +1553,9 @@ static void mock_SetButtonChecked(control_handle h, uint32 checked) {
     QAbstractButton* btn = reinterpret_cast<QAbstractButton*>(h);
     qDebug() << "[PCL Bridge] SetButtonChecked:" << btn << "checked =" << checked;
     if (btn) {
+        btn->blockSignals(true);
         btn->setChecked(checked != 0);
+        btn->blockSignals(false);
     }
 }
 
@@ -1028,6 +1617,12 @@ static api_bool mock_GetViewId(const_view_handle hView, char* id, pcl::size_type
     return true;
 }
 
+static void mock_GetViewLocks(const_view_handle hView, api_bool* readLocked, api_bool* writeLocked) {
+    qDebug() << "[PCL Bridge] mock_GetViewLocks called: view =" << hView;
+    if (readLocked) *readLocked = true;
+    if (writeLocked) *writeLocked = true;
+}
+
 // ----------------------------------------------------------------------------
 // PCLBridge Implementation
 // ----------------------------------------------------------------------------
@@ -1049,6 +1644,9 @@ void PCLBridge::setupOverrides() {
     overridePCLStub("Global/FlushConsole", reinterpret_cast<void*>(mock_FlushConsole));
     overridePCLStub("Global/ShowConsole", reinterpret_cast<void*>(mock_ShowConsole));
     overridePCLStub("Global/ProcessEvents", reinterpret_cast<void*>(mock_ProcessEvents));
+    overridePCLStub("Global/Abort", reinterpret_cast<void*>(mock_Abort));
+    overridePCLStub("Global/DisableAbort", reinterpret_cast<void*>(mock_DisableAbort));
+    overridePCLStub("Global/EnableAbort", reinterpret_cast<void*>(mock_EnableAbort));
 
     overridePCLStub("Process/GetParameterValue", reinterpret_cast<void*>(mock_GetParameterValue));
     overridePCLStub("Process/SetParameterValue", reinterpret_cast<void*>(mock_SetParameterValue));
@@ -1137,10 +1735,10 @@ void PCLBridge::setupOverrides() {
     overridePCLStub("Button/CreatePushButton", reinterpret_cast<void*>(mock_CreatePushButton));
     overridePCLStub("Button/CreateCheckBox", reinterpret_cast<void*>(mock_CreateCheckBox));
     overridePCLStub("Button/SetButtonText", reinterpret_cast<void*>(mock_SetButtonText));
-    overridePCLStub("Button/SetButtonCheckEventRoutine", reinterpret_cast<void*>(mock_SetEventRoutine));
+    overridePCLStub("Button/SetButtonCheckEventRoutine", reinterpret_cast<void*>(mock_SetButtonCheckEventRoutine));
     overridePCLStub("Button/SetButtonChecked", reinterpret_cast<void*>(mock_SetButtonChecked));
     overridePCLStub("Button/GetButtonChecked", reinterpret_cast<void*>(mock_GetButtonChecked));
-    overridePCLStub("Button/SetButtonClickEventRoutine", reinterpret_cast<void*>(mock_SetEventRoutine));
+    overridePCLStub("Button/SetButtonClickEventRoutine", reinterpret_cast<void*>(mock_SetButtonClickEventRoutine));
     overridePCLStub("Button/SetButtonPressEventRoutine", reinterpret_cast<void*>(mock_SetEventRoutine));
     overridePCLStub("Button/SetButtonReleaseEventRoutine", reinterpret_cast<void*>(mock_SetEventRoutine));
 
@@ -1151,7 +1749,7 @@ void PCLBridge::setupOverrides() {
     overridePCLStub("ComboBox/GetComboBoxCurrentItem", reinterpret_cast<void*>(mock_GetComboBoxCurrentItem));
     overridePCLStub("ComboBox/SetComboBoxEditTextUpdatedEventRoutine", reinterpret_cast<void*>(mock_SetEventRoutine));
     overridePCLStub("ComboBox/SetComboBoxItemHighlightedEventRoutine", reinterpret_cast<void*>(mock_SetEventRoutine));
-    overridePCLStub("ComboBox/SetComboBoxItemSelectedEventRoutine", reinterpret_cast<void*>(mock_SetEventRoutine));
+    overridePCLStub("ComboBox/SetComboBoxItemSelectedEventRoutine", reinterpret_cast<void*>(mock_SetComboBoxItemSelectedEventRoutine));
     overridePCLStub("ComboBox/GetComboBoxLength", reinterpret_cast<void*>(mock_GetComboBoxLength));
 
     overridePCLStub("SpinBox/CreateSpinBox", reinterpret_cast<void*>(mock_CreateSpinBox));
@@ -1178,7 +1776,7 @@ void PCLBridge::setupOverrides() {
     overridePCLStub("Slider/SetSliderTickStyle", reinterpret_cast<void*>(mock_SetSliderTickStyle));
     overridePCLStub("Slider/GetSliderTrackingEnabled", reinterpret_cast<void*>(mock_GetSliderTrackingEnabled));
     overridePCLStub("Slider/SetSliderTrackingEnabled", reinterpret_cast<void*>(mock_SetSliderTrackingEnabled));
-    overridePCLStub("Slider/SetSliderValueUpdatedEventRoutine", reinterpret_cast<void*>(mock_SetEventRoutine));
+    overridePCLStub("Slider/SetSliderValueUpdatedEventRoutine", reinterpret_cast<void*>(mock_SetSliderValueUpdatedEventRoutine));
     overridePCLStub("Slider/SetSliderRangeUpdatedEventRoutine", reinterpret_cast<void*>(mock_SetEventRoutine));
 
     overridePCLStub("Edit/CreateEdit", reinterpret_cast<void*>(mock_CreateEdit));
@@ -1187,10 +1785,10 @@ void PCLBridge::setupOverrides() {
     overridePCLStub("Edit/GetEditReadOnly", reinterpret_cast<void*>(mock_GetEditReadOnly));
     overridePCLStub("Edit/SetEditReadOnly", reinterpret_cast<void*>(mock_SetEditReadOnly));
     overridePCLStub("Edit/SetCaretPositionUpdatedEventRoutine", reinterpret_cast<void*>(mock_SetEventRoutine));
-    overridePCLStub("Edit/SetEditCompletedEventRoutine", reinterpret_cast<void*>(mock_SetEventRoutine));
+    overridePCLStub("Edit/SetEditCompletedEventRoutine", reinterpret_cast<void*>(mock_SetEditCompletedEventRoutine));
     overridePCLStub("Edit/SetReturnPressedEventRoutine", reinterpret_cast<void*>(mock_SetEventRoutine));
     overridePCLStub("Edit/SetSelectionUpdatedEventRoutine", reinterpret_cast<void*>(mock_SetEventRoutine));
-    overridePCLStub("Edit/SetTextUpdatedEventRoutine", reinterpret_cast<void*>(mock_SetEventRoutine));
+    overridePCLStub("Edit/SetTextUpdatedEventRoutine", reinterpret_cast<void*>(mock_SetTextUpdatedEventRoutine));
     overridePCLStub("Edit/SetEditValidatingRegExp", reinterpret_cast<void*>(mock_SetEditValidatingRegExp));
 
     overridePCLStub("Dialog/SetExecuteDialogEventRoutine", reinterpret_cast<void*>(mock_SetEventRoutine));
@@ -1199,17 +1797,41 @@ void PCLBridge::setupOverrides() {
     overridePCLStub("UI/AttachToUIObject", reinterpret_cast<void*>(mock_AttachToUIObject));
     overridePCLStub("UI/DetachFromUIObject", reinterpret_cast<void*>(mock_DetachFromUIObject));
     overridePCLStub("UI/GetUIObjectRefCount", reinterpret_cast<void*>(mock_GetUIObjectRefCount));
+    overridePCLStub("Thread/CreateThread", reinterpret_cast<void*>(mock_CreateThread));
+    overridePCLStub("Thread/StartThread", reinterpret_cast<void*>(mock_StartThread));
+    overridePCLStub("Thread/KillThread", reinterpret_cast<void*>(mock_KillThread));
+    overridePCLStub("Thread/IsThreadActive", reinterpret_cast<void*>(mock_IsThreadActive));
+    overridePCLStub("Thread/WaitThread", reinterpret_cast<void*>(mock_WaitThread));
+    overridePCLStub("Thread/SleepThread", reinterpret_cast<void*>(mock_SleepThread));
+    overridePCLStub("Thread/GetThreadStatus", reinterpret_cast<void*>(mock_GetThreadStatus));
+    overridePCLStub("Thread/SetThreadStatus", reinterpret_cast<void*>(mock_SetThreadStatus));
     overridePCLStub("Thread/GetCurrentThread", reinterpret_cast<void*>(mock_GetCurrentThread));
+    overridePCLStub("Thread/SetThreadExecRoutine", reinterpret_cast<void*>(mock_SetThreadExecRoutine));
+    overridePCLStub("Thread/AppendThreadConsoleOutputText", reinterpret_cast<void*>(mock_AppendThreadConsoleOutputText));
 
     overridePCLStub("SharedImage/GetImageGeometry", reinterpret_cast<void*>(mock_GetImageGeometry));
     overridePCLStub("SharedImage/GetImageFormat", reinterpret_cast<void*>(mock_GetImageFormat));
     overridePCLStub("SharedImage/GetImagePixelData", reinterpret_cast<void*>(mock_GetImagePixelData));
     overridePCLStub("SharedImage/SetImagePixelData", reinterpret_cast<void*>(mock_SetImagePixelData));
+    overridePCLStub("SharedImage/SetImageGeometry", reinterpret_cast<void*>(mock_SetImageGeometry));
+    overridePCLStub("SharedImage/SetImageColorSpace", reinterpret_cast<void*>(mock_SetImageColorSpace));
     overridePCLStub("SharedImage/GetImageColorSpace", reinterpret_cast<void*>(mock_GetImageColorSpace));
+    overridePCLStub("SharedImage/AttachToImage", reinterpret_cast<void*>(mock_AttachToImage));
+    overridePCLStub("SharedImage/GetImageRGBWS", reinterpret_cast<void*>(mock_GetImageRGBWS));
+    overridePCLStub("SharedImage/DetachFromImage", reinterpret_cast<void*>(mock_DetachFromImage));
 
     overridePCLStub("View/GetViewImage", reinterpret_cast<void*>(mock_GetViewImage));
     overridePCLStub("View/GetViewId", reinterpret_cast<void*>(mock_GetViewId));
     overridePCLStub("View/GetViewFullId", reinterpret_cast<void*>(mock_GetViewId));
+    overridePCLStub("View/GetViewLocks", reinterpret_cast<void*>(mock_GetViewLocks));
+    overridePCLStub("View/LockView", reinterpret_cast<void*>(mock_LockView));
+    overridePCLStub("View/UnlockView", reinterpret_cast<void*>(mock_UnlockView));
+    overridePCLStub("View/GetViewScreenTransferFunctions", reinterpret_cast<void*>(mock_GetViewScreenTransferFunctions));
+    overridePCLStub("View/GetViewScreenTransferFunctionsEnabled", reinterpret_cast<void*>(mock_GetViewScreenTransferFunctionsEnabled));
+    overridePCLStub("View/GetViewPropertyExists", reinterpret_cast<void*>(mock_GetViewPropertyExists));
+    overridePCLStub("View/ComputeViewProperty", reinterpret_cast<void*>(mock_ComputeViewProperty));
+    overridePCLStub("View/GetViewPropertyValue", reinterpret_cast<void*>(mock_GetViewPropertyValue));
+    overridePCLStub("View/SetViewPropertyValue", reinterpret_cast<void*>(mock_SetViewPropertyValue));
 }
 
 bool PCLBridge::loadModule(const QString& path) {
@@ -1328,6 +1950,11 @@ void PCLBridge::unloadModule() {
         m_initialized = false;
         qDebug() << "[PCL Bridge] Module unloaded.";
         g_interfaceControls.clear();
+        for (auto& pair : g_threads) {
+            delete pair.second;
+        }
+        g_threads.clear();
+        g_currentThread = nullptr;
     }
 }
 
@@ -1378,6 +2005,7 @@ bool PCLBridge::executeProcess(const QString& processId, std::vector<ImageBuffer
     imgMock.colorSpace = (buffers.size() == 1) ? 0 : 1;
     imgMock.wrappedBuffers = buffers;
     imgMock.updatePointers();
+    g_activeImage = &imgMock;
 
     PCLViewMock viewMock;
     viewMock.id = "BlastroActiveView";
@@ -1401,6 +2029,7 @@ bool PCLBridge::executeProcess(const QString& processId, std::vector<ImageBuffer
         info.destroyFn(hProcess);
     }
     g_processParameters.erase(hProcess);
+    g_activeImage = nullptr;
 
     return success;
 }
@@ -1419,6 +2048,63 @@ std::vector<QString> PCLBridge::registeredProcesses() const {
 
 void* PCLBridge::resolveCoreFunction(const char* funcName) {
     return getPCLStub(funcName);
+}
+
+bool PCLBridge::executeProcessInstance(const QString& processId, void* hProcess, std::vector<ImageBufferPtr>& buffers) {
+    if (!m_initialized) {
+        qWarning() << "[PCL Bridge] Cannot execute process instance, no module loaded/initialized.";
+        return false;
+    }
+
+    if (!hProcess) {
+        qWarning() << "[PCL Bridge] Cannot execute process instance, null process handle.";
+        return false;
+    }
+
+    if (buffers.empty()) {
+        qWarning() << "[PCL Bridge] Cannot execute process instance, no image buffers provided.";
+        return false;
+    }
+
+    auto idIt = g_processIdToHandle.find(processId.toStdString());
+    if (idIt == g_processIdToHandle.end()) {
+        qWarning() << "[PCL Bridge] Process ID not found:" << processId;
+        return false;
+    }
+
+    meta_process_handle hMeta = idIt->second;
+    const auto& info = g_processes[hMeta];
+
+    // Build the mock image and view structures
+    PCLImageMock imgMock;
+    imgMock.width = buffers[0]->width();
+    imgMock.height = buffers[0]->height();
+    imgMock.numChannels = buffers.size();
+    imgMock.bitsPerSample = 32;
+    imgMock.isFloat = true;
+    imgMock.colorSpace = (buffers.size() == 1) ? 0 : 1;
+    imgMock.wrappedBuffers = buffers;
+    imgMock.updatePointers();
+    g_activeImage = &imgMock;
+
+    PCLViewMock viewMock;
+    viewMock.id = "BlastroActiveView";
+    viewMock.hImage = &imgMock;
+
+    qDebug() << "[PCL Bridge] Executing process instance on image:" << imgMock.width << "x" << imgMock.height << "with" << imgMock.numChannels << "channels";
+    bool success = false;
+    if (info.executeFn) {
+        success = info.executeFn(&viewMock, hProcess);
+    } else if (info.executeGlobalFn) {
+        qWarning() << "[PCL Bridge] Process only supports global execution, executing globally...";
+        success = info.executeGlobalFn(hProcess);
+    } else {
+        qWarning() << "[PCL Bridge] Process has no execution routine!";
+    }
+
+    qDebug() << "[PCL Bridge] Process instance execution finished, status:" << (success ? "Success" : "Failed");
+    g_activeImage = nullptr;
+    return success;
 }
 
 bool PCLBridge::launchInterface(const QString& processId, QWidget* parentWindow) {
@@ -1443,13 +2129,51 @@ bool PCLBridge::launchInterface(const QString& processId, QWidget* parentWindow)
     }
 
     qDebug() << "[PCL Bridge] Launching interface for:" << processId;
-    qDebug() << "  Interface (hMeta):" << hMeta;
-    qDebug() << "  Parent Window:    " << parentWindow;
 
-    // Create a parent widget to serve as the host window inside the MDI subwindow
+    // Create the host widget (main MDI window content)
     QWidget* hostWidget = new QWidget();
     hostWidget->setWindowTitle(processId + " Process Interface");
     hostWidget->resize(600, 450);
+
+    // Create a container widget specifically for the plugin's controls
+    QWidget* pluginContainer = new QWidget(hostWidget);
+
+    // Create the Apply button
+    QPushButton* applyButton = new QPushButton("Apply to Active Image", hostWidget);
+    applyButton->setStyleSheet(
+        "QPushButton {"
+        "   background-color: #007acc;"
+        "   border: 1px solid #005999;"
+        "   border-radius: 4px;"
+        "   color: #ffffff;"
+        "   font-weight: bold;"
+        "   padding: 8px 16px;"
+        "   font-size: 12px;"
+        "}"
+        "QPushButton:hover {"
+        "   background-color: #008be5;"
+        "}"
+        "QPushButton:pressed {"
+        "   background-color: #005999;"
+        "}"
+    );
+
+    // Create a vertical layout for the host widget
+    QVBoxLayout* mainLayout = new QVBoxLayout(hostWidget);
+    mainLayout->setContentsMargins(10, 10, 10, 10);
+    mainLayout->setSpacing(10);
+    
+    // Add the plugin container and the apply button to the main layout
+    mainLayout->addWidget(pluginContainer, 1); // Give plugin container stretch factor 1
+    
+    // Add a thin horizontal separator line
+    QFrame* separator = new QFrame(hostWidget);
+    separator->setFrameShape(QFrame::HLine);
+    separator->setFrameShadow(QFrame::Sunken);
+    separator->setStyleSheet("background-color: #333; max-height: 1px;");
+    mainLayout->addWidget(separator);
+    
+    mainLayout->addWidget(applyButton, 0, Qt::AlignRight); // Align button to the right
 
     // Apply dark theme stylesheet to match application dark mode
     hostWidget->setStyleSheet(
@@ -1468,34 +2192,58 @@ bool PCLBridge::launchInterface(const QString& processId, QWidget* parentWindow)
     // 1. Call the interface's initialization callback!
     // The C-API initialization routine expects (interface_handle, control_handle)
     interface_handle hInterface = const_cast<void*>(hMeta);
-    control_handle hParentControl = reinterpret_cast<control_handle>(hostWidget);
+    control_handle hParentControl = reinterpret_cast<control_handle>(pluginContainer);
 
     qDebug() << "[PCL Bridge] Calling interface initialization callback (initFn)...";
     info.initFn(hInterface, hParentControl);
     qDebug() << "[PCL Bridge] Interface initialization callback completed.";
 
+    // Instantiate process handle
+    auto procIdIt = g_processIdToHandle.find(idStr);
+    meta_process_handle hMetaProcess = nullptr;
+    process_handle hProcess = nullptr;
+    if (procIdIt != g_processIdToHandle.end()) {
+        hMetaProcess = procIdIt->second;
+        const auto& procInfo = g_processes[hMetaProcess];
+        if (procInfo.createFn) {
+            hProcess = procInfo.createFn(hMetaProcess);
+            if (procInfo.initFn) {
+                procInfo.initFn(hProcess);
+            }
+        }
+    }
+
     // 2. Call the interface's launch routine (launchFn) if present!
     if (info.launchFn) {
         qDebug() << "[PCL Bridge] Calling interface launch routine (launchFn)...";
-        auto procIdIt = g_processIdToHandle.find(idStr);
-        meta_process_handle hMetaProcess = nullptr;
-        process_handle hProcess = nullptr;
-        if (procIdIt != g_processIdToHandle.end()) {
-            hMetaProcess = procIdIt->second;
-            const auto& procInfo = g_processes[hMetaProcess];
-            if (procInfo.createFn) {
-                hProcess = procInfo.createFn(hMetaProcess);
-                if (procInfo.initFn) {
-                    procInfo.initFn(hProcess);
-                }
-            }
-        }
-        
         api_bool dynamic = false;
         uint32 flags = 0;
         bool launchOk = info.launchFn(hInterface, hMetaProcess, hProcess, &dynamic, &flags);
         qDebug() << "[PCL Bridge] Interface launch routine returned:" << launchOk << ", dynamic:" << (bool)dynamic;
     }
+
+    // Connect the Apply button to execute the process on the active image
+    QObject::connect(applyButton, &QPushButton::clicked, [this, processId, hProcess, parentWindow]() {
+        MainWindow* mainWin = qobject_cast<MainWindow*>(parentWindow);
+        if (mainWin) {
+            mainWin->executePCLProcessOnActiveImage(processId, hProcess);
+        } else {
+            qWarning() << "[PCL Bridge] Cannot apply process: parent window is not MainWindow.";
+        }
+    });
+
+    // Connect host widget destruction to process cleanup
+    auto procIdItDest = g_processIdToHandle.find(idStr);
+    meta_process_handle hMetaDest = (procIdItDest != g_processIdToHandle.end()) ? procIdItDest->second : nullptr;
+    auto destInfo = (hMetaDest != nullptr) ? g_processes[hMetaDest] : PCLProcessInfo();
+
+    QObject::connect(hostWidget, &QObject::destroyed, [destInfo, hProcess]() {
+        qDebug() << "[PCL Bridge] Host widget destroyed. Cleaning up process instance...";
+        if (hProcess && destInfo.destroyFn) {
+            destInfo.destroyFn(hProcess);
+        }
+        g_processParameters.erase(hProcess);
+    });
 
     MainWindow* mainWin = qobject_cast<MainWindow*>(parentWindow);
     if (mainWin) {

@@ -130,17 +130,11 @@ void MainWindow::createMenus() {
     connect(m_calibrationAct, &QAction::triggered, this, &MainWindow::onOpenCalibration);
     m_algoMenu->addAction(m_calibrationAct);
 
-    // Plugins Menu
-    m_pluginsMenu = menuBar()->addMenu("&Plugins");
+    m_algoMenu->addSeparator();
 
     m_loadPluginAct = new QAction("&Load PixInsight Module...", this);
     connect(m_loadPluginAct, &QAction::triggered, this, &MainWindow::onLoadPCLModule);
-    m_pluginsMenu->addAction(m_loadPluginAct);
-
-    m_runDeepSNRAct = new QAction("Run &DeepSNR Denoise...", this);
-    connect(m_runDeepSNRAct, &QAction::triggered, this, &MainWindow::onRunDeepSNR);
-    m_runDeepSNRAct->setEnabled(false);
-    m_pluginsMenu->addAction(m_runDeepSNRAct);
+    m_algoMenu->addAction(m_loadPluginAct);
 }
 
 void MainWindow::onOpenImage() {
@@ -685,7 +679,6 @@ void MainWindow::loadAndShowPlugin(const QString& path) {
     bool success = false;
     if (m_pclBridge->loadModule(path)) {
         if (m_pclBridge->isProcessRegistered("DeepSNR")) {
-            m_runDeepSNRAct->setEnabled(true);
             qDebug() << "[MainWindow] DeepSNR process is registered. Launching interface...";
             success = m_pclBridge->launchInterface("DeepSNR", this);
         } else {
@@ -699,7 +692,7 @@ void MainWindow::loadAndShowPlugin(const QString& path) {
         if (QCoreApplication::arguments().contains("--test-load") || 
             QCoreApplication::arguments().contains("--load-plugin")) {
             qCritical() << "[MainWindow] Plugin load or launch failed. Exiting.";
-            QApplication::exit(1);
+            std::exit(1);
         }
     }
 }
@@ -737,26 +730,23 @@ void MainWindow::onLoadPCLModule() {
                                  QString("Successfully loaded PixInsight module:\n%1 (v%2)\n\nRegistered processes:\n%3")
                                  .arg(name, version, procListStr.isEmpty() ? "None" : procListStr));
         
-        if (m_pclBridge->isProcessRegistered("DeepSNR")) {
-            m_runDeepSNRAct->setEnabled(true);
-            qDebug() << "[PCL Bridge] DeepSNR process is registered and ready!";
-        } else {
-            m_runDeepSNRAct->setEnabled(false);
-            qDebug() << "[PCL Bridge] Module loaded, but DeepSNR process is not registered.";
+        if (!processes.empty()) {
+            qDebug() << "[MainWindow] Automatically launching interface for process:" << processes[0];
+            m_pclBridge->launchInterface(processes[0], this);
         }
     } else {
         QMessageBox::critical(this, "Load Plugin Error", "Failed to load PixInsight module. Check console for details.");
     }
 }
 
-void MainWindow::onRunDeepSNR() {
-    if (!m_pclBridge) return;
+bool MainWindow::executePCLProcessOnActiveImage(const QString& processId, void* hProcess) {
+    if (!m_pclBridge) return false;
 
     ImageVariant activeImg = m_workspaceArea->getActiveImage();
     QString activeName = m_workspaceArea->getActiveImageName();
     if (activeName.isEmpty()) {
-        QMessageBox::warning(this, "Run DeepSNR", "No active image window to process.");
-        return;
+        QMessageBox::warning(this, "Execute Process", "No active image window to process. Open/activate an image first.");
+        return false;
     }
 
     std::vector<ImageBufferPtr> buffers;
@@ -771,30 +761,208 @@ void MainWindow::onRunDeepSNR() {
     }
 
     if (buffers.empty()) {
-        QMessageBox::warning(this, "Run DeepSNR", "No image buffers found in the active window.");
-        return;
+        QMessageBox::warning(this, "Execute Process", "No image buffers found in the active window.");
+        return false;
     }
 
-    qDebug() << "[UI] Running DeepSNR on" << activeName;
+    // Print before-statistics for diagnostics
+    auto printStats = [](const QString& label, const std::vector<ImageBufferPtr>& bufs) {
+        static const char* chanNames[] = {"R","G","B","A"};
+        for (int c = 0; c < (int)bufs.size(); ++c) {
+            float sum = 0, minV = 1e9f, maxV = -1e9f;
+            const float* d = bufs[c]->data();
+            int n = bufs[c]->width() * bufs[c]->height();
+            for (int p = 0; p < n; ++p) { sum += d[p]; if(d[p]<minV)minV=d[p]; if(d[p]>maxV)maxV=d[p]; }
+            qDebug().noquote() << QString("[MainWindow] %1 Ch%2 mean=%3 min=%4 max=%5")
+                .arg(label).arg(bufs.size()>1 ? chanNames[c] : "Gray")
+                .arg(sum/n, 0, 'f', 6).arg(minV, 0, 'f', 6).arg(maxV, 0, 'f', 6);
+        }
+    };
+    printStats("Before", buffers);
+
+    qDebug() << "[MainWindow] Executing PCL process" << processId << "on active image" << activeName;
     
-    statusBar()->showMessage("Running DeepSNR Denoise...");
+    statusBar()->showMessage(QString("Running %1...").arg(processId));
     m_progressBar->setRange(0, 0);
     m_progressBar->show();
     qApp->processEvents();
 
-    bool ok = m_pclBridge->executeProcess("DeepSNR", buffers);
+    bool ok = m_pclBridge->executeProcessInstance(processId, hProcess, buffers);
 
     m_progressBar->hide();
     statusBar()->clearMessage();
 
     if (ok) {
+        printStats("After", buffers);
         WorkspaceElement elem = std::visit([](auto&& arg) -> WorkspaceElement { return arg; }, activeImg);
         m_workspaceArea->removeElementView(activeName);
         m_workspaceArea->addElementView(activeName, elem);
         
-        QMessageBox::information(this, "Run DeepSNR", "DeepSNR Denoise completed successfully.");
+        statusBar()->showMessage(QString("%1 completed successfully.").arg(processId), 5000);
+        QMessageBox::information(this, "Process Execution", QString("%1 completed successfully.").arg(processId));
     } else {
-        QMessageBox::critical(this, "Run DeepSNR Error", "DeepSNR Denoise failed. Check console for details.");
+        QMessageBox::critical(this, "Process Execution Error", QString("%1 execution failed. Check console for details.").arg(processId));
+    }
+
+    return ok;
+}
+
+
+void MainWindow::testProcessOnImage(const QString& pluginPath, const QString& imagePath) {
+    qDebug() << "[MainWindow] Entering testProcessOnImage. Loading image:" << imagePath;
+
+    QFileInfo info(imagePath);
+    if (!info.exists()) {
+        qCritical() << "[MainWindow] Image file does not exist:" << imagePath;
+        std::_Exit(1);
+        return;
+    }
+
+    QString ext = info.suffix().toLower();
+    WorkspaceElement elem;
+    try {
+        if (ext == "fits" || ext == "fit") {
+            FitsIO reader;
+            elem = std::visit([](auto&& arg) -> WorkspaceElement { return arg; }, reader.readImage(imagePath.toStdString()));
+        } else {
+            QtImageIO reader;
+            elem = std::visit([](auto&& arg) -> WorkspaceElement { return arg; }, reader.readImage(imagePath.toStdString()));
+        }
+        addImageToWorkspace("TestImage", elem);
+    } catch (const std::exception& e) {
+        qCritical() << "[MainWindow] Failed to load image:" << e.what();
+        std::_Exit(1);
+        return;
+    }
+
+    qDebug() << "[MainWindow] Image loaded successfully. Loading PCL module:" << pluginPath;
+    if (!m_pclBridge) {
+        m_pclBridge = std::make_unique<PCLBridge>();
+    }
+
+    if (!m_pclBridge->loadModule(pluginPath)) {
+        qCritical() << "[MainWindow] Failed to load PCL module:" << pluginPath;
+        std::_Exit(1);
+        return;
+    }
+
+    auto processes = m_pclBridge->registeredProcesses();
+    if (processes.empty()) {
+        qCritical() << "[MainWindow] No registered processes found in loaded module.";
+        std::_Exit(1);
+        return;
+    }
+
+    QString processId = processes[0];
+    qDebug() << "[MainWindow] Loaded module successfully. Process found:" << processId;
+
+    // Get the buffers of the loaded image
+    std::vector<ImageBufferPtr> buffers;
+    if (std::holds_alternative<GrayscaleImagePtr>(elem)) {
+        auto img = std::get<GrayscaleImagePtr>(elem);
+        buffers.push_back(img->buffer());
+    } else if (std::holds_alternative<RGBImagePtr>(elem)) {
+        auto img = std::get<RGBImagePtr>(elem);
+        buffers.push_back(img->r()->buffer());
+        buffers.push_back(img->g()->buffer());
+        buffers.push_back(img->b()->buffer());
+    }
+
+    if (buffers.empty()) {
+        qCritical() << "[MainWindow] No image buffers found in loaded image.";
+        std::_Exit(1);
+        return;
+    }
+
+    qDebug() << "[MainWindow] Executing process" << processId << "on loaded image with default settings...";
+    bool ok = m_pclBridge->executeProcess(processId, buffers);
+    if (ok) {
+        qDebug() << "[MainWindow] Process execution completed successfully!";
+        
+        // Calculate and print statistics for each channel for validation
+        if (std::holds_alternative<RGBImagePtr>(elem)) {
+            auto rgb = std::get<RGBImagePtr>(elem);
+            for (int c = 0; c < 3; ++c) {
+                auto chan = (c == 0) ? rgb->r() : ((c == 1) ? rgb->g() : rgb->b());
+                float sum = 0.0f;
+                float minVal = 1e9f;
+                float maxVal = -1e9f;
+                const float* data = chan->buffer()->data();
+                int numPixels = chan->buffer()->width() * chan->buffer()->height();
+                for (int p = 0; p < numPixels; ++p) {
+                    float v = data[p];
+                    sum += v;
+                    if (v < minVal) minVal = v;
+                    if (v > maxVal) maxVal = v;
+                }
+                float mean = sum / numPixels;
+                qDebug().noquote() << QString("[MainWindow] Channel %1 statistics: mean = %2, min = %3, max = %4")
+                            .arg(c == 0 ? "R" : (c == 1 ? "G" : "B"))
+                            .arg(mean).arg(minVal).arg(maxVal);
+            }
+        } else if (std::holds_alternative<GrayscaleImagePtr>(elem)) {
+            auto gray = std::get<GrayscaleImagePtr>(elem);
+            float sum = 0.0f;
+            float minVal = 1e9f;
+            float maxVal = -1e9f;
+            const float* data = gray->buffer()->data();
+            int numPixels = gray->buffer()->width() * gray->buffer()->height();
+            for (int p = 0; p < numPixels; ++p) {
+                float v = data[p];
+                sum += v;
+                if (v < minVal) minVal = v;
+                if (v > maxVal) maxVal = v;
+            }
+            float mean = sum / numPixels;
+            qDebug().noquote() << QString("[MainWindow] Grayscale statistics: mean = %1, min = %2, max = %3")
+                        .arg(mean).arg(minVal).arg(maxVal);
+        }
+        
+        // Save the resulting image to ./denoised_output.fit
+        QString outPath = "./denoised_output.fit";
+        qDebug() << "[MainWindow] Saving denoised image to:" << outPath;
+        FitsIO writer;
+        ImageVariant imgVar;
+        if (std::holds_alternative<GrayscaleImagePtr>(elem)) {
+            imgVar = std::get<GrayscaleImagePtr>(elem);
+        } else if (std::holds_alternative<RGBImagePtr>(elem)) {
+            imgVar = std::get<RGBImagePtr>(elem);
+        }
+        if (writer.writeImage(outPath.toStdString(), imgVar)) {
+            qDebug() << "[MainWindow] Saved denoised image successfully.";
+        } else {
+            qWarning() << "[MainWindow] Failed to save denoised image.";
+        }
+        
+        std::_Exit(0);
+    } else {
+        qCritical() << "[MainWindow] Process execution failed!";
+        std::_Exit(1);
+    }
+}
+
+bool MainWindow::loadImageDirectly(const QString& filepath, const QString& refName) {
+    QFileInfo info(filepath);
+    if (!info.exists()) {
+        qCritical() << "[MainWindow] Image file does not exist:" << filepath;
+        return false;
+    }
+    QString ext = info.suffix().toLower();
+    try {
+        WorkspaceElement elem;
+        if (ext == "fits" || ext == "fit") {
+            FitsIO reader;
+            elem = std::visit([](auto&& arg) -> WorkspaceElement { return arg; }, reader.readImage(filepath.toStdString()));
+        } else {
+            QtImageIO reader;
+            elem = std::visit([](auto&& arg) -> WorkspaceElement { return arg; }, reader.readImage(filepath.toStdString()));
+        }
+        addImageToWorkspace(refName, elem);
+        qDebug() << "[MainWindow] Successfully loaded image" << filepath << "as" << refName;
+        return true;
+    } catch (const std::exception& e) {
+        qCritical() << "[MainWindow] Failed to load image:" << e.what();
+        return false;
     }
 }
 
