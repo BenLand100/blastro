@@ -16,6 +16,7 @@ public:
 
     // ImageWriter interface
     bool writeImage(const std::string& filepath, const ImageVariant& image) override;
+    bool writeBatch(const std::string& filepath, ImageBatchPtr batch);
 };
 
 } // namespace blastro

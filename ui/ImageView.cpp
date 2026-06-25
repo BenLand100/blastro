@@ -1,6 +1,7 @@
 #include "ImageView.h"
 #include <QScrollBar>
 #include <QMouseEvent>
+#include <QKeyEvent>
 #include <cmath>
 #include <algorithm>
 #include <vector>
@@ -15,9 +16,11 @@ ImageView::ImageView(QWidget* parent)
       m_blackpoint(0.0),
       m_whitepoint(1.0),
       m_midpoint(0.5),
-      m_isPanning(false) {
+      m_isPanning(false),
+      m_isFrameSelected(true) {
       
     setScene(m_scene);
+    viewport()->setMouseTracking(true);
     
     // Set view properties
     setRenderHint(QPainter::Antialiasing, false); // Keep pixels sharp
@@ -287,6 +290,54 @@ void ImageView::mouseMoveEvent(QMouseEvent* event) {
     } else {
         QGraphicsView::mouseMoveEvent(event);
     }
+
+    // Capture coordinates and pixel values
+    int imgW = 0, imgH = 0;
+    const float* bufGray = nullptr;
+    const float* bufR = nullptr;
+    const float* bufG = nullptr;
+    const float* bufB = nullptr;
+    bool isRGB = false;
+
+    if (std::holds_alternative<GrayscaleImagePtr>(m_currentImage)) {
+        auto img = std::get<GrayscaleImagePtr>(m_currentImage);
+        if (img && img->buffer()) {
+            imgW = img->width();
+            imgH = img->height();
+            bufGray = img->buffer()->data();
+        }
+    } else if (std::holds_alternative<RGBImagePtr>(m_currentImage)) {
+        auto img = std::get<RGBImagePtr>(m_currentImage);
+        if (img && img->r() && img->g() && img->b()) {
+            imgW = img->width();
+            imgH = img->height();
+            bufR = img->r()->buffer()->data();
+            bufG = img->g()->buffer()->data();
+            bufB = img->b()->buffer()->data();
+            isRGB = true;
+        }
+    }
+
+    if (imgW > 0 && imgH > 0) {
+        QPointF scenePt = mapToScene(event->pos());
+        int sx = static_cast<int>(std::floor(scenePt.x()));
+        int sy = static_cast<int>(std::floor(scenePt.y()));
+
+        if (sx >= 0 && sx < imgW && sy >= 0 && sy < imgH) {
+            int idx = sy * imgW + sx;
+            std::vector<float> values;
+            if (isRGB) {
+                values = {bufR[idx], bufG[idx], bufB[idx]};
+            } else {
+                values = {bufGray[idx]};
+            }
+            emit mousePosChanged(sx, sy, isRGB, values);
+        } else {
+            emit mousePosChanged(-1, -1, false, {});
+        }
+    } else {
+        emit mousePosChanged(-1, -1, false, {});
+    }
 }
 
 void ImageView::updateView() {
@@ -408,7 +459,32 @@ void ImageView::drawBackground(QPainter* painter, const QRectF& rect) {
     painter->save();
     painter->setTransform(QTransform()); // Reset transform to viewport coordinates
     painter->drawImage(0, 0, vpImg);
+
+    // If the frame is not selected, draw a red X overlay
+    if (!m_isFrameSelected) {
+        QPen pen(QColor(220, 50, 50, 180), 4); // Semi-transparent red, width 4
+        painter->setPen(pen);
+        painter->drawLine(10, 10, vpW - 10, vpH - 10);
+        painter->drawLine(10, vpH - 10, vpW - 10, 10);
+    }
+
     painter->restore();
+}
+
+void ImageView::setFrameSelectedStatus(bool selected) {
+    if (m_isFrameSelected != selected) {
+        m_isFrameSelected = selected;
+        viewport()->update();
+    }
+}
+
+void ImageView::keyPressEvent(QKeyEvent* event) {
+    if (event->key() == Qt::Key_Left || event->key() == Qt::Key_Right || event->key() == Qt::Key_Space) {
+        // Ignore these key events so they bubble up to the parent widget (BatchImageWidget)
+        event->ignore();
+        return;
+    }
+    QGraphicsView::keyPressEvent(event);
 }
 
 } // namespace blastro

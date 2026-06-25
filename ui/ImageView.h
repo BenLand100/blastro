@@ -40,8 +40,11 @@ public:
     void zoomOut();
     void resetZoom();
 
+    void setFrameSelectedStatus(bool selected);
+
 signals:
     void stretchParamsChanged(double b, double w, double m);
+    void mousePosChanged(int x, int y, bool isRGB, const std::vector<float>& values);
 
 protected:
     void wheelEvent(QWheelEvent* event) override;
@@ -49,6 +52,7 @@ protected:
     void mouseReleaseEvent(QMouseEvent* event) override;
     void mouseMoveEvent(QMouseEvent* event) override;
     void drawBackground(QPainter* painter, const QRectF& rect) override;
+    void keyPressEvent(QKeyEvent* event) override;
 
 private:
     void updateView();
@@ -69,6 +73,7 @@ private:
     // Panning state
     bool m_isPanning;
     QPoint m_lastMousePos;
+    bool m_isFrameSelected;
 };
 
 } // namespace blastro

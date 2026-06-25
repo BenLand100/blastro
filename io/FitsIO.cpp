@@ -4,6 +4,7 @@
 #include <stdexcept>
 #include <algorithm>
 #include <iostream>
+#include <QFileInfo>
 
 namespace blastro {
 
@@ -122,6 +123,14 @@ ImageBatchPtr FitsIO::readBatch(const std::vector<std::string>& filepaths) {
                 long height = image.axis(1);
                 long depth = image.axis(2);
 
+                // Precompute plane names
+                std::vector<std::string> names(depth);
+                std::string baseName = QFileInfo(QString::fromStdString(filepath)).fileName().toStdString();
+                for (int i = 0; i < depth; ++i) {
+                    names[i] = baseName + " (Plane " + std::to_string(i + 1) + ")";
+                }
+
+                std::vector<std::string> filepaths(depth, filepath);
                 auto loader = [filepath, width, height, depth](int index) -> ImageVariant {
                     try {
                         std::unique_ptr<CCfits::FITS> pInfileInner(new CCfits::FITS(filepath, CCfits::Read, true));
@@ -147,7 +156,7 @@ ImageBatchPtr FitsIO::readBatch(const std::vector<std::string>& filepaths) {
                         throw std::runtime_error(std::string("CCfits Error in batch loader: ") + ex.message());
                     }
                 };
-                return std::make_shared<ImageBatch>(depth, loader);
+                return std::make_shared<ImageBatch>(depth, loader, names, filepaths);
             }
         } catch (...) {
             // Fall back to treating it as a single 2D FITS file batch
@@ -155,11 +164,16 @@ ImageBatchPtr FitsIO::readBatch(const std::vector<std::string>& filepaths) {
     }
 
     // Otherwise, treat as a list of independent FITS files
+    std::vector<std::string> names(filepaths.size());
+    for (size_t i = 0; i < filepaths.size(); ++i) {
+        names[i] = QFileInfo(QString::fromStdString(filepaths[i])).fileName().toStdString();
+    }
+
     auto loader = [filepaths](int index) -> ImageVariant {
         FitsIO reader;
         return reader.readImage(filepaths[index]);
     };
-    return std::make_shared<ImageBatch>(filepaths.size(), loader);
+    return std::make_shared<ImageBatch>(filepaths.size(), loader, names, filepaths);
 }
 
 bool FitsIO::writeImage(const std::string& filepath, const ImageVariant& image) {
@@ -226,6 +240,70 @@ bool FitsIO::writeImage(const std::string& filepath, const ImageVariant& image) 
         return true;
     } catch (CCfits::FitsException& ex) {
         std::cerr << "FITS write error: " << ex.message() << std::endl;
+        return false;
+    }
+}
+
+bool FitsIO::writeBatch(const std::string& filepath, ImageBatchPtr batch) {
+    try {
+        std::string writePath = "!" + filepath;
+        int count = batch->count();
+        if (count <= 0) return false;
+
+        // Get dimensions from the first frame
+        ImageVariant firstImg = batch->getImage(0);
+        long width = 0;
+        long height = 0;
+        if (std::holds_alternative<GrayscaleImagePtr>(firstImg)) {
+            auto img = std::get<GrayscaleImagePtr>(firstImg);
+            width = img->width();
+            height = img->height();
+        } else {
+            auto img = std::get<RGBImagePtr>(firstImg);
+            width = img->width();
+            height = img->height();
+        }
+
+        long numAxes = 3;
+        std::vector<long> naxes(3);
+        naxes[0] = width;
+        naxes[1] = height;
+        naxes[2] = count;
+
+        std::unique_ptr<CCfits::FITS> pOutfile(new CCfits::FITS(writePath, FLOAT_IMG, numAxes, naxes.data()));
+        CCfits::PHDU& phdu = pOutfile->pHDU();
+
+        long planeSize = width * height;
+        std::valarray<float> arrayData(planeSize * count);
+
+        for (int i = 0; i < count; ++i) {
+            ImageVariant frameImg = batch->getImage(i);
+            if (std::holds_alternative<GrayscaleImagePtr>(frameImg)) {
+                auto img = std::get<GrayscaleImagePtr>(frameImg);
+                auto buffer = img->buffer();
+                for (int y = 0; y < height; ++y) {
+                    for (int x = 0; x < width; ++x) {
+                        arrayData[i * planeSize + y * width + x] = buffer->pixel(x, y);
+                    }
+                }
+            } else {
+                auto img = std::get<RGBImagePtr>(frameImg);
+                auto bufR = img->r()->buffer();
+                auto bufG = img->g()->buffer();
+                auto bufB = img->b()->buffer();
+                for (int y = 0; y < height; ++y) {
+                    for (int x = 0; x < width; ++x) {
+                        float gray = (bufR->pixel(x, y) + bufG->pixel(x, y) + bufB->pixel(x, y)) / 3.0f;
+                        arrayData[i * planeSize + y * width + x] = gray;
+                    }
+                }
+            }
+        }
+
+        phdu.write(1, planeSize * count, arrayData);
+        return true;
+    } catch (CCfits::FitsException& ex) {
+        std::cerr << "FITS write batch error: " << ex.message() << std::endl;
         return false;
     }
 }

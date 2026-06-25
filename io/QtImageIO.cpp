@@ -62,11 +62,16 @@ ImageVariant QtImageIO::readImage(const std::string& filepath) {
 }
 
 ImageBatchPtr QtImageIO::readBatch(const std::vector<std::string>& filepaths) {
+    std::vector<std::string> names(filepaths.size());
+    for (size_t i = 0; i < filepaths.size(); ++i) {
+        names[i] = QFileInfo(QString::fromStdString(filepaths[i])).fileName().toStdString();
+    }
+    
     auto loader = [filepaths](int index) -> ImageVariant {
         QtImageIO reader;
         return reader.readImage(filepaths[index]);
     };
-    return std::make_shared<ImageBatch>(filepaths.size(), loader);
+    return std::make_shared<ImageBatch>(filepaths.size(), loader, names, filepaths);
 }
 
 bool QtImageIO::writeImage(const std::string& filepath, const ImageVariant& image) {

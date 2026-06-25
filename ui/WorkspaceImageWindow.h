@@ -17,6 +17,8 @@ public:
 
     ImageVariant currentImage() const;
     ImageView* imageView() const { return m_imageView; }
+    WorkspaceElement element() const { return m_element; }
+    QWidget* viewportWidget() const { return m_viewportWidget; }
 
 private slots:
     void onModeButtonClicked(int id);
