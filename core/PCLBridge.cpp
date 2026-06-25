@@ -190,7 +190,7 @@ static api_bool mock_WriteSettingsInteger(const char16_type* keyPath, int32 valu
 static api_bool mock_GetGlobalString(const char16_type* globalKey, char16_type* value, pcl::size_type maxLen);
 static int32 mock_GetGlobalInteger(const char16_type* globalKey);
 
-static void mock_BeginParameterDefinition(meta_process_handle, meta_parameter_handle, const char* paramId, uint32 type);
+static void mock_BeginParameterDefinition(meta_parameter_handle hParam, const char* paramId, uint32 type);
 static void mock_SetParameterProcessVersionRange(uint32 minVer, uint32 maxVer);
 static void mock_SetParameterRequired(api_bool required);
 static void mock_SetParameterReadOnly(api_bool readOnly);
@@ -2491,7 +2491,7 @@ static int32 mock_GetGlobalInteger(const char16_type* globalKey) {
 // ============================================================================
 // Process / Parameter Metadata Definition Mocks
 // ============================================================================
-static void mock_BeginParameterDefinition(meta_process_handle, meta_parameter_handle, const char* paramId, uint32 type) {
+static void mock_BeginParameterDefinition(meta_parameter_handle hParam, const char* paramId, uint32 type) {
     qDebug() << "[PCL ProcessDef] BeginParameterDefinition:" << paramId << "type =" << type;
 }
 
