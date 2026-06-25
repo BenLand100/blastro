@@ -104,12 +104,43 @@ void HistogramWidget::paintEvent(QPaintEvent* event) {
 
     // 3. Draw Histogram Curve (Logarithmic scale) - Optimized for 16-bit (65536 bins)
     if (!m_histogram.empty()) {
-        int maxVal = *std::max_element(m_histogram.begin(), m_histogram.end());
-        if (maxVal > 0) {
+        int numBins = m_histogram.size();
+        
+        // Detect sparsity (number of non-zero bins) to identify discrete-valued (e.g. 8-bit) images
+        int nonZeroCount = 0;
+        for (int val : m_histogram) {
+            if (val > 0) nonZeroCount++;
+        }
+
+        // Apply a moving average filter to smooth sparse histograms (e.g. 8-bit discrete levels)
+        std::vector<double> renderHist(numBins, 0.0);
+        if (nonZeroCount > 0 && nonZeroCount < 500) {
+            int windowSize = std::max(5, numBins / 256 + 1);
+            if (windowSize % 2 == 0) windowSize++;
+            int half = windowSize / 2;
+            
+            double currentSum = 0;
+            for (int i = 0; i < half && i < numBins; ++i) {
+                currentSum += m_histogram[i];
+            }
+            
+            for (int i = 0; i < numBins; ++i) {
+                int addIdx = i + half;
+                int removeIdx = i - half - 1;
+                if (addIdx < numBins) currentSum += m_histogram[addIdx];
+                if (removeIdx >= 0) currentSum -= m_histogram[removeIdx];
+                renderHist[i] = currentSum / windowSize;
+            }
+        } else {
+            for (int i = 0; i < numBins; ++i) {
+                renderHist[i] = m_histogram[i];
+            }
+        }
+
+        double maxVal = *std::max_element(renderHist.begin(), renderHist.end());
+        if (maxVal > 0.0) {
             double logMax = std::log1p(maxVal);
             QPainterPath path;
-            
-            int numBins = m_histogram.size();
             bool started = false;
             
             // Loop per horizontal pixel column to keep rendering super fast
@@ -117,7 +148,7 @@ void HistogramWidget::paintEvent(QPaintEvent* event) {
                 double val = xToValue(x);
                 if (val >= 0.0 && val <= 1.0) {
                     int bin = std::max(0, std::min(numBins - 1, static_cast<int>(val * (numBins - 1))));
-                    double logVal = std::log1p(m_histogram[bin]);
+                    double logVal = std::log1p(renderHist[bin]);
                     double y = h - (logVal / logMax) * (h - 6);
                     
                     if (!started) {
@@ -149,7 +180,7 @@ void HistogramWidget::paintEvent(QPaintEvent* event) {
                 double val = xToValue(x);
                 if (val >= 0.0 && val <= 1.0) {
                     int bin = std::max(0, std::min(numBins - 1, static_cast<int>(val * (numBins - 1))));
-                    double logVal = std::log1p(m_histogram[bin]);
+                    double logVal = std::log1p(renderHist[bin]);
                     double y = h - (logVal / logMax) * (h - 6);
                     if (!started) {
                         outlinePath.moveTo(x, y);
