@@ -8,14 +8,45 @@
 #include <QAction>
 #include <QLabel>
 #include <QMdiSubWindow>
+#include <QProgressBar>
+#include <QThread>
+#include <QCloseEvent>
+#include <QObject>
+#include <memory>
 
 namespace blastro {
+
+class AlgorithmWorker : public QObject {
+    Q_OBJECT
+public:
+    AlgorithmWorker(const std::string& name,
+                    const std::map<std::string, std::string>& config,
+                    WorkspaceRegistry& workspace,
+                    QObject* parent = nullptr)
+        : QObject(parent), m_name(name), m_config(config), m_workspace(workspace) {}
+    ~AlgorithmWorker() override = default;
+
+public slots:
+    void run();
+
+signals:
+    void progressUpdated(int percent);
+    void finished(bool success, QString errorMsg);
+
+private:
+    std::string m_name;
+    std::map<std::string, std::string> m_config;
+    WorkspaceRegistry& m_workspace;
+};
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
 public:
     explicit MainWindow(QWidget* parent = nullptr);
     ~MainWindow() override = default;
+
+protected:
+    void closeEvent(QCloseEvent* event) override;
 
 private slots:
     void onOpenImage();
@@ -24,6 +55,8 @@ private slots:
     void onSaveActiveBatch();
     void onSaveActiveImage();
     void onOpenPixelMath();
+    void onOpenStacking();
+    void onOpenCalibration();
     void onSubWindowActivated(QMdiSubWindow* window);
     void updateStatusReadout(int x, int y, bool isRGB, const std::vector<float>& values);
     
@@ -38,6 +71,8 @@ private:
     int m_imageCounter;
     QLabel* m_statusReadout = nullptr;
     ImageView* m_connectedImageView = nullptr;
+    QProgressBar* m_progressBar = nullptr;
+    bool m_algorithmRunning = false;
 
     // Menus
     QMenu* m_fileMenu;
@@ -51,6 +86,8 @@ private:
     QAction* m_saveAct;
     QAction* m_exitAct;
     QAction* m_pixelMathAct;
+    QAction* m_stackingAct;
+    QAction* m_calibrationAct;
 };
 
 } // namespace blastro

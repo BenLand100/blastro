@@ -3,13 +3,12 @@
 
 namespace blastro {
 
-class PixelMathAlgorithm : public Algorithm {
+class StackingAlgorithm : public Algorithm {
 public:
-    PixelMathAlgorithm() = default;
-    ~PixelMathAlgorithm() override = default;
+    StackingAlgorithm() = default;
+    ~StackingAlgorithm() override = default;
 
-    std::string name() const override { return "PixelMath"; }
-    
+    std::string name() const override { return "Stacking"; }
     void execute(WorkspaceRegistry& workspace, 
                  const std::map<std::string, std::string>& config, 
                  ProgressCallback progress = nullptr) override;

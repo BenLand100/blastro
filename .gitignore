@@ -41,3 +41,12 @@ install_manifest.txt
 .vscode/
 .idea/
 .qtc_clangd/
+
+# Image and Data Files
+*.fits
+*.fit
+*.lst
+*.jpg
+*.jpeg
+*.png
+*.bmp

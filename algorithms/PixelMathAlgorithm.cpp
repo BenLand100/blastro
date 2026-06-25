@@ -20,7 +20,9 @@ struct ImageBindings {
     double currentB = 0.0;
 };
 
-void PixelMathAlgorithm::execute(WorkspaceRegistry& workspace, const std::map<std::string, std::string>& config) {
+void PixelMathAlgorithm::execute(WorkspaceRegistry& workspace, 
+                                 const std::map<std::string, std::string>& config, 
+                                 ProgressCallback progress) {
     std::string exprR = config.count("expr_r") ? config.at("expr_r") : "";
     std::string exprG = config.count("expr_g") ? config.at("expr_g") : "";
     std::string exprB = config.count("expr_b") ? config.at("expr_b") : "";
@@ -162,6 +164,12 @@ void PixelMathAlgorithm::execute(WorkspaceRegistry& workspace, const std::map<st
     // 5. Pixel loop
     for (int y = 0; y < height; ++y) {
         yVal = y;
+        
+        // Report progress periodically
+        if (progress && (y % 10 == 0)) {
+            progress(static_cast<int>(100.0 * y / height));
+        }
+        
         for (int x = 0; x < width; ++x) {
             xVal = x;
 

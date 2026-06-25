@@ -2,7 +2,11 @@
 #include "io/QtImageIO.h"
 #include "io/FitsIO.h"
 #include "algorithms/PixelMathAlgorithm.h"
+#include "algorithms/StackingAlgorithm.h"
+#include "algorithms/CalibrationAlgorithm.h"
 #include "PixelMathDialog.h"
+#include "StackingDialog.h"
+#include "CalibrationDialog.h"
 #include "WorkspaceImageWindow.h"
 #include "BatchImageWidget.h"
 #include <QFileDialog>
@@ -45,6 +49,29 @@ MainWindow::MainWindow(QWidget* parent)
     statusBar()->addPermanentWidget(m_statusReadout);
     statusBar()->setStyleSheet("QStatusBar { background-color: #202020; color: #aaa; border-top: 1px solid #333; font-size: 11px; }");
     statusBar()->showMessage("Ready");
+
+    // Add and style progress bar in status bar
+    m_progressBar = new QProgressBar(this);
+    m_progressBar->setRange(0, 100);
+    m_progressBar->setValue(0);
+    m_progressBar->setTextVisible(true);
+    m_progressBar->setStyleSheet(
+        "QProgressBar {"
+        "   border: 1px solid #555;"
+        "   background-color: #222;"
+        "   color: #fff;"
+        "   border-radius: 3px;"
+        "   text-align: center;"
+        "   font-weight: bold;"
+        "   max-height: 14px;"
+        "   width: 150px;"
+        "}"
+        "QProgressBar::chunk {"
+        "   background-color: #007acc;"
+        "}"
+    );
+    m_progressBar->hide();
+    statusBar()->addWidget(m_progressBar);
 
     // Connect to subwindow activation signal
     connect(m_workspaceArea, &QMdiArea::subWindowActivated, this, &MainWindow::onSubWindowActivated);
@@ -93,6 +120,14 @@ void MainWindow::createMenus() {
     m_pixelMathAct = new QAction("&Pixel Math...", this);
     connect(m_pixelMathAct, &QAction::triggered, this, &MainWindow::onOpenPixelMath);
     m_algoMenu->addAction(m_pixelMathAct);
+
+    m_stackingAct = new QAction("&Stacking...", this);
+    connect(m_stackingAct, &QAction::triggered, this, &MainWindow::onOpenStacking);
+    m_algoMenu->addAction(m_stackingAct);
+
+    m_calibrationAct = new QAction("&Calibration...", this);
+    connect(m_calibrationAct, &QAction::triggered, this, &MainWindow::onOpenCalibration);
+    m_algoMenu->addAction(m_calibrationAct);
 }
 
 void MainWindow::onOpenImage() {
@@ -417,23 +452,111 @@ void MainWindow::onOpenPixelMath() {
     dlg->show();
 }
 
-void MainWindow::executeAlgorithmSlot(const std::string& name, const std::map<std::string, std::string>& config) {
-    if (name == "PixelMath") {
-        try {
-            PixelMathAlgorithm alg;
-            alg.execute(m_workspace, config);
-            
-            std::string outName = config.at("output_name");
-            WorkspaceElement outElem = m_workspace.getElement(outName);
-            
-            // Re-render/display
-            QString qOutName = QString::fromStdString(outName);
-            m_workspaceArea->removeElementView(qOutName);
-            m_workspaceArea->addElementView(qOutName, outElem);
-        } catch (const std::exception& e) {
-            QMessageBox::critical(this, "Pixel Math Error", QString("Error during Pixel Math execution:\n%1").arg(e.what()));
+void MainWindow::onOpenStacking() {
+    StackingDialog* dlg = new StackingDialog(m_workspace, this);
+    connect(dlg, &StackingDialog::algorithmExecuted, this, &MainWindow::executeAlgorithmSlot);
+    dlg->setAttribute(Qt::WA_DeleteOnClose);
+    dlg->show();
+}
+
+void MainWindow::onOpenCalibration() {
+    CalibrationDialog* dlg = new CalibrationDialog(m_workspace, this);
+    connect(dlg, &CalibrationDialog::algorithmExecuted, this, &MainWindow::executeAlgorithmSlot);
+    dlg->setAttribute(Qt::WA_DeleteOnClose);
+    dlg->show();
+}
+
+void AlgorithmWorker::run() {
+    try {
+        std::unique_ptr<Algorithm> alg;
+        if (m_name == "PixelMath") {
+            alg = std::make_unique<PixelMathAlgorithm>();
+        } else if (m_name == "Stacking") {
+            alg = std::make_unique<StackingAlgorithm>();
+        } else if (m_name == "Calibration") {
+            alg = std::make_unique<CalibrationAlgorithm>();
+        } else {
+            throw std::runtime_error("Unknown algorithm: " + m_name);
         }
+
+        alg->execute(m_workspace, m_config, [this](int percent) {
+            emit progressUpdated(percent);
+        });
+
+        emit finished(true, "");
+    } catch (const std::exception& e) {
+        emit finished(false, QString::fromStdString(e.what()));
     }
+}
+
+void MainWindow::closeEvent(QCloseEvent* event) {
+    if (m_algorithmRunning) {
+        QMessageBox::warning(this, "Algorithm Running",
+                             "An algorithm is currently running in the background.\n"
+                             "Please wait for it to complete before closing the application.");
+        event->ignore();
+    } else {
+        QMainWindow::closeEvent(event);
+    }
+}
+
+void MainWindow::executeAlgorithmSlot(const std::string& name, const std::map<std::string, std::string>& config) {
+    // Disable main window to prevent concurrent modifications
+    setEnabled(false);
+    m_algorithmRunning = true;
+
+    // Reset and show progress bar
+    m_progressBar->setValue(0);
+    m_progressBar->show();
+    statusBar()->showMessage(QString("Running %1...").arg(QString::fromStdString(name)));
+
+    // Create background thread and worker
+    QThread* thread = new QThread(this);
+    AlgorithmWorker* worker = new AlgorithmWorker(name, config, m_workspace);
+    worker->moveToThread(thread);
+
+    // Wire up progress updates
+    connect(worker, &AlgorithmWorker::progressUpdated, m_progressBar, &QProgressBar::setValue);
+
+    // Wire up thread start and finish
+    connect(thread, &QThread::started, worker, &AlgorithmWorker::run);
+    connect(worker, &AlgorithmWorker::finished, this, [this, thread, worker, name, config](bool success, const QString& errorMsg) {
+        // Stop thread event loop and wait for completion
+        thread->quit();
+        thread->wait();
+
+        // Cleanup thread and worker
+        worker->deleteLater();
+        thread->deleteLater();
+
+        // Reset UI state
+        m_progressBar->hide();
+        statusBar()->showMessage("Ready");
+        m_algorithmRunning = false;
+        setEnabled(true);
+
+        if (success) {
+            try {
+                std::string outName = config.at("output_name");
+                WorkspaceElement outElem = m_workspace.getElement(outName);
+
+                QString qOutName = QString::fromStdString(outName);
+                m_workspaceArea->removeElementView(qOutName);
+                m_workspaceArea->addElementView(qOutName, outElem);
+
+                statusBar()->showMessage(QString("Successfully completed %1: %2").arg(QString::fromStdString(name)).arg(qOutName), 5000);
+            } catch (const std::exception& e) {
+                QMessageBox::critical(this, "Display Error", 
+                                     QString("Algorithm finished successfully, but failed to retrieve or display the output element:\n%1").arg(e.what()));
+            }
+        } else {
+            QMessageBox::critical(this, QString("%1 Error").arg(QString::fromStdString(name)),
+                                 QString("Error during execution:\n%1").arg(errorMsg));
+        }
+    });
+
+    // Start execution!
+    thread->start();
 }
 
 void MainWindow::addImageToWorkspace(const QString& name, const WorkspaceElement& element) {

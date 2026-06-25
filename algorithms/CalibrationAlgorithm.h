@@ -3,13 +3,12 @@
 
 namespace blastro {
 
-class PixelMathAlgorithm : public Algorithm {
+class CalibrationAlgorithm : public Algorithm {
 public:
-    PixelMathAlgorithm() = default;
-    ~PixelMathAlgorithm() override = default;
+    CalibrationAlgorithm() = default;
+    ~CalibrationAlgorithm() override = default;
 
-    std::string name() const override { return "PixelMath"; }
-    
+    std::string name() const override { return "Calibration"; }
     void execute(WorkspaceRegistry& workspace, 
                  const std::map<std::string, std::string>& config, 
                  ProgressCallback progress = nullptr) override;
