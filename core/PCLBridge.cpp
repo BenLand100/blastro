@@ -3,6 +3,7 @@
 #include "core/PCLStubs.h"
 #include <pcl/api/APIInterface.h>
 #include <dlfcn.h>
+#include <QFile>
 #include <QFont>
 #include <QFontMetrics>
 #include <QApplication>
@@ -1836,6 +1837,36 @@ void PCLBridge::setupOverrides() {
 
 bool PCLBridge::loadModule(const QString& path) {
     unloadModule();
+
+    // Dynamically pre-load tensorflow dependencies if we are loading StarXTerminator.
+    // This keeps the core BLastro binary entirely decoupled from TensorFlow while resolving
+    // the plugin's runtime shared library dependencies.
+    if (path.contains("StarXTerminator", Qt::CaseInsensitive)) {
+        qDebug() << "[PCL Bridge] Detected StarXTerminator. Pre-loading TensorFlow dependencies...";
+        
+        // Find relative lib directory based on the application path
+        QString appDir = QCoreApplication::applicationDirPath();
+        QString tfFrameworkPath = appDir + "/lib/libtensorflow_framework.so.2";
+        QString tfPath = appDir + "/lib/libtensorflow.so.2";
+
+        // Fallback to development/build directory structures if run from build/
+        if (!QFile::exists(tfPath)) {
+            tfFrameworkPath = appDir + "/../lib/libtensorflow_framework.so.2";
+            tfPath = appDir + "/../lib/libtensorflow.so.2";
+        }
+
+        qDebug() << "[PCL Bridge] Loading TensorFlow framework from:" << tfFrameworkPath;
+        void* tfFrameHandle = dlopen(tfFrameworkPath.toUtf8().constData(), RTLD_LAZY | RTLD_GLOBAL);
+        if (!tfFrameHandle) {
+            qWarning() << "[PCL Bridge] Failed to pre-load libtensorflow_framework.so.2:" << dlerror();
+        }
+
+        qDebug() << "[PCL Bridge] Loading TensorFlow from:" << tfPath;
+        void* tfHandle = dlopen(tfPath.toUtf8().constData(), RTLD_LAZY | RTLD_GLOBAL);
+        if (!tfHandle) {
+            qWarning() << "[PCL Bridge] Failed to pre-load libtensorflow.so.2:" << dlerror();
+        }
+    }
 
     qDebug() << "[PCL Bridge] Attempting to dlopen:" << path;
     m_libHandle = dlopen(path.toUtf8().constData(), RTLD_LAZY | RTLD_GLOBAL);
