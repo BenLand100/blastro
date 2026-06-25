@@ -48,14 +48,14 @@ protected:
     void mousePressEvent(QMouseEvent* event) override;
     void mouseReleaseEvent(QMouseEvent* event) override;
     void mouseMoveEvent(QMouseEvent* event) override;
+    void drawBackground(QPainter* painter, const QRectF& rect) override;
 
 private:
-    QImage convertToQImage(const ImageVariant& image);
     void updateView();
+    void updateLUT();
     float applyMTF(float v, float B, float W, float M);
 
     QGraphicsScene* m_scene;
-    QGraphicsPixmapItem* m_pixmapItem;
     ImageVariant m_currentImage;
     double m_zoomFactor;
 
@@ -64,6 +64,7 @@ private:
     double m_blackpoint;
     double m_whitepoint;
     double m_midpoint;
+    std::vector<unsigned char> m_lut;
 
     // Panning state
     bool m_isPanning;

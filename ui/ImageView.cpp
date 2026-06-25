@@ -10,7 +10,6 @@ namespace blastro {
 ImageView::ImageView(QWidget* parent)
     : QGraphicsView(parent),
       m_scene(new QGraphicsScene(this)),
-      m_pixmapItem(new QGraphicsPixmapItem()),
       m_zoomFactor(1.0),
       m_displayMode(Normal),
       m_blackpoint(0.0),
@@ -19,7 +18,6 @@ ImageView::ImageView(QWidget* parent)
       m_isPanning(false) {
       
     setScene(m_scene);
-    m_scene->addItem(m_pixmapItem);
     
     // Set view properties
     setRenderHint(QPainter::Antialiasing, false); // Keep pixels sharp
@@ -31,11 +29,25 @@ ImageView::ImageView(QWidget* parent)
     setStyleSheet("background-color: #1e1e1e; border: none;");
     setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
     setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+
+    // Precompute initial LUT
+    updateLUT();
 }
 
 void ImageView::setImage(const ImageVariant& image) {
     m_currentImage = image;
-    // If in Autostretch mode, recalculate parameters for new image
+    
+    // Set scene rect to the image dimensions
+    int w = 0, h = 0;
+    if (std::holds_alternative<GrayscaleImagePtr>(m_currentImage)) {
+        auto img = std::get<GrayscaleImagePtr>(m_currentImage);
+        if (img) { w = img->width(); h = img->height(); }
+    } else if (std::holds_alternative<RGBImagePtr>(m_currentImage)) {
+        auto img = std::get<RGBImagePtr>(m_currentImage);
+        if (img) { w = img->width(); h = img->height(); }
+    }
+    m_scene->setSceneRect(0, 0, w, h);
+    
     if (m_displayMode == Autostretch) {
         runAutostretch();
     } else {
@@ -48,6 +60,7 @@ void ImageView::setDisplayMode(DisplayMode mode) {
         runAutostretch();
     } else {
         m_displayMode = mode;
+        updateLUT(); // Precompute LUT for the new mode
         updateView();
     }
 }
@@ -61,8 +74,22 @@ void ImageView::setStretchParams(double b, double w, double m) {
         m_displayMode = Stretch;
     }
     
+    updateLUT(); // Precompute LUT with new parameters
     updateView();
     emit stretchParamsChanged(b, w, m);
+}
+
+void ImageView::updateLUT() {
+    m_lut.resize(65536);
+    float B = static_cast<float>(m_blackpoint);
+    float W = static_cast<float>(m_whitepoint);
+    float M = static_cast<float>(m_midpoint);
+    
+    for (int i = 0; i < 65536; ++i) {
+        float v = static_cast<float>(i) / 65535.0f;
+        float stretched = applyMTF(v, B, W, M);
+        m_lut[i] = static_cast<unsigned char>(qBound(0.0f, stretched * 255.0f, 255.0f));
+    }
 }
 
 void ImageView::runAutostretch() {
@@ -151,6 +178,7 @@ void ImageView::runAutostretch() {
     m_midpoint = mp;
     m_displayMode = Autostretch;
 
+    updateLUT(); // Precompute LUT for autostretch parameters
     updateView();
     emit stretchParamsChanged(m_blackpoint, m_whitepoint, m_midpoint);
 }
@@ -262,11 +290,7 @@ void ImageView::mouseMoveEvent(QMouseEvent* event) {
 }
 
 void ImageView::updateView() {
-    QImage qimg = convertToQImage(m_currentImage);
-    if (!qimg.isNull()) {
-        m_pixmapItem->setPixmap(QPixmap::fromImage(qimg));
-        m_scene->setSceneRect(m_pixmapItem->boundingRect());
-    }
+    viewport()->update();
 }
 
 float ImageView::applyMTF(float v, float B, float W, float M) {
@@ -281,65 +305,110 @@ float ImageView::applyMTF(float v, float B, float W, float M) {
     return std::max(0.0f, std::min(1.0f, z));
 }
 
-QImage ImageView::convertToQImage(const ImageVariant& image) {
-    int width = 0;
-    int height = 0;
+void ImageView::drawBackground(QPainter* painter, const QRectF& rect) {
+    Q_UNUSED(rect);
+    
+    int vpW = viewport()->width();
+    int vpH = viewport()->height();
+    if (vpW <= 0 || vpH <= 0) return;
 
-    if (std::holds_alternative<GrayscaleImagePtr>(image)) {
-        auto img = std::get<GrayscaleImagePtr>(image);
-        if (!img) return QImage();
-        width = img->width();
-        height = img->height();
-    } else if (std::holds_alternative<RGBImagePtr>(image)) {
-        auto img = std::get<RGBImagePtr>(image);
-        if (!img) return QImage();
-        width = img->width();
-        height = img->height();
-    } else {
-        return QImage();
-    }
+    // 1. Get the image dimensions and buffer pointers
+    int imgW = 0, imgH = 0;
+    const float* bufGray = nullptr;
+    const float* bufR = nullptr;
+    const float* bufG = nullptr;
+    const float* bufB = nullptr;
+    bool isRGB = false;
 
-    QImage qimg(width, height, QImage::Format_RGB32);
-
-    if (std::holds_alternative<GrayscaleImagePtr>(image)) {
-        auto img = std::get<GrayscaleImagePtr>(image);
-        auto buffer = img->buffer();
-        for (int y = 0; y < height; ++y) {
-            QRgb* line = reinterpret_cast<QRgb*>(qimg.scanLine(y));
-            for (int x = 0; x < width; ++x) {
-                float val = buffer->pixel(x, y);
-                if (m_displayMode != Normal) {
-                    val = applyMTF(val, m_blackpoint, m_whitepoint, m_midpoint);
-                }
-                int grayVal = qBound(0, static_cast<int>(val * 255.0f), 255);
-                line[x] = qRgb(grayVal, grayVal, grayVal);
-            }
+    if (std::holds_alternative<GrayscaleImagePtr>(m_currentImage)) {
+        auto img = std::get<GrayscaleImagePtr>(m_currentImage);
+        if (img && img->buffer()) {
+            imgW = img->width();
+            imgH = img->height();
+            bufGray = img->buffer()->data();
         }
-    } else {
-        auto img = std::get<RGBImagePtr>(image);
-        auto bufR = img->r()->buffer();
-        auto bufG = img->g()->buffer();
-        auto bufB = img->b()->buffer();
-        for (int y = 0; y < height; ++y) {
-            QRgb* line = reinterpret_cast<QRgb*>(qimg.scanLine(y));
-            for (int x = 0; x < width; ++x) {
-                float r = bufR->pixel(x, y);
-                float g = bufG->pixel(x, y);
-                float b = bufB->pixel(x, y);
-                if (m_displayMode != Normal) {
-                    r = applyMTF(r, m_blackpoint, m_whitepoint, m_midpoint);
-                    g = applyMTF(g, m_blackpoint, m_whitepoint, m_midpoint);
-                    b = applyMTF(b, m_blackpoint, m_whitepoint, m_midpoint);
-                }
-                int rVal = qBound(0, static_cast<int>(r * 255.0f), 255);
-                int gVal = qBound(0, static_cast<int>(g * 255.0f), 255);
-                int bVal = qBound(0, static_cast<int>(b * 255.0f), 255);
-                line[x] = qRgb(rVal, gVal, bVal);
-            }
+    } else if (std::holds_alternative<RGBImagePtr>(m_currentImage)) {
+        auto img = std::get<RGBImagePtr>(m_currentImage);
+        if (img && img->r() && img->g() && img->b()) {
+            imgW = img->width();
+            imgH = img->height();
+            bufR = img->r()->buffer()->data();
+            bufG = img->g()->buffer()->data();
+            bufB = img->b()->buffer()->data();
+            isRGB = true;
         }
     }
 
-    return qimg;
+    if (imgW <= 0 || imgH <= 0) {
+        // No image loaded, draw background color
+        painter->fillRect(rect, QColor("#1e1e1e"));
+        return;
+    }
+
+    // 2. Create viewport-sized QImage
+    QImage vpImg(vpW, vpH, QImage::Format_RGB32);
+
+    // 3. Precompute transform coefficients from viewport (vx, vy) to scene (sx, sy)
+    QPointF p0 = mapToScene(0, 0);
+    QPointF p1 = mapToScene(1, 0);
+    QPointF p2 = mapToScene(0, 1);
+    double dx = p1.x() - p0.x();
+    double dy = p2.y() - p0.y();
+
+    // Background color: #1e1e1e (30, 30, 30)
+    QRgb bgRgb = qRgb(30, 30, 30);
+
+    // 4. Render loop
+    double sy = p0.y();
+    for (int vy = 0; vy < vpH; ++vy) {
+        QRgb* line = reinterpret_cast<QRgb*>(vpImg.scanLine(vy));
+        double sx = p0.x();
+        for (int vx = 0; vx < vpW; ++vx) {
+            int isx = static_cast<int>(sx);
+            int isy = static_cast<int>(sy);
+
+            if (isx >= 0 && isx < imgW && isy >= 0 && isy < imgH) {
+                int idx = isy * imgW + isx;
+                if (isRGB) {
+                    float r = bufR[idx];
+                    float g = bufG[idx];
+                    float b = bufB[idx];
+
+                    if (m_displayMode != Normal) {
+                        int idxR = qBound(0, static_cast<int>(r * 65535.0f), 65535);
+                        int idxG = qBound(0, static_cast<int>(g * 65535.0f), 65535);
+                        int idxB = qBound(0, static_cast<int>(b * 65535.0f), 65535);
+                        line[vx] = qRgb(m_lut[idxR], m_lut[idxG], m_lut[idxB]);
+                    } else {
+                        int rVal = qBound(0, static_cast<int>(r * 255.0f), 255);
+                        int gVal = qBound(0, static_cast<int>(g * 255.0f), 255);
+                        int bVal = qBound(0, static_cast<int>(b * 255.0f), 255);
+                        line[vx] = qRgb(rVal, gVal, bVal);
+                    }
+                } else {
+                    float val = bufGray[idx];
+
+                    if (m_displayMode != Normal) {
+                        int idxLut = qBound(0, static_cast<int>(val * 65535.0f), 65535);
+                        line[vx] = qRgb(m_lut[idxLut], m_lut[idxLut], m_lut[idxLut]);
+                    } else {
+                        int grayVal = qBound(0, static_cast<int>(val * 255.0f), 255);
+                        line[vx] = qRgb(grayVal, grayVal, grayVal);
+                    }
+                }
+            } else {
+                line[vx] = bgRgb;
+            }
+            sx += dx;
+        }
+        sy += dy;
+    }
+
+    // 5. Draw the viewport image directly on the viewport (identity transform)
+    painter->save();
+    painter->setTransform(QTransform()); // Reset transform to viewport coordinates
+    painter->drawImage(0, 0, vpImg);
+    painter->restore();
 }
 
 } // namespace blastro
