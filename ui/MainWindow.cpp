@@ -693,11 +693,13 @@ void MainWindow::loadAndShowPlugin(const QString& path) {
     }
     bool success = false;
     if (m_pclBridge->loadModule(path)) {
-        if (m_pclBridge->isProcessRegistered("DeepSNR")) {
-            qDebug() << "[MainWindow] DeepSNR process is registered. Launching interface...";
-            success = m_pclBridge->launchInterface("DeepSNR", this);
+        auto processes = m_pclBridge->registeredProcesses();
+        if (!processes.empty()) {
+            QString firstProcess = processes[0];
+            qDebug() << "[MainWindow] Automatically launching interface for registered process:" << firstProcess;
+            success = m_pclBridge->launchInterface(firstProcess, this);
         } else {
-            qWarning() << "[MainWindow] DeepSNR process not found in loaded module.";
+            qWarning() << "[MainWindow] No registered processes found in loaded module:" << path;
         }
     } else {
         qWarning() << "[MainWindow] Failed to load module from:" << path;

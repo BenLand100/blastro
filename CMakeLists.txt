@@ -1,6 +1,21 @@
 cmake_minimum_required(VERSION 3.16)
 project(BLastro LANGUAGES CXX)
 
+# Configure RPATH to look in relative lib/ directory at runtime
+set(CMAKE_SKIP_BUILD_RPATH FALSE)
+set(CMAKE_BUILD_WITH_INSTALL_RPATH FALSE)
+set(CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)
+
+if(UNIX AND NOT APPLE)
+    # $ORIGIN/lib works if run from the parent directory of lib, and $ORIGIN/../lib works if run from bin/
+    # We escape the $ to prevent CMake from evaluating it as a CMake variable.
+    set(CMAKE_INSTALL_RPATH "\$ORIGIN/lib:\$ORIGIN/../lib")
+    set(CMAKE_BUILD_RPATH "\$ORIGIN/lib:\$ORIGIN/../lib")
+elseif(APPLE)
+    set(CMAKE_INSTALL_RPATH "@executable_path/lib:@executable_path/../lib")
+    set(CMAKE_BUILD_RPATH "@executable_path/lib:@executable_path/../lib")
+endif()
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 add_compile_definitions(__PCL_LINUX)
