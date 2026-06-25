@@ -1,4 +1,5 @@
 #include "MainWindow.h"
+#include "LogWindow.h"
 #include "core/PCLBridge.h"
 #include "io/QtImageIO.h"
 #include "io/FitsIO.h"
@@ -74,6 +75,16 @@ MainWindow::MainWindow(QWidget* parent)
     m_progressBar->hide();
     statusBar()->addWidget(m_progressBar);
 
+    // Create the persistent MDI Log window
+    LogWindow* logWindow = new LogWindow(this);
+    QMdiSubWindow* logSub = m_workspaceArea->addSubWindow(logWindow);
+    logSub->setWindowTitle("Process Console");
+    logSub->resize(600, 200);
+    logSub->show();
+
+    // Position log window near the bottom right by default
+    logSub->move(0, 500);
+
     // Connect to subwindow activation signal
     connect(m_workspaceArea, &QMdiArea::subWindowActivated, this, &MainWindow::onSubWindowActivated);
 }
@@ -135,6 +146,10 @@ void MainWindow::createMenus() {
     m_loadPluginAct = new QAction("&Load PixInsight Module...", this);
     connect(m_loadPluginAct, &QAction::triggered, this, &MainWindow::onLoadPCLModule);
     m_algoMenu->addAction(m_loadPluginAct);
+
+    // Window Menu
+    m_windowMenu = menuBar()->addMenu("&Window");
+    connect(m_windowMenu, &QMenu::aboutToShow, this, &MainWindow::updateWindowMenu);
 }
 
 void MainWindow::onOpenImage() {
@@ -964,6 +979,78 @@ bool MainWindow::loadImageDirectly(const QString& filepath, const QString& refNa
         qCritical() << "[MainWindow] Failed to load image:" << e.what();
         return false;
     }
+}
+
+void MainWindow::updateWindowMenu() {
+    m_windowMenu->clear();
+
+    // 1. Process Console
+    LogWindow* logWin = LogWindow::instance();
+    QAction* consoleAct = new QAction("Process Console", this);
+    if (logWin) {
+        connect(consoleAct, &QAction::triggered, this, [logWin]() {
+            if (auto* sub = qobject_cast<QMdiSubWindow*>(logWin->parentWidget())) {
+                sub->show();
+                sub->setFocus();
+            }
+        });
+    } else {
+        connect(consoleAct, &QAction::triggered, this, &MainWindow::restoreProcessConsole);
+    }
+    m_windowMenu->addAction(consoleAct);
+
+    // Categorize remaining MDI windows
+    QList<QMdiSubWindow*> processes;
+    QList<QMdiSubWindow*> images;
+
+    for (auto* subWindow : m_workspaceArea->subWindowList()) {
+        if (!subWindow || !subWindow->widget()) continue;
+        
+        // Skip LogWindow itself as it is handled first
+        if (qobject_cast<LogWindow*>(subWindow->widget())) continue;
+
+        if (qobject_cast<WorkspaceImageWindow*>(subWindow->widget()) ||
+            qobject_cast<BatchImageWidget*>(subWindow->widget())) {
+            images.append(subWindow);
+        } else {
+            processes.append(subWindow);
+        }
+    }
+
+    // Add separator between builtins (Process Console) and algorithms if algorithms exist
+    if (!processes.isEmpty()) {
+        m_windowMenu->addSeparator();
+        for (auto* sub : processes) {
+            QAction* act = new QAction(sub->windowTitle(), this);
+            connect(act, &QAction::triggered, this, [sub]() {
+                sub->show();
+                sub->setFocus();
+            });
+            m_windowMenu->addAction(act);
+        }
+    }
+
+    // Add separator before images if images exist and we have added either builtins or algorithms
+    if (!images.isEmpty()) {
+        m_windowMenu->addSeparator();
+        for (auto* sub : images) {
+            QAction* act = new QAction(sub->windowTitle(), this);
+            connect(act, &QAction::triggered, this, [sub]() {
+                sub->show();
+                sub->setFocus();
+            });
+            m_windowMenu->addAction(act);
+        }
+    }
+}
+
+void MainWindow::restoreProcessConsole() {
+    LogWindow* logWindow = new LogWindow(this);
+    QMdiSubWindow* logSub = m_workspaceArea->addSubWindow(logWindow);
+    logSub->setWindowTitle("Process Console");
+    logSub->resize(600, 200);
+    logSub->show();
+    logSub->move(0, 500);
 }
 
 } // namespace blastro

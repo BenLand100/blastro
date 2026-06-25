@@ -1,11 +1,44 @@
 #include "ui/MainWindow.h"
+#include "ui/LogWindow.h"
 #include "core/PCLBridge.h"
 #include <QApplication>
 #include <QTimer>
 #include <QDebug>
 #include <cstring>
+#include <iostream>
+
+void blastroMessageHandler(QtMsgType type, const QMessageLogContext& context, const QString& msg) {
+    // Write to standard error / standard output first (preserves terminal logs)
+    std::string txt = msg.toStdString();
+    switch (type) {
+        case QtDebugMsg:
+            std::cerr << "[DEBUG] " << txt << std::endl;
+            break;
+        case QtInfoMsg:
+            std::cerr << "[INFO] " << txt << std::endl;
+            break;
+        case QtWarningMsg:
+            std::cerr << "[WARNING] " << txt << std::endl;
+            break;
+        case QtCriticalMsg:
+            std::cerr << "[CRITICAL] " << txt << std::endl;
+            break;
+        case QtFatalMsg:
+            std::cerr << "[FATAL] " << txt << std::endl;
+            break;
+    }
+
+    // Forward to on-screen LogWindow if registered
+    blastro::LogWindow::appendMessage(type, msg);
+
+    if (type == QtFatalMsg) {
+        std::abort();
+    }
+}
 
 int main(int argc, char* argv[]) {
+    qInstallMessageHandler(blastroMessageHandler);
+
     if (argc > 3 && (std::strcmp(argv[1], "--test-process") == 0 || std::strcmp(argv[1], "--run-plugin") == 0)) {
         QApplication app(argc, argv);
         QString pluginPath = argv[2];

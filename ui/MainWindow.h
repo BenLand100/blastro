@@ -72,6 +72,10 @@ private slots:
     // Plugins
     void onLoadPCLModule();
 
+private slots:
+    void updateWindowMenu();
+    void restoreProcessConsole();
+
 private:
     void createMenus();
     void addImageToWorkspace(const QString& name, const WorkspaceElement& element);
@@ -89,6 +93,7 @@ private:
     // Menus
     QMenu* m_fileMenu;
     QMenu* m_algoMenu;
+    QMenu* m_windowMenu;
 
     // Actions
     QAction* m_openAct;
