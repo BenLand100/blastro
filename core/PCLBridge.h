@@ -7,6 +7,8 @@
 #include <vector>
 #include "core/ImageBuffer.h"
 
+class QWidget;
+
 namespace blastro {
 
 // Mock structure representing a PixInsight image
@@ -74,6 +76,9 @@ public:
 
     // Execute a registered process by ID on a set of Blastro image buffers
     bool executeProcess(const QString& processId, std::vector<ImageBufferPtr>& buffers);
+
+    // Launch a process interface in a host-provided parent widget/dialog
+    bool launchInterface(const QString& processId, QWidget* parentWindow);
 
     // Check if a process ID is registered
     bool isProcessRegistered(const QString& processId) const;

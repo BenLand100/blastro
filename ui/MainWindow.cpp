@@ -646,6 +646,23 @@ void MainWindow::updateStatusReadout(int x, int y, bool isRGB, const std::vector
     m_statusReadout->setText(text);
 }
 
+void MainWindow::loadAndShowPlugin(const QString& path) {
+    if (!m_pclBridge) {
+        m_pclBridge = std::make_unique<PCLBridge>();
+    }
+    if (m_pclBridge->loadModule(path)) {
+        if (m_pclBridge->isProcessRegistered("DeepSNR")) {
+            m_runDeepSNRAct->setEnabled(true);
+            qDebug() << "[MainWindow] DeepSNR process is registered. Launching interface...";
+            m_pclBridge->launchInterface("DeepSNR", this);
+        } else {
+            qWarning() << "[MainWindow] DeepSNR process not found in loaded module.";
+        }
+    } else {
+        qWarning() << "[MainWindow] Failed to load module from:" << path;
+    }
+}
+
 void MainWindow::onLoadPCLModule() {
     QString filter = "PixInsight Modules (*.so);;All Files (*.*)";
     QString filepath = QFileDialog::getOpenFileName(this, "Load PixInsight Module", "/opt/PixInsight/bin", filter);

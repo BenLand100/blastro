@@ -46,6 +46,8 @@ public:
     explicit MainWindow(QWidget* parent = nullptr);
     ~MainWindow() override = default;
 
+    void loadAndShowPlugin(const QString& path);
+
 protected:
     void closeEvent(QCloseEvent* event) override;
 
