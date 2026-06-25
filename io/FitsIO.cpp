@@ -7,6 +7,33 @@
 
 namespace blastro {
 
+static float determineScaleFactor(int bitpix, const std::valarray<float>& contents) {
+    float scaleFactor = 1.0f;
+    if (bitpix == 8) {
+        scaleFactor = 255.0f;
+    } else if (bitpix == 16) {
+        scaleFactor = 65535.0f;
+    } else if (bitpix == 32) {
+        scaleFactor = 4294967295.0f;
+    } else if (bitpix < 0) {
+        // Floating point FITS. Check if it is stored in raw integer ranges.
+        float maxVal = -1e30f;
+        for (size_t i = 0; i < contents.size(); ++i) {
+            if (contents[i] > maxVal) {
+                maxVal = contents[i];
+            }
+        }
+        if (maxVal > 1.0f) {
+            if (maxVal > 255.0f) {
+                scaleFactor = 65535.0f;
+            } else {
+                scaleFactor = 255.0f;
+            }
+        }
+    }
+    return scaleFactor;
+}
+
 bool FitsIO::supportsExtension(const std::string& ext) const {
     std::string lowerExt = ext;
     std::transform(lowerExt.begin(), lowerExt.end(), lowerExt.begin(), ::tolower);
@@ -34,10 +61,11 @@ ImageVariant FitsIO::readImage(const std::string& filepath) {
 
             auto grayImg = std::make_shared<GrayscaleImage>(width, height);
             auto buffer = grayImg->buffer();
+            float scale = determineScaleFactor(image.bitpix(), contents);
             for (int y = 0; y < height; ++y) {
                 for (int x = 0; x < width; ++x) {
                     // FITS pixel storage: row-major where axis(0) varies fastest
-                    buffer->setPixel(x, y, contents[y * width + x]);
+                    buffer->setPixel(x, y, contents[y * width + x] / scale);
                 }
             }
             return grayImg;
@@ -53,13 +81,14 @@ ImageVariant FitsIO::readImage(const std::string& filepath) {
                 auto bufG = rgbImg->g()->buffer();
                 auto bufB = rgbImg->b()->buffer();
 
+                float scale = determineScaleFactor(image.bitpix(), contents);
                 long planeSize = width * height;
                 for (int y = 0; y < height; ++y) {
                     for (int x = 0; x < width; ++x) {
                         long idx = y * width + x;
-                        bufR->setPixel(x, y, contents[idx]);
-                        bufG->setPixel(x, y, contents[planeSize + idx]);
-                        bufB->setPixel(x, y, contents[2 * planeSize + idx]);
+                        bufR->setPixel(x, y, contents[idx] / scale);
+                        bufG->setPixel(x, y, contents[planeSize + idx] / scale);
+                        bufB->setPixel(x, y, contents[2 * planeSize + idx] / scale);
                     }
                 }
                 return rgbImg;
@@ -107,9 +136,10 @@ ImageBatchPtr FitsIO::readBatch(const std::vector<std::string>& filepaths) {
 
                         auto grayImg = std::make_shared<GrayscaleImage>(width, height);
                         auto buffer = grayImg->buffer();
+                        float scale = determineScaleFactor(imageInner.bitpix(), plane);
                         for (int y = 0; y < height; ++y) {
                             for (int x = 0; x < width; ++x) {
-                                buffer->setPixel(x, y, plane[y * width + x]);
+                                buffer->setPixel(x, y, plane[y * width + x] / scale);
                             }
                         }
                         return grayImg;
