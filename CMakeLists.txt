@@ -3,6 +3,7 @@ project(Blastro LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+add_compile_definitions(__PCL_LINUX)
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 set(CMAKE_AUTOUIC ON)
@@ -20,6 +21,7 @@ find_path(CFITSIO_INCLUDE_DIR fitsio.h REQUIRED)
 include_directories(
     ${CMAKE_SOURCE_DIR}
     ${CMAKE_SOURCE_DIR}/thirdparty
+    ${CMAKE_SOURCE_DIR}/thirdparty/PCL/include
     ${CCFITS_INCLUDE_DIR}
     ${CFITSIO_INCLUDE_DIR}
 )

@@ -1,4 +1,5 @@
 #include "MainWindow.h"
+#include "core/PCLBridge.h"
 #include "io/QtImageIO.h"
 #include "io/FitsIO.h"
 #include "algorithms/PixelMathAlgorithm.h"
@@ -128,6 +129,18 @@ void MainWindow::createMenus() {
     m_calibrationAct = new QAction("&Calibration...", this);
     connect(m_calibrationAct, &QAction::triggered, this, &MainWindow::onOpenCalibration);
     m_algoMenu->addAction(m_calibrationAct);
+
+    // Plugins Menu
+    m_pluginsMenu = menuBar()->addMenu("&Plugins");
+
+    m_loadPluginAct = new QAction("&Load PixInsight Module...", this);
+    connect(m_loadPluginAct, &QAction::triggered, this, &MainWindow::onLoadPCLModule);
+    m_pluginsMenu->addAction(m_loadPluginAct);
+
+    m_runDeepSNRAct = new QAction("Run &DeepSNR Denoise...", this);
+    connect(m_runDeepSNRAct, &QAction::triggered, this, &MainWindow::onRunDeepSNR);
+    m_runDeepSNRAct->setEnabled(false);
+    m_pluginsMenu->addAction(m_runDeepSNRAct);
 }
 
 void MainWindow::onOpenImage() {
@@ -631,6 +644,92 @@ void MainWindow::updateStatusReadout(int x, int y, bool isRGB, const std::vector
         text += QString("K: %1").arg(values[0], 0, 'f', 4);
     }
     m_statusReadout->setText(text);
+}
+
+void MainWindow::onLoadPCLModule() {
+    QString filter = "PixInsight Modules (*.so);;All Files (*.*)";
+    QString filepath = QFileDialog::getOpenFileName(this, "Load PixInsight Module", "/opt/PixInsight/bin", filter);
+    if (filepath.isEmpty()) return;
+
+    if (!m_pclBridge) {
+        m_pclBridge = std::make_unique<PCLBridge>();
+    }
+
+    if (m_pclBridge->loadModule(filepath)) {
+        const api_module_description* desc = m_pclBridge->moduleDescription();
+        QString name = QString::fromUtf8(desc->name);
+        QString version = QString::fromUtf8(desc->versionInfo);
+        
+        auto processes = m_pclBridge->registeredProcesses();
+        QString procListStr = "";
+        for (const auto& proc : processes) {
+            if (!procListStr.isEmpty()) procListStr += ", ";
+            procListStr += proc;
+        }
+
+        QMessageBox::information(this, "Load Plugin",
+                                 QString("Successfully loaded PixInsight module:\n%1 (v%2)\n\nRegistered processes:\n%3")
+                                 .arg(name, version, procListStr.isEmpty() ? "None" : procListStr));
+        
+        if (m_pclBridge->isProcessRegistered("DeepSNR")) {
+            m_runDeepSNRAct->setEnabled(true);
+            qDebug() << "[PCL Bridge] DeepSNR process is registered and ready!";
+        } else {
+            m_runDeepSNRAct->setEnabled(false);
+            qDebug() << "[PCL Bridge] Module loaded, but DeepSNR process is not registered.";
+        }
+    } else {
+        QMessageBox::critical(this, "Load Plugin Error", "Failed to load PixInsight module. Check console for details.");
+    }
+}
+
+void MainWindow::onRunDeepSNR() {
+    if (!m_pclBridge) return;
+
+    ImageVariant activeImg = m_workspaceArea->getActiveImage();
+    QString activeName = m_workspaceArea->getActiveImageName();
+    if (activeName.isEmpty()) {
+        QMessageBox::warning(this, "Run DeepSNR", "No active image window to process.");
+        return;
+    }
+
+    std::vector<ImageBufferPtr> buffers;
+    if (std::holds_alternative<GrayscaleImagePtr>(activeImg)) {
+        auto img = std::get<GrayscaleImagePtr>(activeImg);
+        buffers.push_back(img->buffer());
+    } else if (std::holds_alternative<RGBImagePtr>(activeImg)) {
+        auto img = std::get<RGBImagePtr>(activeImg);
+        buffers.push_back(img->r()->buffer());
+        buffers.push_back(img->g()->buffer());
+        buffers.push_back(img->b()->buffer());
+    }
+
+    if (buffers.empty()) {
+        QMessageBox::warning(this, "Run DeepSNR", "No image buffers found in the active window.");
+        return;
+    }
+
+    qDebug() << "[UI] Running DeepSNR on" << activeName;
+    
+    statusBar()->showMessage("Running DeepSNR Denoise...");
+    m_progressBar->setRange(0, 0);
+    m_progressBar->show();
+    qApp->processEvents();
+
+    bool ok = m_pclBridge->executeProcess("DeepSNR", buffers);
+
+    m_progressBar->hide();
+    statusBar()->clearMessage();
+
+    if (ok) {
+        WorkspaceElement elem = std::visit([](auto&& arg) -> WorkspaceElement { return arg; }, activeImg);
+        m_workspaceArea->removeElementView(activeName);
+        m_workspaceArea->addElementView(activeName, elem);
+        
+        QMessageBox::information(this, "Run DeepSNR", "DeepSNR Denoise completed successfully.");
+    } else {
+        QMessageBox::critical(this, "Run DeepSNR Error", "DeepSNR Denoise failed. Check console for details.");
+    }
 }
 
 } // namespace blastro

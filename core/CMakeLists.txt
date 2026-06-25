@@ -4,5 +4,15 @@ add_library(blastro_core
     RGBImage.cpp
     ImageBatch.cpp
     WorkspaceRegistry.cpp
+    PCLBridge.cpp
+    PCLStubs.cpp
 )
-target_include_directories(blastro_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/..)
+target_include_directories(blastro_core PUBLIC 
+    ${CMAKE_CURRENT_SOURCE_DIR}/..
+    ${CMAKE_SOURCE_DIR}/thirdparty/PCL/include
+)
+target_link_libraries(blastro_core 
+    PUBLIC Qt6::Core 
+    PRIVATE ${CMAKE_DL_LIBS}
+)
+

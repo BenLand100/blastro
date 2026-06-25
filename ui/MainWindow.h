@@ -2,6 +2,7 @@
 #include "core/WorkspaceRegistry.h"
 #include "WorkspaceArea.h"
 #include "ImageView.h"
+#include "core/PCLBridge.h"
 #include <QMainWindow>
 #include <QMenuBar>
 #include <QMenu>
@@ -61,6 +62,10 @@ private slots:
     void updateStatusReadout(int x, int y, bool isRGB, const std::vector<float>& values);
     
     void executeAlgorithmSlot(const std::string& name, const std::map<std::string, std::string>& config);
+    
+    // Plugins
+    void onLoadPCLModule();
+    void onRunDeepSNR();
 
 private:
     void createMenus();
@@ -74,9 +79,14 @@ private:
     QProgressBar* m_progressBar = nullptr;
     bool m_algorithmRunning = false;
 
+    // Plugins
+    QAction* m_runDeepSNRAct = nullptr;
+    std::unique_ptr<PCLBridge> m_pclBridge;
+
     // Menus
     QMenu* m_fileMenu;
     QMenu* m_algoMenu;
+    QMenu* m_pluginsMenu = nullptr;
 
     // Actions
     QAction* m_openAct;
@@ -88,6 +98,7 @@ private:
     QAction* m_pixelMathAct;
     QAction* m_stackingAct;
     QAction* m_calibrationAct;
+    QAction* m_loadPluginAct = nullptr;
 };
 
 } // namespace blastro
