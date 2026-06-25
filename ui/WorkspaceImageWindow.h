@@ -1,0 +1,46 @@
+#pragma once
+#include "core/WorkspaceRegistry.h"
+#include "ImageView.h"
+#include "HistogramWidget.h"
+#include <QWidget>
+#include <QPushButton>
+#include <QButtonGroup>
+#include <QLabel>
+
+namespace blastro {
+
+class WorkspaceImageWindow : public QWidget {
+    Q_OBJECT
+public:
+    WorkspaceImageWindow(const QString& name, const WorkspaceElement& element, QWidget* parent = nullptr);
+    ~WorkspaceImageWindow() override = default;
+
+    ImageVariant currentImage() const;
+    ImageView* imageView() const { return m_imageView; }
+
+private slots:
+    void onModeButtonClicked(int id);
+    void onStretchParamsChangedInWidget(double b, double w, double m);
+    void onStretchParamsChangedInView(double b, double w, double m);
+    void onFrameChanged(int index);
+
+private:
+    void updateHistogram();
+
+    QString m_name;
+    WorkspaceElement m_element;
+    
+    ImageView* m_imageView;
+    QWidget* m_viewportWidget; // ImageView or BatchImageWidget
+
+    // UI elements
+    QWidget* m_headerBar;
+    QButtonGroup* m_modeGroup;
+    QPushButton* m_normalBtn;
+    QPushButton* m_stretchBtn;
+    QPushButton* m_autoBtn;
+
+    HistogramWidget* m_histogramWidget;
+};
+
+} // namespace blastro

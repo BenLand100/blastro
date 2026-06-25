@@ -17,6 +17,7 @@ public:
     ImageBatchPtr batch() const { return m_batch; }
     int currentIndex() const { return m_currentIndex; }
     ImageVariant currentImage() const;
+    ImageView* imageView() const { return m_imageView; }
 
 signals:
     void frameChanged(int index);

@@ -1,4 +1,5 @@
 #include "WorkspaceArea.h"
+#include "WorkspaceImageWindow.h"
 #include <QMdiSubWindow>
 #include <QVBoxLayout>
 #include <QMessageBox>
@@ -20,25 +21,7 @@ QMdiSubWindow* WorkspaceArea::addElementView(const QString& name, const Workspac
         return m_subWindows[name];
     }
 
-    QWidget* viewWidget = nullptr;
-
-    if (std::holds_alternative<GrayscaleImagePtr>(element)) {
-        auto gray = std::get<GrayscaleImagePtr>(element);
-        ImageView* iv = new ImageView(this);
-        iv->setImage(gray);
-        viewWidget = iv;
-    } else if (std::holds_alternative<RGBImagePtr>(element)) {
-        auto rgb = std::get<RGBImagePtr>(element);
-        ImageView* iv = new ImageView(this);
-        iv->setImage(rgb);
-        viewWidget = iv;
-    } else if (std::holds_alternative<ImageBatchPtr>(element)) {
-        auto batch = std::get<ImageBatchPtr>(element);
-        BatchImageWidget* bw = new BatchImageWidget(batch, this);
-        viewWidget = bw;
-    }
-
-    if (!viewWidget) return nullptr;
+    WorkspaceImageWindow* viewWidget = new WorkspaceImageWindow(name, element, this);
 
     // Create MDI subwindow
     QMdiSubWindow* sub = addSubWindow(viewWidget);
@@ -84,10 +67,8 @@ ImageVariant WorkspaceArea::getActiveImage() const {
     if (!activeSub) return ImageVariant();
 
     QWidget* widget = activeSub->widget();
-    if (auto iv = qobject_cast<ImageView*>(widget)) {
-        return iv->currentImage();
-    } else if (auto bw = qobject_cast<BatchImageWidget*>(widget)) {
-        return bw->currentImage();
+    if (auto win = qobject_cast<WorkspaceImageWindow*>(widget)) {
+        return win->currentImage();
     }
     
     return ImageVariant();

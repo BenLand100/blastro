@@ -12,14 +12,36 @@ namespace blastro {
 class ImageView : public QGraphicsView {
     Q_OBJECT
 public:
+    enum DisplayMode {
+        Normal,
+        Stretch,
+        Autostretch
+    };
+
     explicit ImageView(QWidget* parent = nullptr);
     ~ImageView() override = default;
 
     void setImage(const ImageVariant& image);
     ImageVariant currentImage() const { return m_currentImage; }
+    
+    // Display modes and stretching
+    DisplayMode displayMode() const { return m_displayMode; }
+    void setDisplayMode(DisplayMode mode);
+    
+    double blackpoint() const { return m_blackpoint; }
+    double whitepoint() const { return m_whitepoint; }
+    double midpoint() const { return m_midpoint; }
+    void setStretchParams(double b, double w, double m);
+    void runAutostretch();
+    
+    std::vector<int> getHistogram(int bins = 256) const;
+
     void zoomIn();
     void zoomOut();
     void resetZoom();
+
+signals:
+    void stretchParamsChanged(double b, double w, double m);
 
 protected:
     void wheelEvent(QWheelEvent* event) override;
@@ -30,11 +52,18 @@ protected:
 private:
     QImage convertToQImage(const ImageVariant& image);
     void updateView();
+    float applyMTF(float v, float B, float W, float M);
 
     QGraphicsScene* m_scene;
     QGraphicsPixmapItem* m_pixmapItem;
     ImageVariant m_currentImage;
     double m_zoomFactor;
+
+    // Stretching state
+    DisplayMode m_displayMode;
+    double m_blackpoint;
+    double m_whitepoint;
+    double m_midpoint;
 
     // Panning state
     bool m_isPanning;
