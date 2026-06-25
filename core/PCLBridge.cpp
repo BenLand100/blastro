@@ -4,6 +4,7 @@
 #include <pcl/api/APIInterface.h>
 #include <dlfcn.h>
 #include <QFile>
+#include <QSettings>
 #include <QFont>
 #include <QFontMetrics>
 #include <QApplication>
@@ -174,6 +175,34 @@ static void initPixelTraitsLUT() {
 // ----------------------------------------------------------------------------
 // Mock API Implementations
 // ----------------------------------------------------------------------------
+
+// ============================================================================
+// Forward Declarations for Settings, Globals, and Parameter Mocks
+// ============================================================================
+static api_bool mock_ReadSettingsString(const char16_type* keyPath, char16_type* value, pcl::size_type maxLen);
+static api_bool mock_WriteSettingsString(const char16_type* keyPath, const char16_type* value);
+static api_bool mock_ReadSettingsFlag(const char16_type* keyPath, api_bool* value);
+static api_bool mock_WriteSettingsFlag(const char16_type* keyPath, api_bool value);
+static api_bool mock_ReadSettingsReal(const char16_type* keyPath, double* value);
+static api_bool mock_WriteSettingsReal(const char16_type* keyPath, double value);
+static api_bool mock_ReadSettingsInteger(const char16_type* keyPath, int32* value);
+static api_bool mock_WriteSettingsInteger(const char16_type* keyPath, int32 value);
+static api_bool mock_GetGlobalString(const char16_type* globalKey, char16_type* value, pcl::size_type maxLen);
+static int32 mock_GetGlobalInteger(const char16_type* globalKey);
+
+static void mock_BeginParameterDefinition(meta_process_handle, meta_parameter_handle, const char* paramId, uint32 type);
+static void mock_SetParameterProcessVersionRange(uint32 minVer, uint32 maxVer);
+static void mock_SetParameterRequired(api_bool required);
+static void mock_SetParameterReadOnly(api_bool readOnly);
+static void mock_SetParameterLockRoutine(void* routine);
+static void mock_SetParameterAllocationRoutine(void* routine);
+static void mock_SetParameterLengthQueryRoutine(void* routine);
+static void mock_SetDefaultBooleanValue(api_bool value);
+static void mock_SetDefaultNumericValue(double value);
+static void mock_SetValidNumericRange(double minVal, double maxVal);
+static void mock_SetPrecision(int32 precision);
+static void mock_SetScientificNotation(api_bool scientific);
+static void mock_EndParameterDefinition();
 
 static const api_pixtraits_lut* mock_GetPixelTraitsLUT(uint32 version) {
     initPixelTraitsLUT();
@@ -1407,6 +1436,38 @@ static void mock_SetControlFixedSize(control_handle h, int32 w, int32 h_size) {
 static void mock_SetControlBackgroundColor(control_handle h, uint32 color) {
     QWidget* widget = reinterpret_cast<QWidget*>(h);
     qDebug() << "[PCL Bridge] SetControlBackgroundColor:" << widget << "color =" << color;
+    if (widget) {
+        QPalette pal = widget->palette();
+        // Pack color is typically ARGB or RGBA. Let's assume standard QColor construction from packed QRgb
+        pal.setColor(QPalette::Window, QColor::fromRgba(color));
+        widget->setAutoFillBackground(true);
+        widget->setPalette(pal);
+    }
+}
+
+static void mock_SetControlVisible(control_handle h, api_bool visible) {
+    QWidget* widget = reinterpret_cast<QWidget*>(h);
+    qDebug() << "[PCL Bridge] SetControlVisible:" << widget << "visible =" << (bool)visible;
+    if (widget) {
+        widget->setVisible(visible);
+    }
+}
+
+static void mock_SetControlEnabled(control_handle h, api_bool enabled) {
+    QWidget* widget = reinterpret_cast<QWidget*>(h);
+    qDebug() << "[PCL Bridge] SetControlEnabled:" << widget << "enabled =" << (bool)enabled;
+    if (widget) {
+        widget->setEnabled(enabled);
+    }
+}
+
+static void mock_EnsureControlLayoutUpdated(control_handle h) {
+    QWidget* widget = reinterpret_cast<QWidget*>(h);
+    qDebug() << "[PCL Bridge] EnsureControlLayoutUpdated:" << widget;
+    if (widget) {
+        widget->adjustSize();
+        qApp->processEvents();
+    }
 }
 
 static void mock_SetChildControlToFocus(control_handle h, control_handle child) {
@@ -1692,6 +1753,9 @@ void PCLBridge::setupOverrides() {
     overridePCLStub("Control/SetWindowToolTip", reinterpret_cast<void*>(mock_SetWindowToolTip));
     overridePCLStub("Control/GetControlPosition", reinterpret_cast<void*>(mock_GetControlPosition));
     overridePCLStub("Control/SetControlPosition", reinterpret_cast<void*>(mock_SetControlPosition));
+    overridePCLStub("Control/SetControlVisible", reinterpret_cast<void*>(mock_SetControlVisible));
+    overridePCLStub("Control/SetControlEnabled", reinterpret_cast<void*>(mock_SetControlEnabled));
+    overridePCLStub("Control/EnsureControlLayoutUpdated", reinterpret_cast<void*>(mock_EnsureControlLayoutUpdated));
     overridePCLStub("Font/GetStringPixelWidth", reinterpret_cast<void*>(mock_GetStringPixelWidth));
     overridePCLStub("Control/SetChildControlToFocus", reinterpret_cast<void*>(mock_SetChildControlToFocus));
     overridePCLStub("Control/SetChildCreateEventRoutine", reinterpret_cast<void*>(mock_SetEventRoutine));
@@ -1833,6 +1897,33 @@ void PCLBridge::setupOverrides() {
     overridePCLStub("View/ComputeViewProperty", reinterpret_cast<void*>(mock_ComputeViewProperty));
     overridePCLStub("View/GetViewPropertyValue", reinterpret_cast<void*>(mock_GetViewPropertyValue));
     overridePCLStub("View/SetViewPropertyValue", reinterpret_cast<void*>(mock_SetViewPropertyValue));
+
+    // Global Settings & Preferences
+    overridePCLStub("Global/ReadSettingsString", reinterpret_cast<void*>(mock_ReadSettingsString));
+    overridePCLStub("Global/WriteSettingsString", reinterpret_cast<void*>(mock_WriteSettingsString));
+    overridePCLStub("Global/ReadSettingsFlag", reinterpret_cast<void*>(mock_ReadSettingsFlag));
+    overridePCLStub("Global/WriteSettingsFlag", reinterpret_cast<void*>(mock_WriteSettingsFlag));
+    overridePCLStub("Global/ReadSettingsReal", reinterpret_cast<void*>(mock_ReadSettingsReal));
+    overridePCLStub("Global/WriteSettingsReal", reinterpret_cast<void*>(mock_WriteSettingsReal));
+    overridePCLStub("Global/ReadSettingsInteger", reinterpret_cast<void*>(mock_ReadSettingsInteger));
+    overridePCLStub("Global/WriteSettingsInteger", reinterpret_cast<void*>(mock_WriteSettingsInteger));
+    overridePCLStub("Global/GetGlobalString", reinterpret_cast<void*>(mock_GetGlobalString));
+    overridePCLStub("Global/GetGlobalInteger", reinterpret_cast<void*>(mock_GetGlobalInteger));
+
+    // Process & Parameter definitions
+    overridePCLStub("ProcessDefinition/BeginParameterDefinition", reinterpret_cast<void*>(mock_BeginParameterDefinition));
+    overridePCLStub("ProcessDefinition/SetParameterProcessVersionRange", reinterpret_cast<void*>(mock_SetParameterProcessVersionRange));
+    overridePCLStub("ProcessDefinition/SetParameterRequired", reinterpret_cast<void*>(mock_SetParameterRequired));
+    overridePCLStub("ProcessDefinition/SetParameterReadOnly", reinterpret_cast<void*>(mock_SetParameterReadOnly));
+    overridePCLStub("ProcessDefinition/SetParameterLockRoutine", reinterpret_cast<void*>(mock_SetParameterLockRoutine));
+    overridePCLStub("ProcessDefinition/SetParameterAllocationRoutine", reinterpret_cast<void*>(mock_SetParameterAllocationRoutine));
+    overridePCLStub("ProcessDefinition/SetParameterLengthQueryRoutine", reinterpret_cast<void*>(mock_SetParameterLengthQueryRoutine));
+    overridePCLStub("ProcessDefinition/SetDefaultBooleanValue", reinterpret_cast<void*>(mock_SetDefaultBooleanValue));
+    overridePCLStub("ProcessDefinition/SetDefaultNumericValue", reinterpret_cast<void*>(mock_SetDefaultNumericValue));
+    overridePCLStub("ProcessDefinition/SetValidNumericRange", reinterpret_cast<void*>(mock_SetValidNumericRange));
+    overridePCLStub("ProcessDefinition/SetPrecision", reinterpret_cast<void*>(mock_SetPrecision));
+    overridePCLStub("ProcessDefinition/SetScientificNotation", reinterpret_cast<void*>(mock_SetScientificNotation));
+    overridePCLStub("ProcessDefinition/EndParameterDefinition", reinterpret_cast<void*>(mock_EndParameterDefinition));
 }
 
 bool PCLBridge::loadModule(const QString& path) {
@@ -2284,6 +2375,172 @@ bool PCLBridge::launchInterface(const QString& processId, QWidget* parentWindow)
     }
 
     return true;
+}
+
+#include <QSettings>
+
+static ::QSettings& getBLastroSettings() {
+    static ::QSettings settings("BLastro", "BLastro");
+    return settings;
+}
+
+static QString getSettingsKey(const char16_type* keyPath) {
+    if (!keyPath) return QString();
+    return QString::fromUtf16(reinterpret_cast<const char16_t*>(keyPath));
+}
+
+static api_bool mock_ReadSettingsString(const char16_type* keyPath, char16_type* value, pcl::size_type maxLen) {
+    QString key = getSettingsKey(keyPath);
+    QVariant val = getBLastroSettings().value(key);
+    qDebug() << "[PCL Settings] ReadSettingsString:" << key << "->" << val;
+    if (val.isValid() && value && maxLen > 0) {
+        QString str = val.toString();
+        int len = qMin(static_cast<int>(maxLen) - 1, str.length());
+        std::memcpy(value, str.utf16(), len * sizeof(char16_type));
+        value[len] = 0;
+        return true;
+    }
+    return false;
+}
+
+static api_bool mock_WriteSettingsString(const char16_type* keyPath, const char16_type* value) {
+    QString key = getSettingsKey(keyPath);
+    QString val = value ? QString::fromUtf16(reinterpret_cast<const char16_t*>(value)) : QString();
+    qDebug() << "[PCL Settings] WriteSettingsString:" << key << "<-" << val;
+    getBLastroSettings().setValue(key, val);
+    return true;
+}
+
+static api_bool mock_ReadSettingsFlag(const char16_type* keyPath, api_bool* value) {
+    QString key = getSettingsKey(keyPath);
+    QVariant val = getBLastroSettings().value(key);
+    qDebug() << "[PCL Settings] ReadSettingsFlag:" << key << "->" << val;
+    if (val.isValid() && value) {
+        *value = val.toBool();
+        return true;
+    }
+    return false;
+}
+
+static api_bool mock_WriteSettingsFlag(const char16_type* keyPath, api_bool value) {
+    QString key = getSettingsKey(keyPath);
+    qDebug() << "[PCL Settings] WriteSettingsFlag:" << key << "<-" << (bool)value;
+    getBLastroSettings().setValue(key, (bool)value);
+    return true;
+}
+
+static api_bool mock_ReadSettingsReal(const char16_type* keyPath, double* value) {
+    QString key = getSettingsKey(keyPath);
+    QVariant val = getBLastroSettings().value(key);
+    qDebug() << "[PCL Settings] ReadSettingsReal:" << key << "->" << val;
+    if (val.isValid() && value) {
+        *value = val.toDouble();
+        return true;
+    }
+    return false;
+}
+
+static api_bool mock_WriteSettingsReal(const char16_type* keyPath, double value) {
+    QString key = getSettingsKey(keyPath);
+    qDebug() << "[PCL Settings] WriteSettingsReal:" << key << "<-" << value;
+    getBLastroSettings().setValue(key, value);
+    return true;
+}
+
+static api_bool mock_ReadSettingsInteger(const char16_type* keyPath, int32* value) {
+    QString key = getSettingsKey(keyPath);
+    QVariant val = getBLastroSettings().value(key);
+    qDebug() << "[PCL Settings] ReadSettingsInteger:" << key << "->" << val;
+    if (val.isValid() && value) {
+        *value = val.toInt();
+        return true;
+    }
+    return false;
+}
+
+static api_bool mock_WriteSettingsInteger(const char16_type* keyPath, int32 value) {
+    QString key = getSettingsKey(keyPath);
+    qDebug() << "[PCL Settings] WriteSettingsInteger:" << key << "<-" << value;
+    getBLastroSettings().setValue(key, value);
+    return true;
+}
+
+static api_bool mock_GetGlobalString(const char16_type* globalKey, char16_type* value, pcl::size_type maxLen) {
+    QString key = getSettingsKey(globalKey);
+    qDebug() << "[PCL Global] GetGlobalString:" << key;
+    // Provide sensible default strings if requested
+    QString result = "";
+    if (key.contains("License", Qt::CaseInsensitive)) {
+        result = "BLastro-Community-License";
+    }
+    if (!result.isEmpty() && value && maxLen > 0) {
+        int len = qMin(static_cast<int>(maxLen) - 1, result.length());
+        std::memcpy(value, result.utf16(), len * sizeof(char16_type));
+        value[len] = 0;
+        return true;
+    }
+    return false;
+}
+
+static int32 mock_GetGlobalInteger(const char16_type* globalKey) {
+    QString key = getSettingsKey(globalKey);
+    qDebug() << "[PCL Global] GetGlobalInteger:" << key;
+    return 0;
+}
+
+// ============================================================================
+// Process / Parameter Metadata Definition Mocks
+// ============================================================================
+static void mock_BeginParameterDefinition(meta_process_handle, meta_parameter_handle, const char* paramId, uint32 type) {
+    qDebug() << "[PCL ProcessDef] BeginParameterDefinition:" << paramId << "type =" << type;
+}
+
+static void mock_SetParameterProcessVersionRange(uint32 minVer, uint32 maxVer) {
+    qDebug() << "[PCL ProcessDef] SetParameterProcessVersionRange:" << minVer << "to" << maxVer;
+}
+
+static void mock_SetParameterRequired(api_bool required) {
+    qDebug() << "[PCL ProcessDef] SetParameterRequired:" << (bool)required;
+}
+
+static void mock_SetParameterReadOnly(api_bool readOnly) {
+    qDebug() << "[PCL ProcessDef] SetParameterReadOnly:" << (bool)readOnly;
+}
+
+static void mock_SetParameterLockRoutine(void* routine) {
+    qDebug() << "[PCL ProcessDef] SetParameterLockRoutine:" << routine;
+}
+
+static void mock_SetParameterAllocationRoutine(void* routine) {
+    qDebug() << "[PCL ProcessDef] SetParameterAllocationRoutine:" << routine;
+}
+
+static void mock_SetParameterLengthQueryRoutine(void* routine) {
+    qDebug() << "[PCL ProcessDef] SetParameterLengthQueryRoutine:" << routine;
+}
+
+static void mock_SetDefaultBooleanValue(api_bool value) {
+    qDebug() << "[PCL ProcessDef] SetDefaultBooleanValue:" << (bool)value;
+}
+
+static void mock_SetDefaultNumericValue(double value) {
+    qDebug() << "[PCL ProcessDef] SetDefaultNumericValue:" << value;
+}
+
+static void mock_SetValidNumericRange(double minVal, double maxVal) {
+    qDebug() << "[PCL ProcessDef] SetValidNumericRange:" << minVal << "to" << maxVal;
+}
+
+static void mock_SetPrecision(int32 precision) {
+    qDebug() << "[PCL ProcessDef] SetPrecision:" << precision;
+}
+
+static void mock_SetScientificNotation(api_bool scientific) {
+    qDebug() << "[PCL ProcessDef] SetScientificNotation:" << (bool)scientific;
+}
+
+static void mock_EndParameterDefinition() {
+    qDebug() << "[PCL ProcessDef] EndParameterDefinition";
 }
 
 } // namespace blastro
