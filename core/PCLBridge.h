@@ -23,7 +23,7 @@ struct PCLImageMock {
     // Pointers that we pass to PCL (array of pointers to channel data)
     std::vector<void*> channelDataPointers;
 
-    // If we wrap existing Blastro image buffers (direct access)
+    // If we wrap existing BLastro image buffers (direct access)
     std::vector<ImageBufferPtr> wrappedBuffers;
 
     // If PCL creates the image, we allocate and own the channels here
@@ -74,10 +74,10 @@ public:
     // Get the loaded module description metadata
     const api_module_description* moduleDescription() const { return m_description; }
 
-    // Execute a registered process by ID on a set of Blastro image buffers
+    // Execute a registered process by ID on a set of BLastro image buffers
     bool executeProcess(const QString& processId, std::vector<ImageBufferPtr>& buffers);
 
-    // Execute a registered process instance by ID on a set of Blastro image buffers
+    // Execute a registered process instance by ID on a set of BLastro image buffers
     bool executeProcessInstance(const QString& processId, void* hProcess, std::vector<ImageBufferPtr>& buffers);
 
     // Launch a process interface in a host-provided parent widget/dialog

@@ -2008,7 +2008,7 @@ bool PCLBridge::executeProcess(const QString& processId, std::vector<ImageBuffer
     g_activeImage = &imgMock;
 
     PCLViewMock viewMock;
-    viewMock.id = "BlastroActiveView";
+    viewMock.id = "BLastroActiveView";
     viewMock.hImage = &imgMock;
 
     qDebug() << "[PCL Bridge] Executing process on image:" << imgMock.width << "x" << imgMock.height << "with" << imgMock.numChannels << "channels";
@@ -2088,7 +2088,7 @@ bool PCLBridge::executeProcessInstance(const QString& processId, void* hProcess,
     g_activeImage = &imgMock;
 
     PCLViewMock viewMock;
-    viewMock.id = "BlastroActiveView";
+    viewMock.id = "BLastroActiveView";
     viewMock.hImage = &imgMock;
 
     qDebug() << "[PCL Bridge] Executing process instance on image:" << imgMock.width << "x" << imgMock.height << "with" << imgMock.numChannels << "channels";

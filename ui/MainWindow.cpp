@@ -29,7 +29,7 @@ MainWindow::MainWindow(QWidget* parent)
       m_imageCounter(1) {
       
     setCentralWidget(m_workspaceArea);
-    setWindowTitle("Blastro - Astronomical Image Processing");
+    setWindowTitle("BLastro - Astronomical Image Processing");
     resize(1024, 768);
 
     createMenus();
