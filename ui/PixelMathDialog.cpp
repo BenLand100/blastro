@@ -1,0 +1,213 @@
+#include "PixelMathDialog.h"
+#include <QVBoxLayout>
+#include <QHBoxLayout>
+#include <QFormLayout>
+#include <QGroupBox>
+#include <QPushButton>
+#include <QLabel>
+#include <QMessageBox>
+
+namespace blastro {
+
+PixelMathDialog::PixelMathDialog(WorkspaceRegistry& workspace, QWidget* parent)
+    : AlgorithmDialog(workspace, parent),
+      m_exprR(new QLineEdit(this)),
+      m_exprG(new QLineEdit(this)),
+      m_exprB(new QLineEdit(this)),
+      m_exprK(new QLineEdit(this)),
+      m_useSingleExpr(new QCheckBox("Use a single expression for RGB channels", this)),
+      m_rgbMode(new QRadioButton("RGB Color Space", this)),
+      m_grayMode(new QRadioButton("Grayscale Space", this)),
+      m_outputName(new QLineEdit("PixelMath_Output", this)),
+      m_targetImageCombo(new QComboBox(this)),
+      m_createNewImage(new QRadioButton("Create new image:", this)),
+      m_replaceTargetImage(new QRadioButton("Replace target image:", this)) {
+
+    setWindowTitle("Pixel Math");
+    resize(500, 400);
+
+    QVBoxLayout* mainLayout = new QVBoxLayout(this);
+
+    // 1. Image References Info Box
+    QGroupBox* infoBox = new QGroupBox("Available Images (use as variables)", this);
+    infoBox->setStyleSheet("QGroupBox { font-weight: bold; border: 1px solid #555; margin-top: 10px; padding: 5px; } QGroupBox::title { subcontrol-origin: margin; left: 10px; }");
+    QVBoxLayout* infoLayout = new QVBoxLayout(infoBox);
+    
+    QString infoText = "Active Workspace Variables:\n";
+    auto names = m_workspace.elementNames();
+    if (names.empty()) {
+        infoText += "  (No images open. Math will output using default 800x600 dimensions)";
+    } else {
+        for (const auto& name : names) {
+            infoText += QString("  - %1\n").arg(QString::fromStdString(name));
+        }
+        infoText += "\nNote: For RGB images, you can also use suffix _r, _g, _b (e.g. Image1_r)";
+    }
+    QLabel* infoLabel = new QLabel(infoText, this);
+    infoLabel->setStyleSheet("font-family: monospace; color: #88ff88;");
+    infoLayout->addWidget(infoLabel);
+    mainLayout->addWidget(infoBox);
+
+    // 2. Color Space / Expression type
+    QGroupBox* modeBox = new QGroupBox("Output Color Space", this);
+    modeBox->setStyleSheet("QGroupBox { font-weight: bold; border: 1px solid #555; margin-top: 10px; padding: 5px; } QGroupBox::title { subcontrol-origin: margin; left: 10px; }");
+    QHBoxLayout* modeLayout = new QHBoxLayout(modeBox);
+    m_rgbMode->setChecked(true);
+    m_grayMode->setChecked(false);
+    modeLayout->addWidget(m_rgbMode);
+    modeLayout->addWidget(m_grayMode);
+    mainLayout->addWidget(modeBox);
+
+    // 3. Expressions input
+    QGroupBox* exprBox = new QGroupBox("RGB/K Expressions", this);
+    exprBox->setStyleSheet("QGroupBox { font-weight: bold; border: 1px solid #555; margin-top: 10px; padding: 5px; } QGroupBox::title { subcontrol-origin: margin; left: 10px; }");
+    QFormLayout* formLayout = new QFormLayout(exprBox);
+    
+    m_exprR->setPlaceholderText("Expression for Red channel");
+    m_exprG->setPlaceholderText("Expression for Green channel");
+    m_exprB->setPlaceholderText("Expression for Blue channel");
+    m_exprK->setPlaceholderText("Expression for Grayscale (K) channel");
+    m_exprK->setEnabled(false); // Default is RGB mode
+    
+    formLayout->addRow("R / Gray:", m_exprR);
+    formLayout->addRow("G:", m_exprG);
+    formLayout->addRow("B:", m_exprB);
+    formLayout->addRow("K (Gray):", m_exprK);
+    formLayout->addRow("", m_useSingleExpr);
+    
+    mainLayout->addWidget(exprBox);
+
+    // 4. Destination
+    QGroupBox* destBox = new QGroupBox("Destination", this);
+    destBox->setStyleSheet("QGroupBox { font-weight: bold; border: 1px solid #555; margin-top: 10px; padding: 5px; } QGroupBox::title { subcontrol-origin: margin; left: 10px; }");
+    QVBoxLayout* destLayout = new QVBoxLayout(destBox);
+    
+    QHBoxLayout* createLayout = new QHBoxLayout();
+    m_createNewImage->setChecked(true);
+    createLayout->addWidget(m_createNewImage);
+    createLayout->addWidget(m_outputName, 1);
+    destLayout->addLayout(createLayout);
+
+    QHBoxLayout* replaceLayout = new QHBoxLayout();
+    m_replaceTargetImage->setChecked(false);
+    replaceLayout->addWidget(m_replaceTargetImage);
+    
+    for (const auto& name : names) {
+        m_targetImageCombo->addItem(QString::fromStdString(name));
+    }
+    m_targetImageCombo->setEnabled(false);
+    replaceLayout->addWidget(m_targetImageCombo, 1);
+    destLayout->addLayout(replaceLayout);
+    
+    mainLayout->addWidget(destBox);
+
+    // 5. Buttons
+    QHBoxLayout* btnLayout = new QHBoxLayout();
+    QPushButton* runBtn = new QPushButton("Run", this);
+    QPushButton* cancelBtn = new QPushButton("Cancel", this);
+    cancelBtn->setStyleSheet("background-color: #555;");
+    
+    btnLayout->addStretch();
+    btnLayout->addWidget(runBtn);
+    btnLayout->addWidget(cancelBtn);
+    mainLayout->addLayout(btnLayout);
+
+    // Connections
+    connect(m_useSingleExpr, &QCheckBox::toggled, this, &PixelMathDialog::onUseSingleExpressionChanged);
+    connect(m_rgbMode, &QRadioButton::toggled, this, [this](bool checked) {
+        m_exprR->setEnabled(checked);
+        m_exprG->setEnabled(checked && !m_useSingleExpr->isChecked());
+        m_exprB->setEnabled(checked && !m_useSingleExpr->isChecked());
+        m_useSingleExpr->setEnabled(checked);
+        m_exprK->setEnabled(!checked);
+    });
+    connect(m_grayMode, &QRadioButton::toggled, this, [this](bool checked) {
+        m_exprK->setEnabled(checked);
+        m_exprR->setEnabled(!checked);
+        m_exprG->setEnabled(!checked);
+        m_exprB->setEnabled(!checked);
+        m_useSingleExpr->setEnabled(!checked);
+    });
+    connect(m_createNewImage, &QRadioButton::toggled, this, [this](bool checked) {
+        m_outputName->setEnabled(checked);
+        m_targetImageCombo->setEnabled(!checked);
+    });
+    connect(m_replaceTargetImage, &QRadioButton::toggled, this, [this](bool checked) {
+        m_outputName->setEnabled(!checked);
+        m_targetImageCombo->setEnabled(checked);
+    });
+
+    connect(runBtn, &QPushButton::clicked, this, &PixelMathDialog::onRunClicked);
+    connect(cancelBtn, &QPushButton::clicked, this, &QDialog::reject);
+}
+
+void PixelMathDialog::onUseSingleExpressionChanged(bool checked) {
+    if (m_rgbMode->isChecked()) {
+        m_exprG->setEnabled(!checked);
+        m_exprB->setEnabled(!checked);
+    }
+}
+
+std::map<std::string, std::string> PixelMathDialog::getConfig() const {
+    std::map<std::string, std::string> config;
+
+    bool isRGB = m_rgbMode->isChecked();
+    config["color_space"] = isRGB ? "RGB" : "Grayscale";
+
+    if (isRGB) {
+        if (m_useSingleExpr->isChecked()) {
+            std::string expr = m_exprR->text().toStdString();
+            config["expr_r"] = expr;
+            config["expr_g"] = expr;
+            config["expr_b"] = expr;
+        } else {
+            config["expr_r"] = m_exprR->text().toStdString();
+            config["expr_g"] = m_exprG->text().toStdString();
+            config["expr_b"] = m_exprB->text().toStdString();
+        }
+    } else {
+        config["expr_k"] = m_exprK->text().toStdString();
+    }
+
+    if (m_createNewImage->isChecked()) {
+        config["output_name"] = m_outputName->text().toStdString();
+    } else {
+        config["output_name"] = m_targetImageCombo->currentText().toStdString();
+    }
+
+    return config;
+}
+
+void PixelMathDialog::onRunClicked() {
+    // Validate inputs
+    if (m_rgbMode->isChecked()) {
+        if (m_exprR->text().isEmpty()) {
+            QMessageBox::warning(this, "Validation Error", "R / Gray expression cannot be empty in RGB mode");
+            return;
+        }
+        if (!m_useSingleExpr->isChecked() && (m_exprG->text().isEmpty() || m_exprB->text().isEmpty())) {
+            QMessageBox::warning(this, "Validation Error", "All channel expressions must be filled, or check 'Use single expression'");
+            return;
+        }
+    } else {
+        if (m_exprK->text().isEmpty()) {
+            QMessageBox::warning(this, "Validation Error", "Grayscale expression (K) cannot be empty");
+            return;
+        }
+    }
+
+    if (m_createNewImage->isChecked() && m_outputName->text().trimmed().isEmpty()) {
+        QMessageBox::warning(this, "Validation Error", "Output image name cannot be empty");
+        return;
+    }
+
+    if (m_replaceTargetImage->isChecked() && m_targetImageCombo->currentText().isEmpty()) {
+        QMessageBox::warning(this, "Validation Error", "No target image selected for replacement");
+        return;
+    }
+
+    emit algorithmExecuted("PixelMath", getConfig());
+    accept();
+}
+
+} // namespace blastro
