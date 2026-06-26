@@ -43,10 +43,18 @@ struct PCLImageMock {
     }
 };
 
+struct PCLWindowMock;
+
 // Mock structure representing a PixInsight view
 struct PCLViewMock {
     QString id;
     PCLImageMock* hImage = nullptr;
+    PCLWindowMock* parentWindow = nullptr;
+};
+
+// Mock structure representing a PixInsight window
+struct PCLWindowMock {
+    PCLViewMock* mainView = nullptr;
 };
 
 // Information about a process registered by the PCL module

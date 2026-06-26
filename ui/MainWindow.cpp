@@ -935,8 +935,8 @@ void MainWindow::testProcessOnImage(const QString& pluginPath, const QString& im
                         .arg(mean).arg(minVal).arg(maxVal);
         }
         
-        // Save the resulting image to ./denoised_output.fit
-        QString outPath = "./denoised_output.fit";
+        // Save the resulting image to ./test_output.fit
+        QString outPath = "./test_output.fit";
         qDebug() << "[MainWindow] Saving denoised image to:" << outPath;
         FitsIO writer;
         ImageVariant imgVar;

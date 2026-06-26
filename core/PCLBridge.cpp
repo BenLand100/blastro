@@ -475,6 +475,27 @@ static image_handle mock_GetViewImage(view_handle hView) {
     return view->hImage;
 }
 
+static window_handle mock_GetViewParentWindow(const_view_handle hView) {
+    qDebug() << "[PCL Bridge] mock_GetViewParentWindow called: view =" << hView;
+    if (!hView) return nullptr;
+    auto* view = reinterpret_cast<const PCLViewMock*>(hView);
+    return const_cast<PCLWindowMock*>(view->parentWindow);
+}
+
+static view_handle mock_GetImageWindowMainView(const_window_handle hWindow) {
+    qDebug() << "[PCL Bridge] mock_GetImageWindowMainView called: window =" << hWindow;
+    if (!hWindow) return nullptr;
+    auto* window = reinterpret_cast<const PCLWindowMock*>(hWindow);
+    return window->mainView;
+}
+
+static view_handle mock_GetImageWindowCurrentView(const_window_handle hWindow) {
+    qDebug() << "[PCL Bridge] mock_GetImageWindowCurrentView called: window =" << hWindow;
+    if (!hWindow) return nullptr;
+    auto* window = reinterpret_cast<const PCLWindowMock*>(hWindow);
+    return window->mainView;
+}
+
 static api_bool mock_GetViewScreenTransferFunctions(const_view_handle hView, double* m, double* c0, double* c1, double* r0, double* r1) {
     qDebug() << "[PCL Bridge] mock_GetViewScreenTransferFunctions called: view =" << hView;
 
@@ -2017,6 +2038,9 @@ void PCLBridge::setupOverrides() {
     overridePCLStub("View/ComputeViewProperty", reinterpret_cast<void*>(mock_ComputeViewProperty));
     overridePCLStub("View/GetViewPropertyValue", reinterpret_cast<void*>(mock_GetViewPropertyValue));
     overridePCLStub("View/SetViewPropertyValue", reinterpret_cast<void*>(mock_SetViewPropertyValue));
+    overridePCLStub("View/GetViewParentWindow", reinterpret_cast<void*>(mock_GetViewParentWindow));
+    overridePCLStub("ImageWindow/GetImageWindowMainView", reinterpret_cast<void*>(mock_GetImageWindowMainView));
+    overridePCLStub("ImageWindow/GetImageWindowCurrentView", reinterpret_cast<void*>(mock_GetImageWindowCurrentView));
 
     // Global Settings & Preferences
     overridePCLStub("Global/ReadSettingsString", reinterpret_cast<void*>(mock_ReadSettingsString));
@@ -2309,6 +2333,10 @@ bool PCLBridge::executeProcess(const QString& processId, std::vector<ImageBuffer
     viewMock.id = "BLastroActiveView";
     viewMock.hImage = &imgMock;
 
+    PCLWindowMock windowMock;
+    windowMock.mainView = &viewMock;
+    viewMock.parentWindow = &windowMock;
+
     qDebug() << "[PCL Bridge] Executing process on image:" << imgMock.width << "x" << imgMock.height << "with" << imgMock.numChannels << "channels";
     bool success = false;
     if (info.executeFn) {
@@ -2388,6 +2416,10 @@ bool PCLBridge::executeProcessInstance(const QString& processId, void* hProcess,
     PCLViewMock viewMock;
     viewMock.id = "BLastroActiveView";
     viewMock.hImage = &imgMock;
+
+    PCLWindowMock windowMock;
+    windowMock.mainView = &viewMock;
+    viewMock.parentWindow = &windowMock;
 
     qDebug() << "[PCL Bridge] Executing process instance on image:" << imgMock.width << "x" << imgMock.height << "with" << imgMock.numChannels << "channels";
     bool success = false;

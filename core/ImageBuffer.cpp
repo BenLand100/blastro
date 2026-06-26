@@ -11,7 +11,7 @@ ImageBuffer::ImageBuffer(int width, int height)
 }
 
 ImageBuffer::ImageBuffer(int width, int height, const std::vector<float>& data)
-    : m_width(width), m_height(height), m_data(data) {
+    : m_width(width), m_height(height), m_data(data.begin(), data.end()) {
     if (width <= 0 || height <= 0) {
         throw std::invalid_argument("Image dimensions must be positive");
     }

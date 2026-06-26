@@ -1,8 +1,46 @@
 #pragma once
 #include <vector>
 #include <memory>
+#include <cstdlib>
+#include <new>
 
 namespace blastro {
+
+template <typename T, size_t Alignment>
+struct AlignedAllocator {
+    using value_type = T;
+    using pointer = T*;
+    using const_pointer = const T*;
+    using reference = T&;
+    using const_reference = const T&;
+    using size_type = std::size_t;
+    using difference_type = std::ptrdiff_t;
+
+    template <typename U>
+    struct rebind {
+        using other = AlignedAllocator<U, Alignment>;
+    };
+
+    AlignedAllocator() noexcept = default;
+    template <typename U>
+    AlignedAllocator(const AlignedAllocator<U, Alignment>&) noexcept {}
+
+    T* allocate(size_t n) {
+        if (n == 0) return nullptr;
+        void* ptr = nullptr;
+        if (posix_memalign(&ptr, Alignment, n * sizeof(T)) != 0) {
+            throw std::bad_alloc();
+        }
+        return reinterpret_cast<T*>(ptr);
+    }
+
+    void deallocate(T* p, size_t) noexcept {
+        free(p);
+    }
+
+    bool operator==(const AlignedAllocator&) const noexcept { return true; }
+    bool operator!=(const AlignedAllocator&) const noexcept { return false; }
+};
 
 class ImageBuffer {
 public:
@@ -18,14 +56,15 @@ public:
     
     const float* data() const { return m_data.data(); }
     float* data() { return m_data.data(); }
-    const std::vector<float>& rawData() const { return m_data; }
+    const std::vector<float, AlignedAllocator<float, 32>>& rawData() const { return m_data; }
 
 private:
     int m_width;
     int m_height;
-    std::vector<float> m_data;
+    std::vector<float, AlignedAllocator<float, 32>> m_data;
 };
 
 using ImageBufferPtr = std::shared_ptr<ImageBuffer>;
 
 } // namespace blastro
+
