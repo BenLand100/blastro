@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <thread>
 #include <chrono>
+#include <optional>
 #include <QWidget>
 #include <QDialog>
 #include <QFrame>
@@ -33,6 +34,53 @@
 #include <QLineEdit>
 #include <QFileDialog>
 #include <QTimer>
+
+namespace blastro {
+
+static bool g_verbosePCL = false;
+
+class PCLDebug {
+public:
+    PCLDebug(bool enabled) {
+        if (enabled) {
+            m_dbg.emplace(qDebug());
+        }
+    }
+    
+    PCLDebug& operator()() {
+        return *this;
+    }
+    
+    template <typename T>
+    PCLDebug& operator<<(const T& t) {
+        if (m_dbg) {
+            *m_dbg << t;
+        }
+        return *this;
+    }
+    
+    PCLDebug& operator<<(QDebug& (*f)(QDebug&)) {
+        if (m_dbg) {
+            *m_dbg << f;
+        }
+        return *this;
+    }
+    
+    PCLDebug& noquote() {
+        if (m_dbg) {
+            m_dbg->noquote();
+        }
+        return *this;
+    }
+
+private:
+    std::optional<QDebug> m_dbg;
+};
+
+} // namespace blastro
+
+#undef qDebug
+#define qDebug ::blastro::PCLDebug(::blastro::g_verbosePCL)
 
 namespace blastro {
 
@@ -198,6 +246,12 @@ static api_bool mock_ReadSettingsUnsignedInteger(api_handle hModule, uint32* val
 static api_bool mock_WriteSettingsUnsignedInteger(api_handle hModule, uint32 value, const char* key, api_bool global);
 static api_bool mock_GetGlobalString(const char* globalKey, char16_type* value, pcl::size_type* maxLen);
 static api_bool mock_GetGlobalInteger(const char* globalKey, void* value, api_bool isSigned);
+static api_bool mock_GetGlobalFlag(const char* globalKey, api_bool* value);
+static api_bool mock_GetGlobalReal(const char* globalKey, double* value);
+static uint32 mock_GetProcessStatus();
+static void mock_SetRealTimePreviewGenerationStartNotificationRoutine(pcl::global_notification_routine f);
+static void mock_SetRealTimePreviewGenerationFinishNotificationRoutine(pcl::global_notification_routine f);
+static void mock_ExitInterfaceDefinitionContext();
 static void mock_SetInterfaceEditPreferencesRoutine(pcl::interface_control_routine f);
 static void mock_SetInterfaceProcessImportRoutine(pcl::interface_process_import_routine f);
 static void mock_SetGlobalPreferencesUpdatedNotificationRoutine(pcl::global_notification_routine f);
@@ -288,7 +342,7 @@ static api_bool mock_ValidateConsole(const_console_handle) {
 static api_bool mock_WriteConsole(console_handle, const char16_type* text, api_bool appendNewline) {
     QString str = QString::fromUtf16(reinterpret_cast<const char16_t*>(text));
     if (appendNewline) {
-        qDebug().noquote() << "[PCL Console]" << str;
+        qInfo().noquote() << "[PCL Console]" << str;
     } else {
         std::cout << str.toStdString();
         std::flush(std::cout);
@@ -658,19 +712,32 @@ static api_bool mock_DetachFromImage(image_handle hImage) {
     return true;
 }
 
+static bool g_abortEnabled = false;
+static bool g_abortRequested = false;
+
 static api_bool mock_Abort() {
     qDebug() << "[PCL Bridge] mock_Abort called";
+    g_abortRequested = true;
     return true;
 }
 
 static api_bool mock_DisableAbort() {
     qDebug() << "[PCL Bridge] mock_DisableAbort called";
+    g_abortEnabled = false;
     return true;
 }
 
 static api_bool mock_EnableAbort() {
     qDebug() << "[PCL Bridge] mock_EnableAbort called";
+    g_abortEnabled = true;
     return true;
+}
+
+static uint32 mock_GetProcessStatus() {
+    uint32 status = 0;
+    if (g_abortEnabled) status |= 0x40000000;
+    if (g_abortRequested) status |= 0x80000000;
+    return status;
 }
 
 static void fillPropertyValue(api_property_value* value, const std::string& id) {
@@ -1343,7 +1410,7 @@ static thread_handle mock_GetCurrentThread() {
 static void mock_AppendThreadConsoleOutputText(thread_handle, const char16_type* text, api_bool appendNewline) {
     QString str = QString::fromUtf16(reinterpret_cast<const char16_t*>(text));
     if (appendNewline) {
-        qDebug().noquote() << "[PCL Thread Console]" << str;
+        qInfo().noquote() << "[PCL Thread Console]" << str;
     } else {
         std::cout << str.toStdString();
         std::flush(std::cout);
@@ -2110,6 +2177,16 @@ void PCLBridge::setupOverrides() {
     overridePCLStub("Timer/StartTimer", reinterpret_cast<void*>(mock_StartTimer));
     overridePCLStub("Timer/StopTimer", reinterpret_cast<void*>(mock_StopTimer));
     overridePCLStub("Timer/SetTimerNotifyEventRoutine", reinterpret_cast<void*>(mock_SetTimerNotifyEventRoutine));
+
+    // Global and Process status enhancements
+    overridePCLStub("Global/GetProcessStatus", reinterpret_cast<void*>(mock_GetProcessStatus));
+    overridePCLStub("Global/GetGlobalFlag", reinterpret_cast<void*>(mock_GetGlobalFlag));
+    overridePCLStub("Global/GetGlobalReal", reinterpret_cast<void*>(mock_GetGlobalReal));
+
+    // UI/Preview Notification Stubs
+    overridePCLStub("InterfaceDefinition/SetRealTimePreviewGenerationStartNotificationRoutine", reinterpret_cast<void*>(mock_SetRealTimePreviewGenerationStartNotificationRoutine));
+    overridePCLStub("InterfaceDefinition/SetRealTimePreviewGenerationFinishNotificationRoutine", reinterpret_cast<void*>(mock_SetRealTimePreviewGenerationFinishNotificationRoutine));
+    overridePCLStub("InterfaceDefinition/ExitInterfaceDefinitionContext", reinterpret_cast<void*>(mock_ExitInterfaceDefinitionContext));
 }
 
 bool PCLBridge::loadModule(const QString& path) {
@@ -2131,13 +2208,13 @@ bool PCLBridge::loadModule(const QString& path) {
         }
 
         if (QFile::exists(tfPath)) {
-            qDebug() << "[PCL Bridge] Pre-loading TensorFlow framework from:" << tfFrameworkPath;
+            qInfo() << "[PCL Bridge] Pre-loading TensorFlow framework from:" << tfFrameworkPath;
             void* tfFrameHandle = dlopen(tfFrameworkPath.toUtf8().constData(), RTLD_LAZY | RTLD_GLOBAL);
             if (!tfFrameHandle) {
                 qWarning() << "[PCL Bridge] Failed to pre-load libtensorflow_framework.so.2:" << dlerror();
             }
 
-            qDebug() << "[PCL Bridge] Pre-loading TensorFlow from:" << tfPath;
+            qInfo() << "[PCL Bridge] Pre-loading TensorFlow from:" << tfPath;
             void* tfHandle = dlopen(tfPath.toUtf8().constData(), RTLD_LAZY | RTLD_GLOBAL);
             if (!tfHandle) {
                 qWarning() << "[PCL Bridge] Failed to pre-load libtensorflow.so.2:" << dlerror();
@@ -2145,7 +2222,7 @@ bool PCLBridge::loadModule(const QString& path) {
         }
     }
 
-    qDebug() << "[PCL Bridge] Attempting to dlopen:" << path;
+    qInfo() << "[PCL Bridge] Attempting to dlopen:" << path;
     m_libHandle = dlopen(path.toUtf8().constData(), RTLD_LAZY | RTLD_GLOBAL);
     if (!m_libHandle) {
         qWarning() << "[PCL Bridge] dlopen failed:" << dlerror();
@@ -2169,14 +2246,14 @@ bool PCLBridge::loadModule(const QString& path) {
 
     // 1. Install with FullInstall first to instantiate the MetaModule and all process/parameter meta-objects!
     if (install) {
-        qDebug() << "[PCL Bridge] Running InstallPixInsightModule (FullInstall)...";
+        qInfo() << "[PCL Bridge] Running InstallPixInsightModule (FullInstall)...";
         int32 installStatus = install(0); // InstallMode::FullInstall
         if (installStatus != 0) {
             qWarning() << "[PCL Bridge] InstallPixInsightModule (FullInstall) failed, code:" << installStatus;
             unloadModule();
             return false;
         }
-        qDebug() << "[PCL Bridge] Meta-objects instantiated successfully.";
+        qInfo() << "[PCL Bridge] Meta-objects instantiated successfully.";
     } else {
         qWarning() << "[PCL Bridge] Module has no installation entry point (PMINS), cannot initialize.";
         unloadModule();
@@ -2198,7 +2275,7 @@ bool PCLBridge::loadModule(const QString& path) {
     m_initialized = true;
 
     // 3. Identify the module to get description metadata!
-    qDebug() << "[PCL Bridge] Running IdentifyPixInsightModule...";
+    qInfo() << "[PCL Bridge] Running IdentifyPixInsightModule...";
     status = identify(&m_description, 0);
     if (status != 0) {
         qWarning() << "[PCL Bridge] IdentifyPixInsightModule phase 0 failed, code:" << status;
@@ -2220,29 +2297,29 @@ bool PCLBridge::loadModule(const QString& path) {
     }
 
     // Print metadata
-    qDebug() << "[PCL Bridge] Module Identified Successfully:";
-    qDebug() << "  Name:       " << m_description->name;
-    qDebug() << "  Version:    " << m_description->versionInfo;
-    qDebug() << "  API Version:" << QString::number(m_description->apiVersion, 16);
+    qInfo() << "[PCL Bridge] Module Identified Successfully:";
+    qInfo() << "  Name:       " << m_description->name;
+    qInfo() << "  Version:    " << m_description->versionInfo;
+    qInfo() << "  API Version:" << QString::number(m_description->apiVersion, 16);
 
     // Call the module's OnLoad routine if registered!
     if (g_moduleOnLoad) {
-        qDebug() << "[PCL Bridge] Invoking module OnLoad routine...";
+        qInfo() << "[PCL Bridge] Invoking module OnLoad routine...";
         g_moduleOnLoad();
-        qDebug() << "[PCL Bridge] Module OnLoad routine finished.";
+        qInfo() << "[PCL Bridge] Module OnLoad routine finished.";
     }
 
     // Call the class initialization and execution preferences routines for all registered processes
     for (auto& pair : g_processes) {
         if (pair.second.classInitFn) {
-            qDebug() << "[PCL Bridge] Invoking process class initialization routine for:" << pair.second.id;
+            qInfo() << "[PCL Bridge] Invoking process class initialization routine for:" << pair.second.id;
             pair.second.classInitFn(pair.first);
-            qDebug() << "[PCL Bridge] Process class initialization routine finished.";
+            qInfo() << "[PCL Bridge] Process class initialization routine finished.";
         }
         if (pair.second.executionPreferencesFn) {
-            qDebug() << "[PCL Bridge] Invoking process execution preferences routine for:" << pair.second.id;
+            qInfo() << "[PCL Bridge] Invoking process execution preferences routine for:" << pair.second.id;
             pair.second.executionPreferencesFn(pair.first);
-            qDebug() << "[PCL Bridge] Process execution preferences routine finished.";
+            qInfo() << "[PCL Bridge] Process execution preferences routine finished.";
         }
     }
 
@@ -2253,7 +2330,7 @@ void PCLBridge::unloadModule() {
     if (m_libHandle) {
         // Call the module's OnUnload routine if registered!
         if (g_moduleOnUnload) {
-            qDebug() << "[PCL Bridge] Invoking module OnUnload routine...";
+            qInfo() << "[PCL Bridge] Invoking module OnUnload routine...";
             g_moduleOnUnload();
             g_moduleOnUnload = nullptr;
         }
@@ -2270,7 +2347,7 @@ void PCLBridge::unloadModule() {
         m_libHandle = nullptr;
         m_description = nullptr;
         m_initialized = false;
-        qDebug() << "[PCL Bridge] Module unloaded.";
+        qInfo() << "[PCL Bridge] Module unloaded.";
         g_interfaceControls.clear();
         for (auto& pair : g_threads) {
             delete pair.second;
@@ -2305,7 +2382,7 @@ bool PCLBridge::executeProcess(const QString& processId, std::vector<ImageBuffer
         return false;
     }
 
-    qDebug() << "[PCL Bridge] Creating process instance for:" << processId;
+    qInfo() << "[PCL Bridge] Creating process instance for:" << processId;
     process_handle hProcess = info.createFn(hMeta);
     if (!hProcess) {
         qWarning() << "[PCL Bridge] Failed to instantiate process:" << processId;
@@ -2313,7 +2390,7 @@ bool PCLBridge::executeProcess(const QString& processId, std::vector<ImageBuffer
     }
 
     if (info.initFn) {
-        qDebug() << "[PCL Bridge] Initializing process instance...";
+        qInfo() << "[PCL Bridge] Initializing process instance...";
         info.initFn(hProcess);
     }
 
@@ -2337,7 +2414,7 @@ bool PCLBridge::executeProcess(const QString& processId, std::vector<ImageBuffer
     windowMock.mainView = &viewMock;
     viewMock.parentWindow = &windowMock;
 
-    qDebug() << "[PCL Bridge] Executing process on image:" << imgMock.width << "x" << imgMock.height << "with" << imgMock.numChannels << "channels";
+    qInfo() << "[PCL Bridge] Executing process on image:" << imgMock.width << "x" << imgMock.height << "with" << imgMock.numChannels << "channels";
     bool success = false;
     if (info.executeFn) {
         success = info.executeFn(&viewMock, hProcess);
@@ -2348,7 +2425,7 @@ bool PCLBridge::executeProcess(const QString& processId, std::vector<ImageBuffer
         qWarning() << "[PCL Bridge] Process has no execution routine!";
     }
 
-    qDebug() << "[PCL Bridge] Process execution finished, status:" << (success ? "Success" : "Failed");
+    qInfo() << "[PCL Bridge] Process execution finished, status:" << (success ? "Success" : "Failed");
 
     // Clean up
     if (info.destroyFn) {
@@ -2421,7 +2498,7 @@ bool PCLBridge::executeProcessInstance(const QString& processId, void* hProcess,
     windowMock.mainView = &viewMock;
     viewMock.parentWindow = &windowMock;
 
-    qDebug() << "[PCL Bridge] Executing process instance on image:" << imgMock.width << "x" << imgMock.height << "with" << imgMock.numChannels << "channels";
+    qInfo() << "[PCL Bridge] Executing process instance on image:" << imgMock.width << "x" << imgMock.height << "with" << imgMock.numChannels << "channels";
     bool success = false;
     if (info.executeFn) {
         success = info.executeFn(&viewMock, hProcess);
@@ -2432,7 +2509,7 @@ bool PCLBridge::executeProcessInstance(const QString& processId, void* hProcess,
         qWarning() << "[PCL Bridge] Process has no execution routine!";
     }
 
-    qDebug() << "[PCL Bridge] Process instance execution finished, status:" << (success ? "Success" : "Failed");
+    qInfo() << "[PCL Bridge] Process instance execution finished, status:" << (success ? "Success" : "Failed");
     g_activeImage = nullptr;
     return success;
 }
@@ -2884,6 +2961,69 @@ static api_bool mock_GetGlobalInteger(const char* globalKey, void* value, api_bo
         *reinterpret_cast<uint32*>(value) = val;
     }
     return true;
+}
+
+static api_bool mock_GetGlobalFlag(const char* globalKey, api_bool* value) {
+    if (!globalKey) return false;
+    QString key = QString::fromUtf8(globalKey);
+    qDebug() << "[PCL Global] GetGlobalFlag:" << key;
+    
+    bool val = false;
+    bool found = false;
+    
+    if (key == "Application/ParallelProcessing" || key == "Application/UseParallelProcessing") {
+        val = true;
+        found = true;
+    } else if (key == "Application/UseGPU") {
+        val = false;
+        found = true;
+    } else if (key == "Application/UseAVX" || key == "Application/UseAVX2" || key == "Application/UseAVX512") {
+        val = true;
+        found = true;
+    }
+    
+    if (found) {
+        if (value) {
+            *value = val;
+        }
+        return true;
+    }
+    return false;
+}
+
+static api_bool mock_GetGlobalReal(const char* globalKey, double* value) {
+    if (!globalKey || !value) return false;
+    QString key = QString::fromUtf8(globalKey);
+    qDebug() << "[PCL Global] GetGlobalReal:" << key;
+    
+    double val = 0.0;
+    bool found = false;
+    
+    if (key == "Workspace/PrimaryScreenDPI") {
+        val = 96.0;
+        found = true;
+    } else if (key == "Workspace/PrimaryScreenPixelRatio" || key == "Workspace/DisplayPixelRatio") {
+        val = 1.0;
+        found = true;
+    }
+    
+    if (found) {
+        *value = val;
+        return true;
+    }
+    return false;
+}
+
+static void mock_SetRealTimePreviewGenerationStartNotificationRoutine(pcl::global_notification_routine) {
+    qDebug() << "[PCL Bridge] mock_SetRealTimePreviewGenerationStartNotificationRoutine called";
+}
+
+static void mock_SetRealTimePreviewGenerationFinishNotificationRoutine(pcl::global_notification_routine) {
+    qDebug() << "[PCL Bridge] mock_SetRealTimePreviewGenerationFinishNotificationRoutine called";
+}
+
+static void mock_ExitInterfaceDefinitionContext() {
+    qDebug() << "[PCL Bridge] mock_ExitInterfaceDefinitionContext called";
 }
 
 // ============================================================================
