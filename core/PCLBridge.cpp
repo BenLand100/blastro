@@ -32,6 +32,7 @@
 #include <QVariant>
 #include <QLineEdit>
 #include <QFileDialog>
+#include <QTimer>
 
 namespace blastro {
 
@@ -218,6 +219,17 @@ static void mock_SetProcessEditPreferencesRoutine(pcl::process_edit_preferences_
 static api_bool mock_EditProcessPreferences(meta_process_handle hMetaProcess);
 static void mock_SetProcessClassInitializationRoutine(pcl::process_class_initialization_routine f);
 static void mock_SetProcessExecutionPreferencesRoutine(pcl::process_execution_preferences_routine f);
+
+// Timer mocks
+static timer_handle mock_CreateTimer(api_handle hModule, api_handle client, uint32 flags);
+static void mock_GetTimerInterval(const_timer_handle h, uint32* msec);
+static void mock_SetTimerInterval(timer_handle h, uint32 msec);
+static api_bool mock_GetTimerSingleShot(const_timer_handle h);
+static void mock_SetTimerSingleShot(timer_handle h, api_bool singleShot);
+static api_bool mock_IsTimerActive(const_timer_handle h);
+static api_bool mock_StartTimer(timer_handle h);
+static void mock_StopTimer(timer_handle h);
+static api_bool mock_SetTimerNotifyEventRoutine(timer_handle h, api_handle receiver, pcl::timer_event_routine routine);
 
 static void mock_BeginParameterDefinition(meta_parameter_handle hParam, const char* paramId, uint32 type);
 static void mock_SetParameterProcessVersionRange(uint32 minVer, uint32 maxVer);
@@ -2063,18 +2075,27 @@ void PCLBridge::setupOverrides() {
     overridePCLStub("Process/EditProcessPreferences", reinterpret_cast<void*>(mock_EditProcessPreferences));
     overridePCLStub("ProcessDefinition/SetProcessClassInitializationRoutine", reinterpret_cast<void*>(mock_SetProcessClassInitializationRoutine));
     overridePCLStub("ProcessDefinition/SetProcessExecutionPreferencesRoutine", reinterpret_cast<void*>(mock_SetProcessExecutionPreferencesRoutine));
+
+    // Timer API
+    overridePCLStub("Timer/CreateTimer", reinterpret_cast<void*>(mock_CreateTimer));
+    overridePCLStub("Timer/GetTimerInterval", reinterpret_cast<void*>(mock_GetTimerInterval));
+    overridePCLStub("Timer/SetTimerInterval", reinterpret_cast<void*>(mock_SetTimerInterval));
+    overridePCLStub("Timer/GetTimerSingleShot", reinterpret_cast<void*>(mock_GetTimerSingleShot));
+    overridePCLStub("Timer/SetTimerSingleShot", reinterpret_cast<void*>(mock_SetTimerSingleShot));
+    overridePCLStub("Timer/IsTimerActive", reinterpret_cast<void*>(mock_IsTimerActive));
+    overridePCLStub("Timer/StartTimer", reinterpret_cast<void*>(mock_StartTimer));
+    overridePCLStub("Timer/StopTimer", reinterpret_cast<void*>(mock_StopTimer));
+    overridePCLStub("Timer/SetTimerNotifyEventRoutine", reinterpret_cast<void*>(mock_SetTimerNotifyEventRoutine));
 }
 
 bool PCLBridge::loadModule(const QString& path) {
     unloadModule();
 
-    // Dynamically pre-load tensorflow dependencies if we are loading StarXTerminator.
-    // This keeps the core BLastro binary entirely decoupled from TensorFlow while resolving
-    // the plugin's runtime shared library dependencies.
-    if (path.contains("StarXTerminator", Qt::CaseInsensitive)) {
-        qDebug() << "[PCL Bridge] Detected StarXTerminator. Pre-loading TensorFlow dependencies...";
-        
-        // Find relative lib directory based on the application path
+    // Dynamically pre-load TensorFlow dependencies for RC-Astro *XTerminator plugins.
+    // BlurXTerminator, StarXTerminator, and NoiseXTerminator all link libtensorflow.
+    // We pre-load with RTLD_GLOBAL so the symbols are available when the plugin is dlopen'd.
+    // This is a no-op if the libs are not present.
+    {
         QString appDir = QCoreApplication::applicationDirPath();
         QString tfFrameworkPath = appDir + "/lib/libtensorflow_framework.so.2";
         QString tfPath = appDir + "/lib/libtensorflow.so.2";
@@ -2085,16 +2106,18 @@ bool PCLBridge::loadModule(const QString& path) {
             tfPath = appDir + "/../lib/libtensorflow.so.2";
         }
 
-        qDebug() << "[PCL Bridge] Loading TensorFlow framework from:" << tfFrameworkPath;
-        void* tfFrameHandle = dlopen(tfFrameworkPath.toUtf8().constData(), RTLD_LAZY | RTLD_GLOBAL);
-        if (!tfFrameHandle) {
-            qWarning() << "[PCL Bridge] Failed to pre-load libtensorflow_framework.so.2:" << dlerror();
-        }
+        if (QFile::exists(tfPath)) {
+            qDebug() << "[PCL Bridge] Pre-loading TensorFlow framework from:" << tfFrameworkPath;
+            void* tfFrameHandle = dlopen(tfFrameworkPath.toUtf8().constData(), RTLD_LAZY | RTLD_GLOBAL);
+            if (!tfFrameHandle) {
+                qWarning() << "[PCL Bridge] Failed to pre-load libtensorflow_framework.so.2:" << dlerror();
+            }
 
-        qDebug() << "[PCL Bridge] Loading TensorFlow from:" << tfPath;
-        void* tfHandle = dlopen(tfPath.toUtf8().constData(), RTLD_LAZY | RTLD_GLOBAL);
-        if (!tfHandle) {
-            qWarning() << "[PCL Bridge] Failed to pre-load libtensorflow.so.2:" << dlerror();
+            qDebug() << "[PCL Bridge] Pre-loading TensorFlow from:" << tfPath;
+            void* tfHandle = dlopen(tfPath.toUtf8().constData(), RTLD_LAZY | RTLD_GLOBAL);
+            if (!tfHandle) {
+                qWarning() << "[PCL Bridge] Failed to pre-load libtensorflow.so.2:" << dlerror();
+            }
         }
     }
 
@@ -2648,6 +2671,30 @@ static ::QSettings& getBLastroSettings() {
 static api_bool mock_ReadSettingsString(api_handle hModule, char16_type** value, const char* key, api_bool global) {
     if (!key || !value) return false;
     QString qkey = QString::fromUtf8(key);
+    
+    // FORCED OVERRIDES: Hardcode the AI file paths to prevent the plugin from resetting them
+    if (qkey.endsWith("/aiFile")) {
+        QString forcedPath;
+        if (qkey.contains("StarXTerminator")) {
+            forcedPath = "/opt/PixInsight/library/StarXTerminator.11.pb";
+        } else if (qkey.contains("BlurXTerminator")) {
+            forcedPath = "/opt/PixInsight/library/BlurXTerminator.4.pb";
+        } else if (qkey.contains("NoiseXTerminator")) {
+            forcedPath = "/opt/PixInsight/library/NoiseXTerminator.3.pb";
+        }
+        
+        if (!forcedPath.isEmpty()) {
+            qDebug() << "[PCL Settings] FORCING ReadSettingsString:" << qkey << "->" << forcedPath;
+            int len = forcedPath.length();
+            char16_type* buf = reinterpret_cast<char16_type*>(mock_Allocate((len + 1) * sizeof(char16_type)));
+            if (!buf) return false;
+            std::memcpy(buf, forcedPath.utf16(), len * sizeof(char16_type));
+            buf[len] = 0;
+            *value = buf;
+            return true;
+        }
+    }
+
     QVariant val = getBLastroSettings().value(qkey);
     qDebug() << "[PCL Settings] ReadSettingsString:" << qkey << "->" << val;
     if (val.isValid()) {
@@ -2753,17 +2800,31 @@ static api_bool mock_WriteSettingsUnsignedInteger(api_handle hModule, uint32 val
 }
 
 static api_bool mock_GetGlobalString(const char* globalKey, char16_type* value, pcl::size_type* maxLen) {
-    if (!globalKey) return false;
+    if (!globalKey || !maxLen) return false;
     QString key = QString::fromUtf8(globalKey);
-    qDebug() << "[PCL Global] GetGlobalString:" << key;
+    // Suppress spammy license checks from logs
+    if (!key.contains("License")) {
+        qDebug() << "[PCL Global] GetGlobalString:" << key;
+    }
     QString result = "";
     if (key.contains("License", Qt::CaseInsensitive)) {
-        // StarXTerminator usually stores license in settings, but we return a fallback if they ask globally
         result = "BLastro-Community-License";
     } else if (key == "Application/LibraryDirectory") {
         result = "/opt/PixInsight/library";
+    } else if (key == "Application/BaseDirectory") {
+        result = "/opt/PixInsight";
     }
-    if (!result.isEmpty() && value && maxLen && *maxLen > 0) {
+
+    if (result.isEmpty()) return false;
+
+    // Length query
+    if (!value) {
+        *maxLen = result.length() + 1;
+        return true;
+    }
+
+    // Actual string fetch
+    if (*maxLen > 0) {
         int len = qMin(static_cast<int>(*maxLen) - 1, result.length());
         std::memcpy(value, result.utf16(), len * sizeof(char16_type));
         value[len] = 0;
@@ -3053,6 +3114,101 @@ static api_bool mock_ExecuteGetDirectoryDialog(
     QString chosen = QFileDialog::getExistingDirectory(nullptr, cap, init);
     if (chosen.isEmpty()) return false;
     stringToChar16(chosen, dirPath);
+    return true;
+}
+
+} // namespace blastro
+
+// ==========================================================================
+// PCL Timer implementation — backed by QTimer
+// ==========================================================================
+
+namespace blastro {
+
+struct PCLTimer {
+    QTimer*                   qtimer      = nullptr;
+    api_handle                receiver    = nullptr;
+    pcl::timer_event_routine  callback    = nullptr;
+    timer_handle              self        = nullptr;
+
+    PCLTimer() {
+        qtimer = new QTimer();
+        self   = reinterpret_cast<timer_handle>(this);
+        // Lambda captures `this` so the callback can be fired without Q_OBJECT/MOC
+        QObject::connect(qtimer, &QTimer::timeout, [this]() {
+            if (callback)
+                callback(self, reinterpret_cast<control_handle>(receiver));
+        });
+    }
+
+    ~PCLTimer() {
+        qtimer->stop();
+        delete qtimer;
+        qtimer = nullptr;
+    }
+};
+
+static timer_handle mock_CreateTimer(api_handle /*hModule*/, api_handle /*client*/, uint32 /*flags*/) {
+    PCLTimer* t = new PCLTimer();
+    qDebug() << "[PCL Bridge] CreateTimer ->" << reinterpret_cast<void*>(t);
+    return reinterpret_cast<timer_handle>(t);
+}
+
+static void mock_GetTimerInterval(const_timer_handle h, uint32* msec) {
+    if (!h || !msec) return;
+    const PCLTimer* t = reinterpret_cast<const PCLTimer*>(h);
+    *msec = static_cast<uint32>(t->qtimer->interval());
+}
+
+static void mock_SetTimerInterval(timer_handle h, uint32 msec) {
+    if (!h) return;
+    PCLTimer* t = reinterpret_cast<PCLTimer*>(h);
+    qDebug() << "[PCL Bridge] SetTimerInterval" << msec << "ms";
+    t->qtimer->setInterval(static_cast<int>(msec));
+}
+
+static api_bool mock_GetTimerSingleShot(const_timer_handle h) {
+    if (!h) return false;
+    const PCLTimer* t = reinterpret_cast<const PCLTimer*>(h);
+    return t->qtimer->isSingleShot();
+}
+
+static void mock_SetTimerSingleShot(timer_handle h, api_bool singleShot) {
+    if (!h) return;
+    PCLTimer* t = reinterpret_cast<PCLTimer*>(h);
+    qDebug() << "[PCL Bridge] SetTimerSingleShot" << (bool)singleShot;
+    t->qtimer->setSingleShot(singleShot);
+}
+
+static api_bool mock_IsTimerActive(const_timer_handle h) {
+    if (!h) return false;
+    const PCLTimer* t = reinterpret_cast<const PCLTimer*>(h);
+    return t->qtimer->isActive();
+}
+
+static api_bool mock_StartTimer(timer_handle h) {
+    if (!h) return false;
+    PCLTimer* t = reinterpret_cast<PCLTimer*>(h);
+    qDebug() << "[PCL Bridge] StartTimer interval =" << t->qtimer->interval() << "ms";
+    t->qtimer->start();
+    return true;
+}
+
+static void mock_StopTimer(timer_handle h) {
+    if (!h) return;
+    PCLTimer* t = reinterpret_cast<PCLTimer*>(h);
+    qDebug() << "[PCL Bridge] StopTimer";
+    t->qtimer->stop();
+}
+
+static api_bool mock_SetTimerNotifyEventRoutine(timer_handle h, api_handle receiver,
+                                                pcl::timer_event_routine routine) {
+    if (!h) return false;
+    PCLTimer* t    = reinterpret_cast<PCLTimer*>(h);
+    t->receiver    = receiver;
+    t->callback    = routine;
+    qDebug() << "[PCL Bridge] SetTimerNotifyEventRoutine receiver ="
+             << receiver << "routine =" << (bool)routine;
     return true;
 }
 
