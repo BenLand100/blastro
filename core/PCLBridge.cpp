@@ -28,6 +28,7 @@
 #include <QSlider>
 #include <QComboBox>
 #include <QSpinBox>
+#include <QToolButton>
 #include <QVariant>
 #include <QLineEdit>
 
@@ -51,6 +52,7 @@ struct PCLInterfaceInfo {
     meta_interface_handle hMeta = nullptr;
     pcl::interface_initialization_routine initFn = nullptr;
     pcl::interface_launch_routine launchFn = nullptr;
+    pcl::interface_control_routine editPreferencesFn = nullptr;
 };
 
 static std::unordered_map<meta_interface_handle, PCLInterfaceInfo> g_interfaces;
@@ -179,19 +181,36 @@ static void initPixelTraitsLUT() {
 // ============================================================================
 // Forward Declarations for Settings, Globals, and Parameter Mocks
 // ============================================================================
-static api_bool mock_ReadSettingsString(const char16_type* keyPath, char16_type* value, pcl::size_type maxLen);
-static api_bool mock_WriteSettingsString(const char16_type* keyPath, const char16_type* value);
-static api_bool mock_ReadSettingsFlag(const char16_type* keyPath, api_bool* value);
-static api_bool mock_WriteSettingsFlag(const char16_type* keyPath, api_bool value);
-static api_bool mock_ReadSettingsReal(const char16_type* keyPath, double* value);
-static api_bool mock_WriteSettingsReal(const char16_type* keyPath, double value);
-static api_bool mock_ReadSettingsInteger(const char16_type* keyPath, int32* value);
-static api_bool mock_WriteSettingsInteger(const char16_type* keyPath, int32 value);
-static api_bool mock_GetGlobalString(const char16_type* globalKey, char16_type* value, pcl::size_type maxLen);
-static int32 mock_GetGlobalInteger(const char16_type* globalKey);
+static api_bool mock_ReadSettingsString(api_handle hModule, char16_type** value, const char* key, api_bool global);
+static api_bool mock_WriteSettingsString(api_handle hModule, const char16_type* value, const char* key, api_bool global);
+static api_bool mock_ReadSettingsFlag(api_handle hModule, api_bool* value, const char* key, api_bool global);
+static api_bool mock_WriteSettingsFlag(api_handle hModule, api_bool value, const char* key, api_bool global);
+static api_bool mock_ReadSettingsReal(api_handle hModule, double* value, const char* key, api_bool global);
+static api_bool mock_WriteSettingsReal(api_handle hModule, double value, const char* key, api_bool global);
+static api_bool mock_ReadSettingsInteger(api_handle hModule, int32* value, const char* key, api_bool global);
+static api_bool mock_WriteSettingsInteger(api_handle hModule, int32 value, const char* key, api_bool global);
+static api_bool mock_ReadSettingsUnsignedInteger(api_handle hModule, uint32* value, const char* key, api_bool global);
+static api_bool mock_WriteSettingsUnsignedInteger(api_handle hModule, uint32 value, const char* key, api_bool global);
+static api_bool mock_GetGlobalString(const char* globalKey, char16_type* value, pcl::size_type* maxLen);
+static api_bool mock_GetGlobalInteger(const char* globalKey, void* value, api_bool isSigned);
+static void mock_SetInterfaceEditPreferencesRoutine(pcl::interface_control_routine f);
+static api_bool mock_GetControlResourcePixelRatio(const_control_handle h, double* ratio);
+static control_handle mock_CreateViewList(api_handle hModule, api_handle client, control_handle parent, uint32 flags);
+static void mock_RegenerateViewList(control_handle h, api_bool mainViews, api_bool previews, api_bool realTimePreview);
+static void mock_GetViewListContents(const_control_handle h, api_bool* mainViews, api_bool* previews, api_bool* realTimePreview);
+static int32 mock_ExecuteDialog(control_handle h);
+static api_bool mock_GetEditValid(const_control_handle h);
+static void mock_SetButtonDefaultEnabled(control_handle h, api_bool enable);
+static void mock_ReturnDialog(control_handle h, int32 result);
+static void mock_SetProcessEditPreferencesRoutine(pcl::process_edit_preferences_routine f);
 
 static void mock_BeginParameterDefinition(meta_parameter_handle hParam, const char* paramId, uint32 type);
 static void mock_SetParameterProcessVersionRange(uint32 minVer, uint32 maxVer);
+
+// ToolButton Mocks
+static control_handle mock_CreateToolButton(api_handle hModule, api_handle client, const char16_type* text, const_bitmap_handle bitmap, api_bool checkable, control_handle parent, uint32 flags);
+static void mock_SetToolButtonCheckable(control_handle h, api_bool checkable);
+static api_bool mock_GetToolButtonCheckable(const_control_handle h);
 static void mock_SetParameterRequired(api_bool required);
 static void mock_SetParameterReadOnly(api_bool readOnly);
 static void mock_SetParameterLockRoutine(void* routine);
@@ -702,6 +721,13 @@ static void mock_SetInterfaceLaunchRoutine(pcl::interface_launch_routine f) {
     }
 }
 
+static void mock_SetInterfaceEditPreferencesRoutine(pcl::interface_control_routine f) {
+    if (g_currentDefiningInterface) {
+        g_interfaces[g_currentDefiningInterface].editPreferencesFn = f;
+        qDebug() << "[PCL Bridge] Interface edit preferences routine set for:" << g_interfaces[g_currentDefiningInterface].id;
+    }
+}
+
 static void mock_EndInterfaceDefinition() {
     g_currentDefiningInterface = nullptr;
 }
@@ -903,6 +929,34 @@ static control_handle mock_CreatePushButton(api_handle hModule, api_handle clien
     if (client) g_widgetToClient[ch] = client;
     qDebug() << "[PCL Bridge] CreatePushButton: client =" << client << "text =" << btn->text() << "-> QPushButton =" << btn;
     return ch;
+}
+
+#include <QToolButton>
+
+static control_handle mock_CreateToolButton(api_handle hModule, api_handle client, const char16_type* text, const_bitmap_handle bitmap, api_bool checkable, control_handle parent, uint32 flags) {
+    QWidget* parentWidget = reinterpret_cast<QWidget*>(parent);
+    ::QToolButton* btn = new ::QToolButton(parentWidget);
+    if (text) {
+        btn->setText(QString::fromUtf16(reinterpret_cast<const char16_t*>(text)));
+    }
+    btn->setCheckable(checkable);
+    control_handle ch = reinterpret_cast<control_handle>(btn);
+    if (client) g_widgetToClient[ch] = client;
+    qDebug() << "[PCL Bridge] CreateToolButton: client =" << client << "text =" << btn->text() << "checkable =" << (bool)checkable << "-> QToolButton =" << btn;
+    return ch;
+}
+
+static void mock_SetToolButtonCheckable(control_handle h, api_bool checkable) {
+    ::QToolButton* btn = reinterpret_cast<::QToolButton*>(h);
+    qDebug() << "[PCL Bridge] SetToolButtonCheckable:" << btn << "checkable =" << (bool)checkable;
+    if (btn) {
+        btn->setCheckable(checkable);
+    }
+}
+
+static api_bool mock_GetToolButtonCheckable(const_control_handle h) {
+    const ::QToolButton* btn = reinterpret_cast<const ::QToolButton*>(h);
+    return btn ? btn->isCheckable() : false;
 }
 
 static control_handle mock_CreateCheckBox(api_handle hModule, api_handle client, const char16_type* text, control_handle parent, uint32 flags) {
@@ -1479,10 +1533,18 @@ static void mock_SetChildControlToFocus(control_handle h, control_handle child) 
     }
 }
 
+#include <QRegularExpression>
+#include <QRegularExpressionValidator>
+
 static api_bool mock_SetEditValidatingRegExp(control_handle h, const char16_type* pattern, api_bool caseSensitive) {
     QLineEdit* edit = reinterpret_cast<QLineEdit*>(h);
     QString regexStr = pattern ? QString::fromUtf16(reinterpret_cast<const char16_t*>(pattern)) : QString();
     qDebug() << "[PCL Bridge] SetEditValidatingRegExp:" << edit << "pattern =" << regexStr << "caseSensitive =" << (bool)caseSensitive;
+    if (edit && !regexStr.isEmpty()) {
+        QRegularExpression regex(regexStr, caseSensitive ? QRegularExpression::NoPatternOption : QRegularExpression::CaseInsensitiveOption);
+        QRegularExpressionValidator* val = new QRegularExpressionValidator(regex, edit);
+        edit->setValidator(val);
+    }
     return true;
 }
 
@@ -1798,6 +1860,9 @@ void PCLBridge::setupOverrides() {
     overridePCLStub("GroupBox/SetGroupBoxCheckEventRoutine", reinterpret_cast<void*>(mock_SetEventRoutine));
 
     overridePCLStub("Button/CreatePushButton", reinterpret_cast<void*>(mock_CreatePushButton));
+    overridePCLStub("Button/CreateToolButton", reinterpret_cast<void*>(mock_CreateToolButton));
+    overridePCLStub("Button/SetToolButtonCheckable", reinterpret_cast<void*>(mock_SetToolButtonCheckable));
+    overridePCLStub("Button/GetToolButtonCheckable", reinterpret_cast<void*>(mock_GetToolButtonCheckable));
     overridePCLStub("Button/CreateCheckBox", reinterpret_cast<void*>(mock_CreateCheckBox));
     overridePCLStub("Button/SetButtonText", reinterpret_cast<void*>(mock_SetButtonText));
     overridePCLStub("Button/SetButtonCheckEventRoutine", reinterpret_cast<void*>(mock_SetButtonCheckEventRoutine));
@@ -1907,8 +1972,25 @@ void PCLBridge::setupOverrides() {
     overridePCLStub("Global/WriteSettingsReal", reinterpret_cast<void*>(mock_WriteSettingsReal));
     overridePCLStub("Global/ReadSettingsInteger", reinterpret_cast<void*>(mock_ReadSettingsInteger));
     overridePCLStub("Global/WriteSettingsInteger", reinterpret_cast<void*>(mock_WriteSettingsInteger));
+    overridePCLStub("Global/ReadSettingsUnsignedInteger", reinterpret_cast<void*>(mock_ReadSettingsUnsignedInteger));
+    overridePCLStub("Global/WriteSettingsUnsignedInteger", reinterpret_cast<void*>(mock_WriteSettingsUnsignedInteger));
     overridePCLStub("Global/GetGlobalString", reinterpret_cast<void*>(mock_GetGlobalString));
     overridePCLStub("Global/GetGlobalInteger", reinterpret_cast<void*>(mock_GetGlobalInteger));
+    overridePCLStub("InterfaceDefinition/SetInterfaceEditPreferencesRoutine", reinterpret_cast<void*>(mock_SetInterfaceEditPreferencesRoutine));
+
+    // Control scaling & ViewList controls
+    overridePCLStub("Control/GetControlResourcePixelRatio", reinterpret_cast<void*>(mock_GetControlResourcePixelRatio));
+    overridePCLStub("ViewList/CreateViewList", reinterpret_cast<void*>(mock_CreateViewList));
+    overridePCLStub("ViewList/RegenerateViewList", reinterpret_cast<void*>(mock_RegenerateViewList));
+    overridePCLStub("ViewList/GetViewListContents", reinterpret_cast<void*>(mock_GetViewListContents));
+    overridePCLStub("ViewList/SetViewListViewSelectedEventRoutine", reinterpret_cast<void*>(mock_SetEventRoutine));
+    overridePCLStub("ViewList/SetViewListCurrentViewUpdatedEventRoutine", reinterpret_cast<void*>(mock_SetEventRoutine));
+
+    // Dialog execution & validation hooks
+    overridePCLStub("Dialog/ExecuteDialog", reinterpret_cast<void*>(mock_ExecuteDialog));
+    overridePCLStub("Dialog/ReturnDialog", reinterpret_cast<void*>(mock_ReturnDialog));
+    overridePCLStub("Edit/GetEditValid", reinterpret_cast<void*>(mock_GetEditValid));
+    overridePCLStub("Button/SetButtonDefaultEnabled", reinterpret_cast<void*>(mock_SetButtonDefaultEnabled));
 
     // Process & Parameter definitions
     overridePCLStub("ProcessDefinition/BeginParameterDefinition", reinterpret_cast<void*>(mock_BeginParameterDefinition));
@@ -1924,6 +2006,7 @@ void PCLBridge::setupOverrides() {
     overridePCLStub("ProcessDefinition/SetPrecision", reinterpret_cast<void*>(mock_SetPrecision));
     overridePCLStub("ProcessDefinition/SetScientificNotation", reinterpret_cast<void*>(mock_SetScientificNotation));
     overridePCLStub("ProcessDefinition/EndParameterDefinition", reinterpret_cast<void*>(mock_EndParameterDefinition));
+    overridePCLStub("ProcessDefinition/SetProcessEditPreferencesRoutine", reinterpret_cast<void*>(mock_SetProcessEditPreferencesRoutine));
 }
 
 bool PCLBridge::loadModule(const QString& path) {
@@ -2288,14 +2371,42 @@ bool PCLBridge::launchInterface(const QString& processId, QWidget* parentWindow)
     // Add the plugin container and the apply button to the main layout
     mainLayout->addWidget(pluginContainer, 1); // Give plugin container stretch factor 1
     
-    // Add a thin horizontal separator line
-    QFrame* separator = new QFrame(hostWidget);
-    separator->setFrameShape(QFrame::HLine);
-    separator->setFrameShadow(QFrame::Sunken);
-    separator->setStyleSheet("background-color: #333; max-height: 1px;");
-    mainLayout->addWidget(separator);
+    // Create a horizontal layout for the bottom button bar
+    QHBoxLayout* buttonBar = new QHBoxLayout();
+    QPushButton* prefsButton = nullptr;
     
-    mainLayout->addWidget(applyButton, 0, Qt::AlignRight); // Align button to the right
+    bool processHasPrefs = false;
+    auto procPrefsIdIt = g_processIdToHandle.find(idStr);
+    if (procPrefsIdIt != g_processIdToHandle.end()) {
+        meta_process_handle hMetaProcess = procPrefsIdIt->second;
+        const auto& procInfo = g_processes[hMetaProcess];
+        processHasPrefs = procInfo.hasEditPreferences;
+    }
+
+    if (info.editPreferencesFn && processHasPrefs) {
+        prefsButton = new QPushButton(QString::fromUtf8("🔧 Preferences"), hostWidget);
+        prefsButton->setStyleSheet(
+            "QPushButton {"
+            "   background-color: #2a2a2a;"
+            "   border: 1px solid #444;"
+            "   border-radius: 4px;"
+            "   color: #ffffff;"
+            "   font-weight: bold;"
+            "   padding: 8px 16px;"
+            "   font-size: 12px;"
+            "}"
+            "QPushButton:hover {"
+            "   background-color: #3a3a3a;"
+            "}"
+            "QPushButton:pressed {"
+            "   background-color: #1a1a1a;"
+            "}"
+        );
+        buttonBar->addWidget(prefsButton);
+    }
+    buttonBar->addStretch();
+    buttonBar->addWidget(applyButton);
+    mainLayout->addLayout(buttonBar);
 
     // Apply dark theme stylesheet to match application dark mode
     hostWidget->setStyleSheet(
@@ -2354,6 +2465,15 @@ bool PCLBridge::launchInterface(const QString& processId, QWidget* parentWindow)
         }
     });
 
+    // Connect the Preferences button if available
+    if (prefsButton && info.editPreferencesFn) {
+        QObject::connect(prefsButton, &QPushButton::clicked, [info, hInterface]() {
+            qDebug() << "[PCL Bridge] Invoking interface edit preferences routine...";
+            info.editPreferencesFn(hInterface);
+            qDebug() << "[PCL Bridge] Interface edit preferences routine finished.";
+        });
+    }
+
     // Connect host widget destruction to process cleanup
     auto procIdItDest = g_processIdToHandle.find(idStr);
     meta_process_handle hMetaDest = (procIdItDest != g_processIdToHandle.end()) ? procIdItDest->second : nullptr;
@@ -2384,108 +2504,152 @@ static ::QSettings& getBLastroSettings() {
     return settings;
 }
 
-static QString getSettingsKey(const char16_type* keyPath) {
-    if (!keyPath) return QString();
-    return QString::fromUtf16(reinterpret_cast<const char16_t*>(keyPath));
-}
-
-static api_bool mock_ReadSettingsString(const char16_type* keyPath, char16_type* value, pcl::size_type maxLen) {
-    QString key = getSettingsKey(keyPath);
-    QVariant val = getBLastroSettings().value(key);
-    qDebug() << "[PCL Settings] ReadSettingsString:" << key << "->" << val;
-    if (val.isValid() && value && maxLen > 0) {
+static api_bool mock_ReadSettingsString(api_handle hModule, char16_type** value, const char* key, api_bool global) {
+    if (!key || !value) return false;
+    QString qkey = QString::fromUtf8(key);
+    QVariant val = getBLastroSettings().value(qkey);
+    qDebug() << "[PCL Settings] ReadSettingsString:" << qkey << "->" << val;
+    if (val.isValid()) {
         QString str = val.toString();
-        int len = qMin(static_cast<int>(maxLen) - 1, str.length());
-        std::memcpy(value, str.utf16(), len * sizeof(char16_type));
-        value[len] = 0;
+        int len = str.length();
+        char16_type* buf = reinterpret_cast<char16_type*>(mock_Allocate((len + 1) * sizeof(char16_type)));
+        if (!buf) return false;
+        std::memcpy(buf, str.utf16(), len * sizeof(char16_type));
+        buf[len] = 0;
+        *value = buf;
         return true;
     }
     return false;
 }
 
-static api_bool mock_WriteSettingsString(const char16_type* keyPath, const char16_type* value) {
-    QString key = getSettingsKey(keyPath);
+static api_bool mock_WriteSettingsString(api_handle hModule, const char16_type* value, const char* key, api_bool global) {
+    if (!key) return false;
+    QString qkey = QString::fromUtf8(key);
     QString val = value ? QString::fromUtf16(reinterpret_cast<const char16_t*>(value)) : QString();
-    qDebug() << "[PCL Settings] WriteSettingsString:" << key << "<-" << val;
-    getBLastroSettings().setValue(key, val);
+    qDebug() << "[PCL Settings] WriteSettingsString:" << qkey << "<-" << val;
+    getBLastroSettings().setValue(qkey, val);
     return true;
 }
 
-static api_bool mock_ReadSettingsFlag(const char16_type* keyPath, api_bool* value) {
-    QString key = getSettingsKey(keyPath);
-    QVariant val = getBLastroSettings().value(key);
-    qDebug() << "[PCL Settings] ReadSettingsFlag:" << key << "->" << val;
-    if (val.isValid() && value) {
+static api_bool mock_ReadSettingsFlag(api_handle hModule, api_bool* value, const char* key, api_bool global) {
+    if (!key || !value) return false;
+    QString qkey = QString::fromUtf8(key);
+    QVariant val = getBLastroSettings().value(qkey);
+    qDebug() << "[PCL Settings] ReadSettingsFlag:" << qkey << "->" << val;
+    if (val.isValid()) {
         *value = val.toBool();
         return true;
     }
     return false;
 }
 
-static api_bool mock_WriteSettingsFlag(const char16_type* keyPath, api_bool value) {
-    QString key = getSettingsKey(keyPath);
-    qDebug() << "[PCL Settings] WriteSettingsFlag:" << key << "<-" << (bool)value;
-    getBLastroSettings().setValue(key, (bool)value);
+static api_bool mock_WriteSettingsFlag(api_handle hModule, api_bool value, const char* key, api_bool global) {
+    if (!key) return false;
+    QString qkey = QString::fromUtf8(key);
+    qDebug() << "[PCL Settings] WriteSettingsFlag:" << qkey << "<-" << (bool)value;
+    getBLastroSettings().setValue(qkey, (bool)value);
     return true;
 }
 
-static api_bool mock_ReadSettingsReal(const char16_type* keyPath, double* value) {
-    QString key = getSettingsKey(keyPath);
-    QVariant val = getBLastroSettings().value(key);
-    qDebug() << "[PCL Settings] ReadSettingsReal:" << key << "->" << val;
-    if (val.isValid() && value) {
+static api_bool mock_ReadSettingsReal(api_handle hModule, double* value, const char* key, api_bool global) {
+    if (!key || !value) return false;
+    QString qkey = QString::fromUtf8(key);
+    QVariant val = getBLastroSettings().value(qkey);
+    qDebug() << "[PCL Settings] ReadSettingsReal:" << qkey << "->" << val;
+    if (val.isValid()) {
         *value = val.toDouble();
         return true;
     }
     return false;
 }
 
-static api_bool mock_WriteSettingsReal(const char16_type* keyPath, double value) {
-    QString key = getSettingsKey(keyPath);
-    qDebug() << "[PCL Settings] WriteSettingsReal:" << key << "<-" << value;
-    getBLastroSettings().setValue(key, value);
+static api_bool mock_WriteSettingsReal(api_handle hModule, double value, const char* key, api_bool global) {
+    if (!key) return false;
+    QString qkey = QString::fromUtf8(key);
+    qDebug() << "[PCL Settings] WriteSettingsReal:" << qkey << "<-" << value;
+    getBLastroSettings().setValue(qkey, value);
     return true;
 }
 
-static api_bool mock_ReadSettingsInteger(const char16_type* keyPath, int32* value) {
-    QString key = getSettingsKey(keyPath);
-    QVariant val = getBLastroSettings().value(key);
-    qDebug() << "[PCL Settings] ReadSettingsInteger:" << key << "->" << val;
-    if (val.isValid() && value) {
+static api_bool mock_ReadSettingsInteger(api_handle hModule, int32* value, const char* key, api_bool global) {
+    if (!key || !value) return false;
+    QString qkey = QString::fromUtf8(key);
+    QVariant val = getBLastroSettings().value(qkey);
+    qDebug() << "[PCL Settings] ReadSettingsInteger:" << qkey << "->" << val;
+    if (val.isValid()) {
         *value = val.toInt();
         return true;
     }
     return false;
 }
 
-static api_bool mock_WriteSettingsInteger(const char16_type* keyPath, int32 value) {
-    QString key = getSettingsKey(keyPath);
-    qDebug() << "[PCL Settings] WriteSettingsInteger:" << key << "<-" << value;
-    getBLastroSettings().setValue(key, value);
+static api_bool mock_WriteSettingsInteger(api_handle hModule, int32 value, const char* key, api_bool global) {
+    if (!key) return false;
+    QString qkey = QString::fromUtf8(key);
+    qDebug() << "[PCL Settings] WriteSettingsInteger:" << qkey << "<-" << value;
+    getBLastroSettings().setValue(qkey, value);
     return true;
 }
 
-static api_bool mock_GetGlobalString(const char16_type* globalKey, char16_type* value, pcl::size_type maxLen) {
-    QString key = getSettingsKey(globalKey);
-    qDebug() << "[PCL Global] GetGlobalString:" << key;
-    // Provide sensible default strings if requested
-    QString result = "";
-    if (key.contains("License", Qt::CaseInsensitive)) {
-        result = "BLastro-Community-License";
-    }
-    if (!result.isEmpty() && value && maxLen > 0) {
-        int len = qMin(static_cast<int>(maxLen) - 1, result.length());
-        std::memcpy(value, result.utf16(), len * sizeof(char16_type));
-        value[len] = 0;
+static api_bool mock_ReadSettingsUnsignedInteger(api_handle hModule, uint32* value, const char* key, api_bool global) {
+    if (!key || !value) return false;
+    QString qkey = QString::fromUtf8(key);
+    QVariant val = getBLastroSettings().value(qkey);
+    qDebug() << "[PCL Settings] ReadSettingsUnsignedInteger:" << qkey << "->" << val;
+    if (val.isValid()) {
+        *value = val.toUInt();
         return true;
     }
     return false;
 }
 
-static int32 mock_GetGlobalInteger(const char16_type* globalKey) {
-    QString key = getSettingsKey(globalKey);
-    qDebug() << "[PCL Global] GetGlobalInteger:" << key;
-    return 0;
+static api_bool mock_WriteSettingsUnsignedInteger(api_handle hModule, uint32 value, const char* key, api_bool global) {
+    if (!key) return false;
+    QString qkey = QString::fromUtf8(key);
+    qDebug() << "[PCL Settings] WriteSettingsUnsignedInteger:" << qkey << "<-" << value;
+    getBLastroSettings().setValue(qkey, value);
+    return true;
+}
+
+static api_bool mock_GetGlobalString(const char* globalKey, char16_type* value, pcl::size_type* maxLen) {
+    if (!globalKey) return false;
+    QString key = QString::fromUtf8(globalKey);
+    qDebug() << "[PCL Global] GetGlobalString:" << key;
+    QString result = "";
+    if (key.contains("License", Qt::CaseInsensitive)) {
+        // StarXTerminator usually stores license in settings, but we return a fallback if they ask globally
+        result = "BLastro-Community-License";
+    } else if (key == "Application/LibraryDirectory") {
+        result = "/opt/PixInsight/library";
+    }
+    if (!result.isEmpty() && value && maxLen && *maxLen > 0) {
+        int len = qMin(static_cast<int>(*maxLen) - 1, result.length());
+        std::memcpy(value, result.utf16(), len * sizeof(char16_type));
+        value[len] = 0;
+        *maxLen = len;
+        return true;
+    }
+    return false;
+}
+
+static api_bool mock_GetGlobalInteger(const char* globalKey, void* value, api_bool isSigned) {
+    if (!globalKey || !value) return false;
+    QString key = QString::fromUtf8(globalKey);
+    qDebug() << "[PCL Global] GetGlobalInteger:" << key << "isSigned =" << (bool)isSigned;
+    
+    int val = 0;
+    if (key == "Workspace/PrimaryScreenCenterX") {
+        val = 960;
+    } else if (key == "Workspace/PrimaryScreenCenterY") {
+        val = 540;
+    }
+    
+    if (isSigned) {
+        *reinterpret_cast<int32*>(value) = val;
+    } else {
+        *reinterpret_cast<uint32*>(value) = val;
+    }
+    return true;
 }
 
 // ============================================================================
@@ -2541,6 +2705,80 @@ static void mock_SetScientificNotation(api_bool scientific) {
 
 static void mock_EndParameterDefinition() {
     qDebug() << "[PCL ProcessDef] EndParameterDefinition";
+}
+
+static api_bool mock_GetControlResourcePixelRatio(const_control_handle h, double* ratio) {
+    if (ratio) {
+        *ratio = 1.0;
+        return true;
+    }
+    return false;
+}
+
+static control_handle mock_CreateViewList(api_handle hModule, api_handle client, control_handle parent, uint32 flags) {
+    QWidget* parentWidget = reinterpret_cast<QWidget*>(parent);
+    QComboBox* cb = new QComboBox(parentWidget);
+    cb->addItem("Active Image View");
+    control_handle ch = reinterpret_cast<control_handle>(cb);
+    if (client) g_widgetToClient[ch] = client;
+    qDebug() << "[PCL Bridge] CreateViewList (mocked as QComboBox): client =" << client << "parent =" << parentWidget << "-> QComboBox =" << cb;
+    return ch;
+}
+
+static void mock_RegenerateViewList(control_handle h, api_bool mainViews, api_bool previews, api_bool realTimePreview) {
+    qDebug() << "[PCL Bridge] RegenerateViewList:" << h;
+}
+
+static void mock_GetViewListContents(const_control_handle h, api_bool* mainViews, api_bool* previews, api_bool* realTimePreview) {
+    qDebug() << "[PCL Bridge] GetViewListContents:" << h;
+    if (mainViews) *mainViews = true;
+    if (previews) *previews = false;
+    if (realTimePreview) *realTimePreview = false;
+}
+
+static int32 mock_ExecuteDialog(control_handle h) {
+    ::QDialog* dlg = reinterpret_cast<::QDialog*>(h);
+    qDebug() << "[PCL Bridge] ExecuteDialog:" << dlg;
+    if (dlg) {
+        return dlg->exec();
+    }
+    return 0;
+}
+
+static api_bool mock_GetEditValid(const_control_handle h) {
+    const ::QLineEdit* edit = reinterpret_cast<const ::QLineEdit*>(h);
+    if (edit) {
+        if (edit->validator()) {
+            QString text = edit->text();
+            int pos = 0;
+            return edit->validator()->validate(text, pos) == QValidator::Acceptable;
+        }
+        return true;
+    }
+    return false;
+}
+
+static void mock_SetButtonDefaultEnabled(control_handle h, api_bool enable) {
+    QPushButton* btn = reinterpret_cast<QPushButton*>(h);
+    qDebug() << "[PCL Bridge] SetButtonDefaultEnabled:" << btn << (bool)enable;
+    if (btn) {
+        btn->setDefault(enable);
+    }
+}
+
+static void mock_ReturnDialog(control_handle h, int32 result) {
+    ::QDialog* dlg = reinterpret_cast<::QDialog*>(h);
+    qDebug() << "[PCL Bridge] ReturnDialog:" << dlg << "result =" << result;
+    if (dlg) {
+        dlg->done(result);
+    }
+}
+
+static void mock_SetProcessEditPreferencesRoutine(pcl::process_edit_preferences_routine f) {
+    if (g_currentDefiningProcess) {
+        g_processes[g_currentDefiningProcess].hasEditPreferences = (f != nullptr);
+        qDebug() << "[PCL Bridge] Process edit preferences routine set for:" << g_processes[g_currentDefiningProcess].id << "hasEditPreferences =" << g_processes[g_currentDefiningProcess].hasEditPreferences;
+    }
 }
 
 } // namespace blastro

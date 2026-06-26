@@ -58,6 +58,7 @@ struct PCLProcessInfo {
     pcl::process_initialization_routine initFn = nullptr;
     pcl::process_execution_routine executeFn = nullptr;
     pcl::process_global_execution_routine executeGlobalFn = nullptr;
+    bool hasEditPreferences = false;
 };
 
 class PCLBridge {
