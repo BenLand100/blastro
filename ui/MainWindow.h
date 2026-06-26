@@ -66,6 +66,11 @@ private slots:
     void onOpenPixelMath();
     void onOpenStacking();
     void onOpenCalibration();
+    void onOpenDebayer();
+    void onOpenRegister();
+    void onOpenAlign();
+    void onOpenBackgroundExtraction();
+    void onOpenGhs();
     void onSubWindowActivated(QMdiSubWindow* window);
     void updateStatusReadout(int x, int y, bool isRGB, const std::vector<float>& values);
     
@@ -78,6 +83,7 @@ private slots:
     void updateWindowMenu();
     void restoreProcessConsole();
     void onRenameElement(const QString& oldName, const QString& newName);
+    void onOpenPreferences();
 
 private:
     void createMenus();
@@ -87,8 +93,10 @@ private:
     WorkspaceArea* m_workspaceArea;
     int m_imageCounter;
     QLabel* m_statusReadout = nullptr;
+    QLabel* m_statusLabel = nullptr;
     ImageView* m_connectedImageView = nullptr;
     QProgressBar* m_progressBar = nullptr;
+    void showStatusMessage(const QString& message, int timeout = 0);
     bool m_algorithmRunning = false;
 
     std::unique_ptr<PCLBridge> m_pclBridge;
@@ -112,6 +120,11 @@ private:
     QAction* m_pixelMathAct;
     QAction* m_stackingAct;
     QAction* m_calibrationAct;
+    QAction* m_debayerAct;
+    QAction* m_registerAct;
+    QAction* m_alignAct;
+    QAction* m_backgroundAct;
+    QAction* m_ghsAct;
     QAction* m_loadPluginAct = nullptr;
 };
 

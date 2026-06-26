@@ -208,4 +208,51 @@ void WorkspaceImageWindow::notifyImageUpdated() {
     updateHistogram();
 }
 
+void WorkspaceImageWindow::setPreviewImage(const ImageVariant& previewImage) {
+    if (!m_hasPreviewActive) {
+        m_originalImageForPreview = currentImage();
+        m_hasPreviewActive = true;
+    }
+    m_imageView->setImage(previewImage, true);
+    notifyImageUpdated();
+}
+
+void WorkspaceImageWindow::restoreOriginalImage() {
+    if (m_hasPreviewActive) {
+        m_imageView->setImage(m_originalImageForPreview, true);
+        m_hasPreviewActive = false;
+        m_originalImageForPreview = ImageVariant();
+        notifyImageUpdated();
+    }
+}
+
+void WorkspaceImageWindow::commitPreviewImage(const ImageVariant& finalImage) {
+    if (m_hasPreviewActive) {
+        // Mutate the original image in-place
+        if (std::holds_alternative<GrayscaleImagePtr>(m_originalImageForPreview) &&
+            std::holds_alternative<GrayscaleImagePtr>(finalImage)) {
+            auto dst = std::get<GrayscaleImagePtr>(m_originalImageForPreview)->buffer();
+            auto src = std::get<GrayscaleImagePtr>(finalImage)->buffer();
+            if (dst->width() == src->width() && dst->height() == src->height()) {
+                std::copy(src->data(), src->data() + src->width() * src->height(), dst->data());
+            }
+        } else if (std::holds_alternative<RGBImagePtr>(m_originalImageForPreview) &&
+                   std::holds_alternative<RGBImagePtr>(finalImage)) {
+            auto dst = std::get<RGBImagePtr>(m_originalImageForPreview);
+            auto src = std::get<RGBImagePtr>(finalImage);
+            if (dst->width() == src->width() && dst->height() == src->height()) {
+                std::copy(src->r()->buffer()->data(), src->r()->buffer()->data() + src->width() * src->height(), dst->r()->buffer()->data());
+                std::copy(src->g()->buffer()->data(), src->g()->buffer()->data() + src->width() * src->height(), dst->g()->buffer()->data());
+                std::copy(src->b()->buffer()->data(), src->b()->buffer()->data() + src->width() * src->height(), dst->b()->buffer()->data());
+            }
+        }
+        
+        // Restore view pointer to the mutated original
+        m_imageView->setImage(m_originalImageForPreview, true);
+        m_hasPreviewActive = false;
+        m_originalImageForPreview = ImageVariant();
+        notifyImageUpdated();
+    }
+}
+
 } // namespace blastro

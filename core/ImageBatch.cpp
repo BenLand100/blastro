@@ -4,7 +4,7 @@
 namespace blastro {
 
 ImageBatch::ImageBatch(int count, LoaderFunc loader, const std::vector<std::string>& names, const std::vector<std::string>& filepaths)
-    : m_count(count), m_names(names), m_filepaths(filepaths), m_selected(count, true), m_cache(count) {
+    : m_count(count), m_names(names), m_filepaths(filepaths), m_selected(count, true), m_cache(count), m_metadata(count) {
     if (count <= 0) {
         throw std::invalid_argument("Batch must contain at least one image");
     }
@@ -33,7 +33,13 @@ ImageBatch::ImageBatch(int count, LoaderFunc loader, const std::vector<std::stri
     }
 }
 
+int ImageBatch::count() const {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return m_count;
+}
+
 ImageVariant ImageBatch::getImage(int index) {
+    std::lock_guard<std::mutex> lock(m_mutex);
     if (index < 0 || index >= m_count) {
         throw std::out_of_range("Batch index out of range");
     }
@@ -54,6 +60,7 @@ ImageVariant ImageBatch::getImage(int index) {
 }
 
 std::string ImageBatch::frameName(int index) const {
+    std::lock_guard<std::mutex> lock(m_mutex);
     if (index < 0 || index >= m_count) {
         throw std::out_of_range("Batch index out of range");
     }
@@ -61,6 +68,7 @@ std::string ImageBatch::frameName(int index) const {
 }
 
 bool ImageBatch::isFrameSelected(int index) const {
+    std::lock_guard<std::mutex> lock(m_mutex);
     if (index < 0 || index >= m_count) {
         throw std::out_of_range("Batch index out of range");
     }
@@ -68,6 +76,7 @@ bool ImageBatch::isFrameSelected(int index) const {
 }
 
 void ImageBatch::setFrameSelected(int index, bool selected) {
+    std::lock_guard<std::mutex> lock(m_mutex);
     if (index < 0 || index >= m_count) {
         throw std::out_of_range("Batch index out of range");
     }
@@ -75,6 +84,7 @@ void ImageBatch::setFrameSelected(int index, bool selected) {
 }
 
 std::string ImageBatch::frameFilepath(int index) const {
+    std::lock_guard<std::mutex> lock(m_mutex);
     if (index < 0 || index >= m_count) {
         throw std::out_of_range("Batch index out of range");
     }
@@ -82,6 +92,7 @@ std::string ImageBatch::frameFilepath(int index) const {
 }
 
 void ImageBatch::setFrameFilepath(int index, const std::string& path) {
+    std::lock_guard<std::mutex> lock(m_mutex);
     if (index < 0 || index >= m_count) {
         throw std::out_of_range("Batch index out of range");
     }
@@ -89,12 +100,45 @@ void ImageBatch::setFrameFilepath(int index, const std::string& path) {
 }
 
 void ImageBatch::addFrame(const std::string& name, const std::string& filepath, FrameLoader loader) {
+    std::lock_guard<std::mutex> lock(m_mutex);
     m_count++;
     m_names.push_back(name);
     m_filepaths.push_back(filepath);
     m_selected.push_back(true);
     m_cache.push_back(ImageVariant());
     m_loaders.push_back(loader);
+    m_metadata.push_back(FrameMetadata());
+}
+
+void ImageBatch::clearCache(int index) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if (index < 0 || index >= m_count) {
+        throw std::out_of_range("Batch index out of range");
+    }
+    m_cache[index] = ImageVariant();
+}
+
+void ImageBatch::clearCache() {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    for (int i = 0; i < m_count; ++i) {
+        m_cache[i] = ImageVariant();
+    }
+}
+
+FrameMetadata ImageBatch::frameMetadata(int index) const {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if (index < 0 || index >= m_count) {
+        throw std::out_of_range("Batch index out of range");
+    }
+    return m_metadata[index];
+}
+
+void ImageBatch::setFrameMetadata(int index, const FrameMetadata& metadata) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if (index < 0 || index >= m_count) {
+        throw std::out_of_range("Batch index out of range");
+    }
+    m_metadata[index] = metadata;
 }
 
 } // namespace blastro

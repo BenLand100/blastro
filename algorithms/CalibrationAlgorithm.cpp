@@ -3,9 +3,12 @@
 #include "core/RGBImage.h"
 #include "core/ImageBatch.h"
 #include "core/ImageBuffer.h"
+#include "core/TempDirectory.h"
+#include "io/FitsIO.h"
 #include <cmath>
 #include <stdexcept>
 #include <vector>
+#include <QDebug>
 
 namespace blastro {
 
@@ -89,6 +92,11 @@ void CalibrationAlgorithm::execute(WorkspaceRegistry& workspace,
     std::string darkName = config.at("dark_name");
     std::string flatName = config.at("flat_name");
 
+    qInfo() << "[Calibration] Starting execution. Input:" << QString::fromStdString(inputName) << ", output:" << QString::fromStdString(outputName);
+    qInfo() << "[Calibration] Calibration frames - Bias:" << (biasName.empty() ? "<None>" : QString::fromStdString(biasName))
+            << ", Dark:" << (darkName.empty() ? "<None>" : QString::fromStdString(darkName))
+            << ", Flat:" << (flatName.empty() ? "<None>" : QString::fromStdString(flatName));
+
     WorkspaceElement inputElem = workspace.getElement(inputName);
 
     // 1. Resolve optional Bias frame (can be Grayscale or RGB)
@@ -141,36 +149,64 @@ void CalibrationAlgorithm::execute(WorkspaceRegistry& workspace,
         auto inputBatch = std::get<ImageBatchPtr>(inputElem);
         int count = inputBatch->count();
         
-        std::vector<std::string> names(count);
-        std::vector<std::string> filepaths(count);
-        for (int i = 0; i < count; ++i) {
-            names[i] = inputBatch->frameName(i) + "_calibrated";
-            filepaths[i] = "";
+        std::string tempDir = TempDirectory::createTempDir("calibrated");
+        if (tempDir.empty()) {
+            throw std::runtime_error("Failed to create intermediate directory for calibration");
         }
 
-        // Return a lazily-evaluated ImageBatch that calibrates frames on-the-fly when requested
+        std::vector<std::string> names(count);
+        std::vector<std::string> filepaths(count);
+        
+        FitsIO writer;
+
+        for (int i = 0; i < count; ++i) {
+            ImageVariant frame = inputBatch->getImage(i);
+            ImageVariant calibratedFrame;
+
+            bool frameRGB = std::holds_alternative<RGBImagePtr>(frame);
+            if (frameRGB) {
+                auto rgb = std::get<RGBImagePtr>(frame);
+                auto calR = calibrateChannel(rgb->r(), biasR, darkR, flatR);
+                auto calG = calibrateChannel(rgb->g(), biasG, darkG, flatG);
+                auto calB = calibrateChannel(rgb->b(), biasB, darkB, flatB);
+                calibratedFrame = std::make_shared<RGBImage>(calR, calG, calB);
+            } else {
+                auto gray = std::get<GrayscaleImagePtr>(frame);
+                calibratedFrame = calibrateChannel(gray, biasR, darkR, flatR);
+            }
+
+            // Generate intermediate filename: e.g. light_001_calibrated.fits
+            std::string origPath = inputBatch->frameFilepath(i);
+            std::string outFilename = TempDirectory::getIntermediateFileName(origPath, "_calibrated", i);
+            std::string fullOutPath = tempDir + "/" + outFilename;
+
+            if (!writer.writeImage(fullOutPath, calibratedFrame)) {
+                throw std::runtime_error("Failed to write intermediate calibrated frame to " + fullOutPath);
+            }
+
+            names[i] = inputBatch->frameName(i) + "_calibrated";
+            filepaths[i] = fullOutPath;
+
+            // Evict frame from RAM to keep memory usage flat
+            inputBatch->clearCache(i);
+
+            if (progress) {
+                progress(static_cast<int>(100.0 * i / count));
+            }
+        }
+
+        // Return a disk-backed ImageBatch pointing to the temporary FITS files
         auto calibBatch = std::make_shared<ImageBatch>(
             count,
-            [inputBatch, biasR, biasG, biasB, darkR, darkG, darkB, flatR, flatG, flatB](int index) -> ImageVariant {
-                ImageVariant frame = inputBatch->getImage(index);
-                bool frameRGB = std::holds_alternative<RGBImagePtr>(frame);
-                if (frameRGB) {
-                    auto rgb = std::get<RGBImagePtr>(frame);
-                    auto calR = calibrateChannel(rgb->r(), biasR, darkR, flatR);
-                    auto calG = calibrateChannel(rgb->g(), biasG, darkG, flatG);
-                    auto calB = calibrateChannel(rgb->b(), biasB, darkB, flatB);
-                    return std::make_shared<RGBImage>(calR, calG, calB);
-                } else {
-                    auto gray = std::get<GrayscaleImagePtr>(frame);
-                    auto calGray = calibrateChannel(gray, biasR, darkR, flatR);
-                    return calGray;
-                }
+            [filepaths](int index) -> ImageVariant {
+                FitsIO reader;
+                return reader.readImage(filepaths[index]);
             },
             names,
             filepaths
         );
 
-        if (progress) progress(100); // Lazy batch calibration setup is instantaneous
+        if (progress) progress(100);
         workspace.registerElement(outputName, calibBatch);
     } else {
         // Single image calibration
@@ -188,6 +224,7 @@ void CalibrationAlgorithm::execute(WorkspaceRegistry& workspace,
             workspace.registerElement(outputName, calGray);
         }
     }
+    qInfo() << "[Calibration] Finished calibration. Registered output:" << QString::fromStdString(outputName);
 }
 
 } // namespace blastro

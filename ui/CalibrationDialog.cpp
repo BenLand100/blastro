@@ -12,17 +12,7 @@ CalibrationDialog::CalibrationDialog(WorkspaceRegistry& workspace, QWidget* pare
     setWindowTitle("Calibration Configuration");
     resize(360, 240);
 
-    // Apply high-quality dark theme styling matching StackingDialog
-    setStyleSheet(
-        "QDialog { background-color: #202020; color: #ffffff; }"
-        "QLabel { color: #aaaaaa; font-size: 11px; }"
-        "QLineEdit { background-color: #3a3a3a; color: #ffffff; border: 1px solid #555555; padding: 3px 6px; border-radius: 3px; font-size: 11px; }"
-        "QComboBox { background-color: #3a3a3a; color: #ffffff; border: 1px solid #555555; padding: 3px 6px; border-radius: 3px; font-size: 11px; }"
-        "QComboBox QAbstractItemView { background-color: #2a2a2a; color: #ffffff; selection-background-color: #007acc; }"
-        "QPushButton { background-color: #3a3a3a; color: #ffffff; border: 1px solid #555555; padding: 5px 14px; border-radius: 3px; font-size: 11px; font-weight: bold; }"
-        "QPushButton:hover { background-color: #4a4a4a; }"
-        "QPushButton:pressed { background-color: #007acc; }"
-    );
+
 
     QVBoxLayout* mainLayout = new QVBoxLayout(this);
     mainLayout->setContentsMargins(15, 15, 15, 15);
@@ -35,41 +25,22 @@ CalibrationDialog::CalibrationDialog(WorkspaceRegistry& workspace, QWidget* pare
 
     // 1. Target Input ComboBox (Images or Batches)
     m_targetInputCombo = new QComboBox(this);
-    auto keys = workspace.elementNames();
-    for (const auto& name : keys) {
-        m_targetInputCombo->addItem(QString::fromStdString(name));
-    }
-    formLayout->addRow("Target Input:", m_targetInputCombo);
-
+    
     // 2. Output Name LineEdit
     m_outputName = new QLineEdit(this);
     m_outputName->setText("calibrated_result");
-    formLayout->addRow("Output Name:", m_outputName);
-
-    // Helper lambda to populate calibration frame combos (only images, with <None> option)
-    auto populateCalibrationCombo = [&](QComboBox* combo) {
-        combo->addItem("<None>", "");
-        for (const auto& name : keys) {
-            WorkspaceElement elem = workspace.getElement(name);
-            if (std::holds_alternative<GrayscaleImagePtr>(elem) || std::holds_alternative<RGBImagePtr>(elem)) {
-                combo->addItem(QString::fromStdString(name), QString::fromStdString(name));
-            }
-        }
-    };
-
-    // 3. Bias Image ComboBox
+    
+    // Calibration comboboxes
     m_biasCombo = new QComboBox(this);
-    populateCalibrationCombo(m_biasCombo);
-    formLayout->addRow("Bias Image (Optional):", m_biasCombo);
-
-    // 4. Dark Image ComboBox
     m_darkCombo = new QComboBox(this);
-    populateCalibrationCombo(m_darkCombo);
-    formLayout->addRow("Dark Image (Optional):", m_darkCombo);
-
-    // 5. Flat Image ComboBox
     m_flatCombo = new QComboBox(this);
-    populateCalibrationCombo(m_flatCombo);
+    
+    refreshWorkspaceElements();
+    
+    formLayout->addRow("Target Input:", m_targetInputCombo);
+    formLayout->addRow("Output Name:", m_outputName);
+    formLayout->addRow("Bias Image (Optional):", m_biasCombo);
+    formLayout->addRow("Dark Image (Optional):", m_darkCombo);
     formLayout->addRow("Flat Image (Optional):", m_flatCombo);
 
     mainLayout->addLayout(formLayout);
@@ -78,12 +49,12 @@ CalibrationDialog::CalibrationDialog(WorkspaceRegistry& workspace, QWidget* pare
     QHBoxLayout* btnLayout = new QHBoxLayout();
     btnLayout->addStretch(1);
     
-    QPushButton* cancelBtn = new QPushButton("Cancel", this);
-    connect(cancelBtn, &QPushButton::clicked, this, &QDialog::reject);
-    btnLayout->addWidget(cancelBtn);
+    QPushButton* closeBtn = new QPushButton("Close", this);
+    connect(closeBtn, &QPushButton::clicked, this, &QWidget::close);
+    btnLayout->addWidget(closeBtn);
 
     QPushButton* runBtn = new QPushButton("Run", this);
-    runBtn->setStyleSheet("QPushButton { background-color: #007acc; border-color: #007acc; } QPushButton:hover { background-color: #008be5; }");
+    runBtn->setObjectName("primaryButton");
     connect(runBtn, &QPushButton::clicked, this, &CalibrationDialog::onRunClicked);
     btnLayout->addWidget(runBtn);
 
@@ -102,7 +73,6 @@ void CalibrationDialog::onRunClicked() {
     }
 
     emit algorithmExecuted(algorithmName(), getConfig());
-    accept();
 }
 
 std::map<std::string, std::string> CalibrationDialog::getConfig() const {
@@ -113,6 +83,51 @@ std::map<std::string, std::string> CalibrationDialog::getConfig() const {
     config["dark_name"] = m_darkCombo->currentData().toString().toStdString();
     config["flat_name"] = m_flatCombo->currentData().toString().toStdString();
     return config;
+}
+
+void CalibrationDialog::refreshWorkspaceElements() {
+    QString curTarget = m_targetInputCombo->currentText();
+    QString curBias = m_biasCombo->currentData().toString();
+    QString curDark = m_darkCombo->currentData().toString();
+    QString curFlat = m_flatCombo->currentData().toString();
+
+    m_targetInputCombo->clear();
+    m_biasCombo->clear();
+    m_darkCombo->clear();
+    m_flatCombo->clear();
+
+    auto keys = m_workspace.elementNames();
+
+    // Populate target
+    for (const auto& name : keys) {
+        m_targetInputCombo->addItem(QString::fromStdString(name));
+    }
+
+    // Populate calibration frames
+    auto populateCalibrationCombo = [&](QComboBox* combo, const QString& currentValue) {
+        combo->addItem("<None>", "");
+        for (const auto& name : keys) {
+            WorkspaceElement elem = m_workspace.getElement(name);
+            if (std::holds_alternative<GrayscaleImagePtr>(elem) || std::holds_alternative<RGBImagePtr>(elem)) {
+                combo->addItem(QString::fromStdString(name), QString::fromStdString(name));
+            }
+        }
+        int idx = combo->findData(currentValue);
+        if (idx >= 0) {
+            combo->setCurrentIndex(idx);
+        } else {
+            combo->setCurrentIndex(0);
+        }
+    };
+
+    populateCalibrationCombo(m_biasCombo, curBias);
+    populateCalibrationCombo(m_darkCombo, curDark);
+    populateCalibrationCombo(m_flatCombo, curFlat);
+
+    int idx = m_targetInputCombo->findText(curTarget);
+    if (idx >= 0) {
+        m_targetInputCombo->setCurrentIndex(idx);
+    }
 }
 
 } // namespace blastro

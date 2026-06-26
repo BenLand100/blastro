@@ -24,6 +24,7 @@ set(CMAKE_AUTORCC ON)
 set(CMAKE_AUTOUIC ON)
 
 find_package(Qt6 COMPONENTS Core Gui Widgets REQUIRED)
+find_package(OpenMP REQUIRED)
 
 # Try to find CCfits using find_library/find_path
 find_library(CCFITS_LIBRARY CCfits REQUIRED)
@@ -55,4 +56,12 @@ target_link_libraries(blastro PRIVATE
     Qt6::Core Qt6::Gui Qt6::Widgets
     ${CCFITS_LIBRARY}
     ${CFITSIO_LIBRARY}
+    OpenMP::OpenMP_CXX
+)
+
+add_executable(test_algorithms tests/test_algorithms.cpp)
+target_link_libraries(test_algorithms PRIVATE
+    blastro_core
+    blastro_algorithms
+    OpenMP::OpenMP_CXX
 )

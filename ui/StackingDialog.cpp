@@ -3,59 +3,43 @@
 #include <QFormLayout>
 #include <QHBoxLayout>
 #include <QMessageBox>
-#include <QDoubleValidator>
+#include <QDialog>
+#include <QSpinBox>
+#include <QLabel>
+#include <QThread>
 
 namespace blastro {
 
 StackingDialog::StackingDialog(WorkspaceRegistry& workspace, QWidget* parent)
     : AlgorithmDialog(workspace, parent) {
     
-    setWindowTitle("Stacking Configuration");
-    resize(360, 320);
+    setWindowTitle("Image Stacking Configuration");
+    resize(380, 260);
 
-    // Apply high-quality dark theme styling
-    setStyleSheet(
-        "QDialog { background-color: #202020; color: #ffffff; }"
-        "QLabel { color: #aaaaaa; font-size: 11px; }"
-        "QLineEdit { background-color: #3a3a3a; color: #ffffff; border: 1px solid #555555; padding: 3px 6px; border-radius: 3px; font-size: 11px; }"
-        "QLineEdit:disabled { background-color: #282828; color: #666666; border-color: #444444; }"
-        "QComboBox { background-color: #3a3a3a; color: #ffffff; border: 1px solid #555555; padding: 3px 6px; border-radius: 3px; font-size: 11px; }"
-        "QComboBox QAbstractItemView { background-color: #2a2a2a; color: #ffffff; selection-background-color: #007acc; }"
-        "QGroupBox { border: 1px solid #444444; border-radius: 4px; margin-top: 12px; padding-top: 12px; color: #ffffff; font-weight: bold; font-size: 11px; }"
-        "QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 4px; }"
-        "QPushButton { background-color: #3a3a3a; color: #ffffff; border: 1px solid #555555; padding: 5px 14px; border-radius: 3px; font-size: 11px; font-weight: bold; }"
-        "QPushButton:hover { background-color: #4a4a4a; }"
-        "QPushButton:pressed { background-color: #007acc; }"
-    );
+
 
     QVBoxLayout* mainLayout = new QVBoxLayout(this);
     mainLayout->setContentsMargins(15, 15, 15, 15);
-    mainLayout->setSpacing(10);
+    mainLayout->setSpacing(12);
 
     QFormLayout* formLayout = new QFormLayout();
     formLayout->setLabelAlignment(Qt::AlignRight | Qt::AlignVCenter);
     formLayout->setFormAlignment(Qt::AlignLeft | Qt::AlignTop);
     formLayout->setSpacing(8);
 
-    // 1. Target Batch ComboBox
-    m_targetBatchCombo = new QComboBox(this);
-    auto keys = workspace.elementNames();
-    for (const auto& name : keys) {
-        WorkspaceElement elem = workspace.getElement(name);
-        if (std::holds_alternative<ImageBatchPtr>(elem)) {
-            m_targetBatchCombo->addItem(QString::fromStdString(name));
-        }
-    }
-    formLayout->addRow("Target Batch:", m_targetBatchCombo);
+    // 1. Target Input ComboBox (Must be a batch)
+    m_targetInputCombo = new QComboBox(this);
+    refreshWorkspaceElements();
+    formLayout->addRow("Aligned Batch:", m_targetInputCombo);
 
     // 2. Output Name LineEdit
     m_outputName = new QLineEdit(this);
-    m_outputName->setText("stacked_image");
+    m_outputName->setText("stacked_master");
     formLayout->addRow("Output Name:", m_outputName);
 
     // 3. Stacking Method ComboBox
     m_methodCombo = new QComboBox(this);
-    m_methodCombo->addItem("Average", "average");
+    m_methodCombo->addItem("Average (Mean)", "average");
     m_methodCombo->addItem("Median", "median");
     m_methodCombo->addItem("Maximum", "max");
     m_methodCombo->addItem("Minimum", "min");
@@ -63,107 +47,158 @@ StackingDialog::StackingDialog(WorkspaceRegistry& workspace, QWidget* parent)
 
     // 4. Rejection Method ComboBox
     m_rejectionCombo = new QComboBox(this);
-    m_rejectionCombo->addItem("None", "none");
-    m_rejectionCombo->addItem("Quantile", "quantile");
-    m_rejectionCombo->addItem("Sigma Clipping", "sigma");
+    m_rejectionCombo->addItem("No Rejection", "none");
     m_rejectionCombo->addItem("Winsorized Sigma Clipping", "winsorized_sigma");
+    m_rejectionCombo->addItem("Sigma Clipping", "sigma");
+    m_rejectionCombo->addItem("Quantile Rejection", "quantile");
     formLayout->addRow("Rejection Method:", m_rejectionCombo);
+    connect(m_rejectionCombo, &QComboBox::currentTextChanged, this, &StackingDialog::onRejectionChanged);
+
+    // 5. Stacking Mode ComboBox
+    m_modeCombo = new QComboBox(this);
+    m_modeCombo->addItem("Full RAM Stacking", "ram");
+    m_modeCombo->addItem("2D Chunked (Patch-based)", "chunked");
+    m_modeCombo->setCurrentIndex(1); // default to chunked
+    formLayout->addRow("Stacking Mode:", m_modeCombo);
+
+    // 5. Low / High Rejection range
+    m_lowClipSpin = new QDoubleSpinBox(this);
+    m_lowClipSpin->setRange(0.0, 10.0);
+    m_lowClipSpin->setSingleStep(0.05);
+    m_lowClipSpin->setValue(0.03);
+
+    m_slashLabel = new QLabel("/", this);
+    m_slashLabel->setStyleSheet("QLabel { color: #aaaaaa; font-weight: bold; font-size: 12px; } QLabel:disabled { color: #4a4a4a; }");
+
+    m_highClipSpin = new QDoubleSpinBox(this);
+    m_highClipSpin->setRange(0.0, 10.0);
+    m_highClipSpin->setSingleStep(0.05);
+    m_highClipSpin->setValue(0.03);
+
+    QHBoxLayout* clipLayout = new QHBoxLayout();
+    clipLayout->setSpacing(6);
+    clipLayout->addWidget(m_lowClipSpin);
+    clipLayout->addWidget(m_slashLabel);
+    clipLayout->addWidget(m_highClipSpin);
+    clipLayout->addStretch(1);
+
+    m_clipLabel = new QLabel("Low / High Rejection:", this);
+    formLayout->addRow(m_clipLabel, clipLayout);
 
     mainLayout->addLayout(formLayout);
 
-    // 5. Parameters GroupBox (disabled/enabled dynamically)
-    m_paramGroup = new QGroupBox("Rejection Parameters", this);
-    QFormLayout* paramLayout = new QFormLayout(m_paramGroup);
-    paramLayout->setSpacing(6);
+    // Initial trigger for label adjustments
+    onRejectionChanged(m_rejectionCombo->currentText());
 
-    QDoubleValidator* doubleValidator = new QDoubleValidator(this);
-    doubleValidator->setBottom(0.0);
-
-    QDoubleValidator* fractionValidator = new QDoubleValidator(0.0, 0.5, 4, this);
-
-    m_sigmaLowLabel = new QLabel("Sigma Low:", this);
-    m_sigmaLowEdit = new QLineEdit(this);
-    m_sigmaLowEdit->setText("3.0");
-    m_sigmaLowEdit->setValidator(doubleValidator);
-    paramLayout->addRow(m_sigmaLowLabel, m_sigmaLowEdit);
-
-    m_sigmaHighLabel = new QLabel("Sigma High:", this);
-    m_sigmaHighEdit = new QLineEdit(this);
-    m_sigmaHighEdit->setText("3.0");
-    m_sigmaHighEdit->setValidator(doubleValidator);
-    paramLayout->addRow(m_sigmaHighLabel, m_sigmaHighEdit);
-
-    m_quantileLowLabel = new QLabel("Quantile Low:", this);
-    m_quantileLowEdit = new QLineEdit(this);
-    m_quantileLowEdit->setText("0.0");
-    m_quantileLowEdit->setValidator(fractionValidator);
-    paramLayout->addRow(m_quantileLowLabel, m_quantileLowEdit);
-
-    m_quantileHighLabel = new QLabel("Quantile High:", this);
-    m_quantileHighEdit = new QLineEdit(this);
-    m_quantileHighEdit->setText("0.0");
-    m_quantileHighEdit->setValidator(fractionValidator);
-    paramLayout->addRow(m_quantileHighLabel, m_quantileHighEdit);
-
-    mainLayout->addWidget(m_paramGroup);
-
-    // Connect rejection combo box change signal to dynamic layout slots
-    connect(m_rejectionCombo, qOverload<int>(&QComboBox::currentIndexChanged), this, &StackingDialog::onRejectionChanged);
-    onRejectionChanged(0); // Trigger initial state
-
-    // 6. Buttons Box
+    // Buttons Box
     QHBoxLayout* btnLayout = new QHBoxLayout();
+    
+    QPushButton* prefsBtn = new QPushButton("Preferences...", this);
+    connect(prefsBtn, &QPushButton::clicked, this, &StackingDialog::onPrefsClicked);
+    btnLayout->addWidget(prefsBtn);
+
     btnLayout->addStretch(1);
     
-    QPushButton* cancelBtn = new QPushButton("Cancel", this);
-    connect(cancelBtn, &QPushButton::clicked, this, &QDialog::reject);
-    btnLayout->addWidget(cancelBtn);
+    QPushButton* closeBtn = new QPushButton("Close", this);
+    connect(closeBtn, &QPushButton::clicked, this, &QWidget::close);
+    btnLayout->addWidget(closeBtn);
 
     QPushButton* runBtn = new QPushButton("Run", this);
-    runBtn->setStyleSheet("QPushButton { background-color: #007acc; border-color: #007acc; } QPushButton:hover { background-color: #008be5; }");
+    runBtn->setObjectName("primaryButton");
     connect(runBtn, &QPushButton::clicked, this, &StackingDialog::onRunClicked);
     btnLayout->addWidget(runBtn);
 
     mainLayout->addLayout(btnLayout);
 }
 
-void StackingDialog::onRejectionChanged(int index) {
-    Q_UNUSED(index);
-    QString rej = m_rejectionCombo->currentData().toString();
-    
-    if (rej == "none") {
-        m_paramGroup->setEnabled(false);
-    } else if (rej == "quantile") {
-        m_paramGroup->setEnabled(true);
-        
-        m_sigmaLowLabel->setEnabled(false);
-        m_sigmaLowEdit->setEnabled(false);
-        m_sigmaHighLabel->setEnabled(false);
-        m_sigmaHighEdit->setEnabled(false);
-        
-        m_quantileLowLabel->setEnabled(true);
-        m_quantileLowEdit->setEnabled(true);
-        m_quantileHighLabel->setEnabled(true);
-        m_quantileHighEdit->setEnabled(true);
+void StackingDialog::onRejectionChanged(const QString& text) {
+    if (text == "No Rejection") {
+        if (m_clipLabel) m_clipLabel->setEnabled(false);
+        if (m_lowClipSpin) m_lowClipSpin->setEnabled(false);
+        if (m_highClipSpin) m_highClipSpin->setEnabled(false);
+        if (m_slashLabel) m_slashLabel->setEnabled(false);
+    } else if (text == "Quantile Rejection") {
+        if (m_clipLabel) m_clipLabel->setEnabled(true);
+        if (m_lowClipSpin) m_lowClipSpin->setEnabled(true);
+        if (m_highClipSpin) m_highClipSpin->setEnabled(true);
+        if (m_slashLabel) m_slashLabel->setEnabled(true);
+        // Quantiles are in range [0, 0.5]
+        m_lowClipSpin->setRange(0.0, 0.5);
+        m_highClipSpin->setRange(0.0, 0.5);
+        m_lowClipSpin->setSingleStep(0.01);
+        m_highClipSpin->setSingleStep(0.01);
+        m_lowClipSpin->setValue(0.03);
+        m_highClipSpin->setValue(0.03);
     } else {
-        // sigma or winsorized_sigma
-        m_paramGroup->setEnabled(true);
-        
-        m_sigmaLowLabel->setEnabled(true);
-        m_sigmaLowEdit->setEnabled(true);
-        m_sigmaHighLabel->setEnabled(true);
-        m_sigmaHighEdit->setEnabled(true);
-        
-        m_quantileLowLabel->setEnabled(false);
-        m_quantileLowEdit->setEnabled(false);
-        m_quantileHighLabel->setEnabled(false);
-        m_quantileHighEdit->setEnabled(false);
+        if (m_clipLabel) m_clipLabel->setEnabled(true);
+        if (m_lowClipSpin) m_lowClipSpin->setEnabled(true);
+        if (m_highClipSpin) m_highClipSpin->setEnabled(true);
+        if (m_slashLabel) m_slashLabel->setEnabled(true);
+        // Sigma clipping and Winsorized Sigma clipping thresholds are standard deviations
+        m_lowClipSpin->setRange(0.1, 10.0);
+        m_highClipSpin->setRange(0.1, 10.0);
+        m_lowClipSpin->setSingleStep(0.1);
+        m_highClipSpin->setSingleStep(0.1);
+        m_lowClipSpin->setValue(3.0);
+        m_highClipSpin->setValue(3.0);
+    }
+}
+
+void StackingDialog::onPrefsClicked() {
+    QDialog dlg(this);
+    dlg.setWindowTitle("Stacking Preferences");
+    dlg.resize(300, 160);
+    dlg.setStyleSheet(styleSheet());
+
+    QFormLayout* form = new QFormLayout(&dlg);
+    form->setContentsMargins(15, 15, 15, 15);
+    form->setSpacing(10);
+
+    QComboBox* weightCombo = new QComboBox(&dlg);
+    weightCombo->addItem("None (Equal weights)", "none");
+    weightCombo->addItem("SNR-based Weighting", "snr");
+    weightCombo->addItem("FWHM-based Weighting", "fwhm");
+    if (m_weightMethod == "snr") weightCombo->setCurrentIndex(1);
+    else if (m_weightMethod == "fwhm") weightCombo->setCurrentIndex(2);
+    form->addRow("Frame Weighting:", weightCombo);
+
+    QSpinBox* patchSpin = new QSpinBox(&dlg);
+    patchSpin->setRange(16, 4096);
+    patchSpin->setSingleStep(16);
+    patchSpin->setValue(m_patchSize);
+    
+    // Toggle the patch size spinbox's enabled state based on the selected stacking mode
+    bool isChunked = (m_modeCombo->currentData().toString() == "chunked");
+    patchSpin->setEnabled(isChunked);
+    
+    form->addRow("Stack Patch Size:", patchSpin);
+
+    QSpinBox* threadSpin = new QSpinBox(&dlg);
+    threadSpin->setRange(1, 64);
+    threadSpin->setValue(m_threads > 0 ? m_threads : QThread::idealThreadCount());
+    form->addRow("Computation Threads:", threadSpin);
+
+    QHBoxLayout* btns = new QHBoxLayout();
+    btns->addStretch(1);
+    QPushButton* cancel = new QPushButton("Cancel", &dlg);
+    connect(cancel, &QPushButton::clicked, &dlg, &QDialog::reject);
+    btns->addWidget(cancel);
+    QPushButton* ok = new QPushButton("OK", &dlg);
+    ok->setObjectName("primaryButton");
+    connect(ok, &QPushButton::clicked, &dlg, &QDialog::accept);
+    btns->addWidget(ok);
+    form->addRow(btns);
+
+    if (dlg.exec() == QDialog::Accepted) {
+        m_weightMethod = weightCombo->currentData().toString().toStdString();
+        m_patchSize = patchSpin->value();
+        m_threads = threadSpin->value();
     }
 }
 
 void StackingDialog::onRunClicked() {
-    if (m_targetBatchCombo->currentText().isEmpty()) {
-        QMessageBox::warning(this, "Configuration Error", "Please select a target batch to stack.");
+    if (m_targetInputCombo->currentText().isEmpty()) {
+        QMessageBox::warning(this, "Configuration Error", "Please select an aligned batch to stack.");
         return;
     }
 
@@ -173,22 +208,49 @@ void StackingDialog::onRunClicked() {
     }
 
     emit algorithmExecuted(algorithmName(), getConfig());
-    accept();
 }
 
 std::map<std::string, std::string> StackingDialog::getConfig() const {
     std::map<std::string, std::string> config;
-    config["input_name"] = m_targetBatchCombo->currentText().toStdString();
+    config["input_name"] = m_targetInputCombo->currentText().toStdString();
     config["output_name"] = m_outputName->text().trimmed().toStdString();
     config["method"] = m_methodCombo->currentData().toString().toStdString();
     config["rejection"] = m_rejectionCombo->currentData().toString().toStdString();
     
-    config["sigma_low"] = m_sigmaLowEdit->text().toStdString();
-    config["sigma_high"] = m_sigmaHighEdit->text().toStdString();
-    config["quantile_low"] = m_quantileLowEdit->text().toStdString();
-    config["quantile_high"] = m_quantileHighEdit->text().toStdString();
-    
+    std::string rej = m_rejectionCombo->currentData().toString().toStdString();
+    if (rej == "quantile") {
+        config["quantile_low"] = std::to_string(m_lowClipSpin->value());
+        config["quantile_high"] = std::to_string(m_highClipSpin->value());
+        config["sigma_low"] = "3.0";
+        config["sigma_high"] = "3.0";
+    } else {
+        config["sigma_low"] = std::to_string(m_lowClipSpin->value());
+        config["sigma_high"] = std::to_string(m_highClipSpin->value());
+        config["quantile_low"] = "0.03";
+        config["quantile_high"] = "0.03";
+    }
+
+    config["weight_method"] = m_weightMethod;
+    config["stacking_mode"] = m_modeCombo->currentData().toString().toStdString();
+    config["patch_size"] = std::to_string(m_patchSize);
+    config["threads"] = std::to_string(m_threads);
     return config;
+}
+
+void StackingDialog::refreshWorkspaceElements() {
+    QString currentText = m_targetInputCombo->currentText();
+    m_targetInputCombo->clear();
+    auto keys = m_workspace.elementNames();
+    for (const auto& name : keys) {
+        WorkspaceElement elem = m_workspace.getElement(name);
+        if (std::holds_alternative<ImageBatchPtr>(elem)) {
+            m_targetInputCombo->addItem(QString::fromStdString(name));
+        }
+    }
+    int idx = m_targetInputCombo->findText(currentText);
+    if (idx >= 0) {
+        m_targetInputCombo->setCurrentIndex(idx);
+    }
 }
 
 } // namespace blastro

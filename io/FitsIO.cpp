@@ -16,22 +16,9 @@ static float determineScaleFactor(int bitpix, const std::valarray<float>& conten
         scaleFactor = 65535.0f;
     } else if (bitpix == 32) {
         scaleFactor = 4294967295.0f;
-    } else if (bitpix < 0) {
-        // Floating point FITS. Check if it is stored in raw integer ranges.
-        float maxVal = -1e30f;
-        for (size_t i = 0; i < contents.size(); ++i) {
-            if (contents[i] > maxVal) {
-                maxVal = contents[i];
-            }
-        }
-        if (maxVal > 1.0f) {
-            if (maxVal > 255.0f) {
-                scaleFactor = 65535.0f;
-            } else {
-                scaleFactor = 255.0f;
-            }
-        }
     }
+    // bitpix < 0 means floating-point FITS (FLOAT_IMG / DOUBLE_IMG).
+    // Values are stored as true floats — no integer-range normalisation needed.
     return scaleFactor;
 }
 
@@ -304,6 +291,132 @@ bool FitsIO::writeBatch(const std::string& filepath, ImageBatchPtr batch) {
         return true;
     } catch (CCfits::FitsException& ex) {
         std::cerr << "FITS write batch error: " << ex.message() << std::endl;
+        return false;
+    }
+}
+
+ImageVariant FitsIO::readImagePatch(const std::string& filepath, int xStart, int yStart, int patchW, int patchH) {
+    try {
+        std::unique_ptr<CCfits::FITS> pInfile(new CCfits::FITS(filepath, CCfits::Read, true));
+        CCfits::PHDU& image = pInfile->pHDU();
+
+        int axes = image.axes();
+        if (axes < 2) {
+            throw std::runtime_error("FITS file must have at least 2 dimensions");
+        }
+
+        if (axes == 2) {
+            // Grayscale image patch
+            std::valarray<float> contents;
+            std::vector<long> fp = { xStart + 1, yStart + 1 };
+            std::vector<long> lp = { xStart + patchW, yStart + patchH };
+            std::vector<long> stride = { 1, 1 };
+            image.read(contents, fp, lp, stride);
+
+            auto grayImg = std::make_shared<GrayscaleImage>(patchW, patchH);
+            auto buffer = grayImg->buffer();
+            float scale = determineScaleFactor(image.bitpix(), contents);
+            for (int y = 0; y < patchH; ++y) {
+                for (int x = 0; x < patchW; ++x) {
+                    buffer->setPixel(x, y, contents[y * patchW + x] / scale);
+                }
+            }
+            return grayImg;
+        } else if (axes == 3) {
+            long depth = image.axis(2);
+            if (depth == 3) {
+                // RGB image patch
+                std::valarray<float> contents;
+                std::vector<long> fp = { xStart + 1, yStart + 1, 1 };
+                std::vector<long> lp = { xStart + patchW, yStart + patchH, 3 };
+                std::vector<long> stride = { 1, 1, 1 };
+                image.read(contents, fp, lp, stride);
+
+                auto rgbImg = std::make_shared<RGBImage>(patchW, patchH);
+                auto bufR = rgbImg->r()->buffer();
+                auto bufG = rgbImg->g()->buffer();
+                auto bufB = rgbImg->b()->buffer();
+
+                float scale = determineScaleFactor(image.bitpix(), contents);
+                long planeSize = patchW * patchH;
+                for (int y = 0; y < patchH; ++y) {
+                    for (int x = 0; x < patchW; ++x) {
+                        long idx = y * patchW + x;
+                        bufR->setPixel(x, y, contents[idx] / scale);
+                        bufG->setPixel(x, y, contents[planeSize + idx] / scale);
+                        bufB->setPixel(x, y, contents[2 * planeSize + idx] / scale);
+                    }
+                }
+                return rgbImg;
+            } else {
+                throw std::runtime_error("Unsupported FITS dimensions for patch read");
+            }
+        } else {
+            throw std::runtime_error("Unsupported FITS dimensions for patch read");
+        }
+    } catch (CCfits::FitsException& ex) {
+        throw std::runtime_error(std::string("CCfits Error: ") + ex.message());
+    }
+}
+
+bool FitsIO::writeImagePatch(const std::string& filepath, const ImageVariant& patch, int xStart, int yStart) {
+    try {
+        std::unique_ptr<CCfits::FITS> pOutfile(new CCfits::FITS(filepath, CCfits::Write));
+        CCfits::PHDU& phdu = pOutfile->pHDU();
+
+        long patchW = 0;
+        long patchH = 0;
+        int planes = 0;
+
+        if (std::holds_alternative<GrayscaleImagePtr>(patch)) {
+            auto img = std::get<GrayscaleImagePtr>(patch);
+            patchW = img->width();
+            patchH = img->height();
+            planes = 1;
+        } else {
+            auto img = std::get<RGBImagePtr>(patch);
+            patchW = img->width();
+            patchH = img->height();
+            planes = 3;
+        }
+
+        long planeSize = patchW * patchH;
+        std::valarray<float> arrayData(planeSize * planes);
+
+        if (planes == 1) {
+            auto img = std::get<GrayscaleImagePtr>(patch);
+            auto buffer = img->buffer();
+            for (int y = 0; y < patchH; ++y) {
+                for (int x = 0; x < patchW; ++x) {
+                    arrayData[y * patchW + x] = buffer->pixel(x, y);
+                }
+            }
+            std::vector<long> fp = { xStart + 1, yStart + 1 };
+            std::vector<long> lp = { xStart + patchW, yStart + patchH };
+            std::vector<long> stride = { 1, 1 };
+            phdu.write(fp, lp, stride, arrayData);
+        } else {
+            auto img = std::get<RGBImagePtr>(patch);
+            auto bufR = img->r()->buffer();
+            auto bufG = img->g()->buffer();
+            auto bufB = img->b()->buffer();
+            for (int y = 0; y < patchH; ++y) {
+                for (int x = 0; x < patchW; ++x) {
+                    long idx = y * patchW + x;
+                    arrayData[idx] = bufR->pixel(x, y);
+                    arrayData[planeSize + idx] = bufG->pixel(x, y);
+                    arrayData[2 * planeSize + idx] = bufB->pixel(x, y);
+                }
+            }
+            std::vector<long> fp = { xStart + 1, yStart + 1, 1 };
+            std::vector<long> lp = { xStart + patchW, yStart + patchH, 3 };
+            std::vector<long> stride = { 1, 1, 1 };
+            phdu.write(fp, lp, stride, arrayData);
+        }
+
+        return true;
+    } catch (CCfits::FitsException& ex) {
+        std::cerr << "FITS write patch error: " << ex.message() << std::endl;
         return false;
     }
 }

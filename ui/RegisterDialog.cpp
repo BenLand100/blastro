@@ -1,0 +1,189 @@
+#include "RegisterDialog.h"
+#include <QVBoxLayout>
+#include <QFormLayout>
+#include <QHBoxLayout>
+#include <QMessageBox>
+#include <QDialog>
+#include <QCheckBox>
+#include <QThread>
+
+namespace blastro {
+
+RegisterDialog::RegisterDialog(WorkspaceRegistry& workspace, QWidget* parent)
+    : AlgorithmDialog(workspace, parent) {
+    
+    setWindowTitle("Star Registration Configuration");
+    resize(380, 240);
+
+
+
+    QVBoxLayout* mainLayout = new QVBoxLayout(this);
+    mainLayout->setContentsMargins(15, 15, 15, 15);
+    mainLayout->setSpacing(12);
+
+    QFormLayout* formLayout = new QFormLayout();
+    formLayout->setLabelAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    formLayout->setFormAlignment(Qt::AlignLeft | Qt::AlignTop);
+    formLayout->setSpacing(8);
+
+    // 1. Target Input ComboBox (Must be a batch)
+    m_targetInputCombo = new QComboBox(this);
+    refreshWorkspaceElements();
+    formLayout->addRow("Input Batch:", m_targetInputCombo);
+
+    // 2. Reference Frame Index
+    m_refIdxSpin = new QSpinBox(this);
+    m_refIdxSpin->setRange(0, 9999);
+    m_refIdxSpin->setValue(0); // 0 is first frame
+    formLayout->addRow("Reference Frame Index:", m_refIdxSpin);
+
+    // 3. Star Detection Method
+    m_methodCombo = new QComboBox(this);
+    m_methodCombo->addItem("Fast Centroid", "centroid");
+    m_methodCombo->addItem("Gaussian Profile Fit (NM Solver)", "gaussian");
+    formLayout->addRow("Detection Method:", m_methodCombo);
+
+    // 4. SNR Threshold
+    m_snrSpin = new QDoubleSpinBox(this);
+    m_snrSpin->setRange(1.0, 100.0);
+    m_snrSpin->setSingleStep(0.5);
+    m_snrSpin->setValue(5.0);
+    formLayout->addRow("Detection SNR Min:", m_snrSpin);
+
+    // 5. Min FWHM
+    m_minFwhmSpin = new QDoubleSpinBox(this);
+    m_minFwhmSpin->setRange(0.5, 20.0);
+    m_minFwhmSpin->setSingleStep(0.1);
+    m_minFwhmSpin->setValue(2.0);
+    formLayout->addRow("Min Star FWHM:", m_minFwhmSpin);
+
+    mainLayout->addLayout(formLayout);
+
+    // Buttons Box
+    QHBoxLayout* btnLayout = new QHBoxLayout();
+    
+    QPushButton* prefsBtn = new QPushButton("Preferences...", this);
+    connect(prefsBtn, &QPushButton::clicked, this, &RegisterDialog::onPrefsClicked);
+    btnLayout->addWidget(prefsBtn);
+
+    btnLayout->addStretch(1);
+    
+    QPushButton* closeBtn = new QPushButton("Close", this);
+    connect(closeBtn, &QPushButton::clicked, this, &QWidget::close);
+    btnLayout->addWidget(closeBtn);
+
+    QPushButton* runBtn = new QPushButton("Run", this);
+    runBtn->setObjectName("primaryButton");
+    connect(runBtn, &QPushButton::clicked, this, &RegisterDialog::onRunClicked);
+    btnLayout->addWidget(runBtn);
+
+    mainLayout->addLayout(btnLayout);
+}
+
+void RegisterDialog::onPrefsClicked() {
+    QDialog dlg(this);
+    dlg.setWindowTitle("Registration Preferences");
+    dlg.resize(320, 240);
+    dlg.setStyleSheet(styleSheet());
+
+    QFormLayout* form = new QFormLayout(&dlg);
+    form->setContentsMargins(15, 15, 15, 15);
+    form->setSpacing(10);
+
+    QSpinBox* maxStarsSpin = new QSpinBox(&dlg);
+    maxStarsSpin->setRange(10, 2000);
+    maxStarsSpin->setValue(m_maxStars);
+    form->addRow("Max Stars to Detect:", maxStarsSpin);
+
+    QDoubleSpinBox* maxEccSpin = new QDoubleSpinBox(&dlg);
+    maxEccSpin->setRange(0.1, 1.0);
+    maxEccSpin->setSingleStep(0.05);
+    maxEccSpin->setValue(m_maxEccentricity);
+    form->addRow("Max Star Eccentricity:", maxEccSpin);
+
+    QDoubleSpinBox* matchTolSpin = new QDoubleSpinBox(&dlg);
+    matchTolSpin->setRange(0.1, 10.0);
+    matchTolSpin->setSingleStep(0.1);
+    matchTolSpin->setValue(m_matchTol);
+    form->addRow("Constellation Match Tol (px):", matchTolSpin);
+
+    QDoubleSpinBox* simplexTolSpin = new QDoubleSpinBox(&dlg);
+    simplexTolSpin->setDecimals(6);
+    simplexTolSpin->setRange(1e-6, 1e-2);
+    simplexTolSpin->setSingleStep(1e-5);
+    simplexTolSpin->setValue(m_simplexTol);
+    form->addRow("Simplex Fit Tolerance:", simplexTolSpin);
+
+    QSpinBox* simplexIterSpin = new QSpinBox(&dlg);
+    simplexIterSpin->setRange(10, 2000);
+    simplexIterSpin->setValue(m_simplexMaxIter);
+    form->addRow("Simplex Max Iterations:", simplexIterSpin);
+
+    QSpinBox* threadSpin = new QSpinBox(&dlg);
+    threadSpin->setRange(1, 64);
+    threadSpin->setValue(m_threads > 0 ? m_threads : QThread::idealThreadCount());
+    form->addRow("Orchestration Threads:", threadSpin);
+
+    QHBoxLayout* btns = new QHBoxLayout();
+    btns->addStretch(1);
+    QPushButton* cancel = new QPushButton("Cancel", &dlg);
+    connect(cancel, &QPushButton::clicked, &dlg, &QDialog::reject);
+    btns->addWidget(cancel);
+    QPushButton* ok = new QPushButton("OK", &dlg);
+    ok->setObjectName("primaryButton");
+    connect(ok, &QPushButton::clicked, &dlg, &QDialog::accept);
+    btns->addWidget(ok);
+    form->addRow(btns);
+
+    if (dlg.exec() == QDialog::Accepted) {
+        m_maxStars = maxStarsSpin->value();
+        m_maxEccentricity = maxEccSpin->value();
+        m_matchTol = matchTolSpin->value();
+        m_simplexTol = simplexTolSpin->value();
+        m_simplexMaxIter = simplexIterSpin->value();
+        m_threads = threadSpin->value();
+    }
+}
+
+void RegisterDialog::onRunClicked() {
+    if (m_targetInputCombo->currentText().isEmpty()) {
+        QMessageBox::warning(this, "Configuration Error", "Please select a target image batch to register.");
+        return;
+    }
+
+    emit algorithmExecuted(algorithmName(), getConfig());
+}
+
+std::map<std::string, std::string> RegisterDialog::getConfig() const {
+    std::map<std::string, std::string> config;
+    config["input_name"] = m_targetInputCombo->currentText().toStdString();
+    config["ref_frame_index"] = std::to_string(m_refIdxSpin->value());
+    config["detection_method"] = m_methodCombo->currentData().toString().toStdString();
+    config["snr_min"] = std::to_string(m_snrSpin->value());
+    config["min_fwhm"] = std::to_string(m_minFwhmSpin->value());
+    config["max_stars"] = std::to_string(m_maxStars);
+    config["max_eccentricity"] = std::to_string(m_maxEccentricity);
+    config["match_tolerance"] = std::to_string(m_matchTol);
+    config["simplex_tolerance"] = std::to_string(m_simplexTol);
+    config["simplex_max_iterations"] = std::to_string(m_simplexMaxIter);
+    config["threads"] = std::to_string(m_threads);
+    return config;
+}
+
+void RegisterDialog::refreshWorkspaceElements() {
+    QString currentText = m_targetInputCombo->currentText();
+    m_targetInputCombo->clear();
+    auto keys = m_workspace.elementNames();
+    for (const auto& name : keys) {
+        WorkspaceElement elem = m_workspace.getElement(name);
+        if (std::holds_alternative<ImageBatchPtr>(elem)) {
+            m_targetInputCombo->addItem(QString::fromStdString(name));
+        }
+    }
+    int idx = m_targetInputCombo->findText(currentText);
+    if (idx >= 0) {
+        m_targetInputCombo->setCurrentIndex(idx);
+    }
+}
+
+} // namespace blastro

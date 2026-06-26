@@ -1,0 +1,144 @@
+#include "BackgroundExtractionAlgorithm.h"
+#include "BackgroundExtractor.h"
+#include "core/GrayscaleImage.h"
+#include "core/RGBImage.h"
+#include "core/ImageBatch.h"
+#include "core/TempDirectory.h"
+#include "io/FitsIO.h"
+#include <stdexcept>
+#include <iostream>
+#include <QDebug>
+
+namespace blastro {
+
+void BackgroundExtractionAlgorithm::execute(WorkspaceRegistry& workspace,
+                                            const std::map<std::string, std::string>& config,
+                                            ProgressCallback progress) {
+    std::string inputName  = config.count("input_name")  ? config.at("input_name")  : "";
+    std::string outputName = config.count("output_name") ? config.at("output_name") : "";
+
+    if (inputName.empty()) {
+        auto names = workspace.elementNames();
+        if (names.empty())
+            throw std::runtime_error("No images in the workspace to extract background from");
+        inputName = names[0];
+    }
+    if (outputName.empty())
+        outputName = inputName + "_neutralized";
+
+    int    order      = config.count("order")       ? std::stoi(config.at("order"))       : 3;
+    double sigmaCut   = config.count("sigma_cut")   ? std::stod(config.at("sigma_cut"))   : 3.0;
+    bool   equalize   = config.count("equalize")    ? (config.at("equalize") == "true")   : true;
+    double sampleFrac = config.count("sample_frac") ? std::stod(config.at("sample_frac")) : 0.01;
+    double huberDelta = config.count("huber_delta") ? std::stod(config.at("huber_delta")) : 5.0;
+
+    qInfo() << "[BackgroundExtraction] Starting. Input:" << QString::fromStdString(inputName)
+            << "Output:" << QString::fromStdString(outputName)
+            << "Order:" << order << "SigmaCut:" << sigmaCut
+            << "Equalize:" << equalize << "SampleFrac:" << sampleFrac;
+
+    WorkspaceElement inputElem = workspace.getElement(inputName);
+    if (progress) progress(5);
+
+    // -----------------------------------------------------------------------
+    // Batch mode: process each selected frame, write to disk, return new batch
+    // -----------------------------------------------------------------------
+    if (std::holds_alternative<ImageBatchPtr>(inputElem)) {
+        auto inputBatch = std::get<ImageBatchPtr>(inputElem);
+        int count = inputBatch->count();
+
+        std::string tempDir = TempDirectory::createTempDir("bge");
+        if (tempDir.empty())
+            throw std::runtime_error("Failed to create intermediate directory for background extraction");
+
+        std::vector<std::string> names(count);
+        std::vector<std::string> filepaths(count);
+        FitsIO writer;
+
+        for (int i = 0; i < count; ++i) {
+            if (progress)
+                progress(static_cast<int>(5.0 + 90.0 * i / count));
+
+            if (!inputBatch->isFrameSelected(i)) {
+                names[i]     = inputBatch->frameName(i) + "_unselected";
+                filepaths[i] = "";
+                continue;
+            }
+
+            ImageVariant frame = inputBatch->getImage(i);
+            ImageVariant extracted;
+
+            if (std::holds_alternative<GrayscaleImagePtr>(frame)) {
+                extracted = BackgroundExtractor::extractGrayscale(
+                    std::get<GrayscaleImagePtr>(frame),
+                    order, sigmaCut, sampleFrac, huberDelta, equalize);
+            } else if (std::holds_alternative<RGBImagePtr>(frame)) {
+                extracted = BackgroundExtractor::extractRGB(
+                    std::get<RGBImagePtr>(frame),
+                    order, sigmaCut, sampleFrac, huberDelta, equalize);
+            } else {
+                throw std::runtime_error("Unsupported frame type in batch background extraction");
+            }
+
+            std::string origPath    = inputBatch->frameFilepath(i);
+            std::string outFilename = TempDirectory::getIntermediateFileName(origPath, "_bge", i);
+            std::string fullOutPath = tempDir + "/" + outFilename;
+
+            if (!writer.writeImage(fullOutPath, extracted))
+                throw std::runtime_error("Failed to write background-extracted frame to " + fullOutPath);
+
+            names[i]     = inputBatch->frameName(i) + "_bge";
+            filepaths[i] = fullOutPath;
+
+            inputBatch->clearCache(i);
+        }
+
+        auto outBatch = std::make_shared<ImageBatch>(
+            count,
+            [filepaths](int index) -> ImageVariant {
+                FitsIO reader;
+                return reader.readImage(filepaths[index]);
+            },
+            names, filepaths);
+
+        for (int i = 0; i < count; ++i)
+            outBatch->setFrameSelected(i, inputBatch->isFrameSelected(i));
+
+        if (progress) progress(100);
+        if (workspace.contains(outputName))
+            workspace.unregisterElement(outputName);
+        workspace.registerElement(outputName, outBatch);
+
+        qInfo() << "[BackgroundExtraction] Finished batch BGE ("
+                << count << "frames). Registered output:"
+                << QString::fromStdString(outputName);
+        return;
+    }
+
+    // -----------------------------------------------------------------------
+    // Single-image mode
+    // -----------------------------------------------------------------------
+    WorkspaceElement outputElem;
+    if (std::holds_alternative<GrayscaleImagePtr>(inputElem)) {
+        outputElem = BackgroundExtractor::extractGrayscale(
+            std::get<GrayscaleImagePtr>(inputElem),
+            order, sigmaCut, sampleFrac, huberDelta, equalize);
+    } else if (std::holds_alternative<RGBImagePtr>(inputElem)) {
+        outputElem = BackgroundExtractor::extractRGB(
+            std::get<RGBImagePtr>(inputElem),
+            order, sigmaCut, sampleFrac, huberDelta, equalize);
+    } else {
+        throw std::runtime_error("Background extraction is not supported on this element type");
+    }
+
+    if (progress) progress(80);
+    if (workspace.contains(outputName))
+        workspace.unregisterElement(outputName);
+    workspace.registerElement(outputName, outputElem);
+
+    if (progress) progress(100);
+    qInfo() << "[BackgroundExtraction] Finished BGE. Registered output:"
+            << QString::fromStdString(outputName);
+}
+
+} // namespace blastro

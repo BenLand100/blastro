@@ -30,27 +30,15 @@ PixelMathDialog::PixelMathDialog(WorkspaceRegistry& workspace, QWidget* parent)
 
     // 1. Image References Info Box
     QGroupBox* infoBox = new QGroupBox("Available Images (use as variables)", this);
-    infoBox->setStyleSheet("QGroupBox { font-weight: bold; border: 1px solid #555; margin-top: 10px; padding: 5px; } QGroupBox::title { subcontrol-origin: margin; left: 10px; }");
     QVBoxLayout* infoLayout = new QVBoxLayout(infoBox);
     
-    QString infoText = "Active Workspace Variables:\n";
-    auto names = m_workspace.elementNames();
-    if (names.empty()) {
-        infoText += "  (No images open. Math will output using default 800x600 dimensions)";
-    } else {
-        for (const auto& name : names) {
-            infoText += QString("  - %1\n").arg(QString::fromStdString(name));
-        }
-        infoText += "\nNote: For RGB images, you can also use suffix _r, _g, _b (e.g. Image1_r)";
-    }
-    QLabel* infoLabel = new QLabel(infoText, this);
-    infoLabel->setStyleSheet("font-family: monospace; color: #88ff88;");
-    infoLayout->addWidget(infoLabel);
+    m_infoLabel = new QLabel(this);
+    m_infoLabel->setStyleSheet("font-family: monospace; color: #88ff88;");
+    infoLayout->addWidget(m_infoLabel);
     mainLayout->addWidget(infoBox);
 
     // 2. Color Space / Expression type
     QGroupBox* modeBox = new QGroupBox("Output Color Space", this);
-    modeBox->setStyleSheet("QGroupBox { font-weight: bold; border: 1px solid #555; margin-top: 10px; padding: 5px; } QGroupBox::title { subcontrol-origin: margin; left: 10px; }");
     QHBoxLayout* modeLayout = new QHBoxLayout(modeBox);
     m_rgbMode->setChecked(true);
     m_grayMode->setChecked(false);
@@ -60,7 +48,6 @@ PixelMathDialog::PixelMathDialog(WorkspaceRegistry& workspace, QWidget* parent)
 
     // 3. Expressions input
     QGroupBox* exprBox = new QGroupBox("RGB/K Expressions", this);
-    exprBox->setStyleSheet("QGroupBox { font-weight: bold; border: 1px solid #555; margin-top: 10px; padding: 5px; } QGroupBox::title { subcontrol-origin: margin; left: 10px; }");
     QFormLayout* formLayout = new QFormLayout(exprBox);
     
     m_exprR->setPlaceholderText("Expression for Red channel");
@@ -79,7 +66,6 @@ PixelMathDialog::PixelMathDialog(WorkspaceRegistry& workspace, QWidget* parent)
 
     // 4. Destination
     QGroupBox* destBox = new QGroupBox("Destination", this);
-    destBox->setStyleSheet("QGroupBox { font-weight: bold; border: 1px solid #555; margin-top: 10px; padding: 5px; } QGroupBox::title { subcontrol-origin: margin; left: 10px; }");
     QVBoxLayout* destLayout = new QVBoxLayout(destBox);
     
     QHBoxLayout* createLayout = new QHBoxLayout();
@@ -92,9 +78,7 @@ PixelMathDialog::PixelMathDialog(WorkspaceRegistry& workspace, QWidget* parent)
     m_replaceTargetImage->setChecked(false);
     replaceLayout->addWidget(m_replaceTargetImage);
     
-    for (const auto& name : names) {
-        m_targetImageCombo->addItem(QString::fromStdString(name));
-    }
+    refreshWorkspaceElements();
     m_targetImageCombo->setEnabled(false);
     replaceLayout->addWidget(m_targetImageCombo, 1);
     destLayout->addLayout(replaceLayout);
@@ -104,12 +88,12 @@ PixelMathDialog::PixelMathDialog(WorkspaceRegistry& workspace, QWidget* parent)
     // 5. Buttons
     QHBoxLayout* btnLayout = new QHBoxLayout();
     QPushButton* runBtn = new QPushButton("Run", this);
-    QPushButton* cancelBtn = new QPushButton("Cancel", this);
-    cancelBtn->setStyleSheet("background-color: #555;");
+    runBtn->setObjectName("primaryButton");
+    QPushButton* closeBtn = new QPushButton("Close", this);
     
     btnLayout->addStretch();
     btnLayout->addWidget(runBtn);
-    btnLayout->addWidget(cancelBtn);
+    btnLayout->addWidget(closeBtn);
     mainLayout->addLayout(btnLayout);
 
     // Connections
@@ -138,7 +122,7 @@ PixelMathDialog::PixelMathDialog(WorkspaceRegistry& workspace, QWidget* parent)
     });
 
     connect(runBtn, &QPushButton::clicked, this, &PixelMathDialog::onRunClicked);
-    connect(cancelBtn, &QPushButton::clicked, this, &QDialog::reject);
+    connect(closeBtn, &QPushButton::clicked, this, &QWidget::close);
 }
 
 void PixelMathDialog::onUseSingleExpressionChanged(bool checked) {
@@ -207,7 +191,32 @@ void PixelMathDialog::onRunClicked() {
     }
 
     emit algorithmExecuted("PixelMath", getConfig());
-    accept();
+}
+
+void PixelMathDialog::refreshWorkspaceElements() {
+    QString currentText = m_targetImageCombo->currentText();
+    m_targetImageCombo->clear();
+    auto keys = m_workspace.elementNames();
+    for (const auto& name : keys) {
+        m_targetImageCombo->addItem(QString::fromStdString(name));
+    }
+    int idx = m_targetImageCombo->findText(currentText);
+    if (idx >= 0) {
+        m_targetImageCombo->setCurrentIndex(idx);
+    }
+
+    if (m_infoLabel) {
+        QString infoText = "Active Workspace Variables:\n";
+        if (keys.empty()) {
+            infoText += "  (No images open. Math will output using default 800x600 dimensions)";
+        } else {
+            for (const auto& name : keys) {
+                infoText += QString("  - %1\n").arg(QString::fromStdString(name));
+            }
+            infoText += "\nNote: For RGB images, you can also use suffix _r, _g, _b (e.g. Image1_r)";
+        }
+        m_infoLabel->setText(infoText);
+    }
 }
 
 } // namespace blastro

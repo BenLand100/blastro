@@ -6,9 +6,21 @@
 #include "algorithms/PixelMathAlgorithm.h"
 #include "algorithms/StackingAlgorithm.h"
 #include "algorithms/CalibrationAlgorithm.h"
+#include "algorithms/DebayerAlgorithm.h"
+#include "algorithms/RegisterAlgorithm.h"
+#include "algorithms/AlignAlgorithm.h"
+#include "algorithms/BackgroundExtractionAlgorithm.h"
+#include "algorithms/GhsAlgorithmWrapper.h"
 #include "PixelMathDialog.h"
 #include "StackingDialog.h"
 #include "CalibrationDialog.h"
+#include "DebayerDialog.h"
+#include "RegisterDialog.h"
+#include "AlignDialog.h"
+#include "BackgroundExtractionDialog.h"
+#include "GhsDialog.h"
+#include "PreferencesWindow.h"
+#include "core/TempDirectory.h"
 #include "WorkspaceImageWindow.h"
 #include "BatchImageWidget.h"
 #include <QFileDialog>
@@ -20,6 +32,7 @@
 #include <QTextStream>
 #include <QDir>
 #include <QStatusBar>
+#include <QTimer>
 
 namespace blastro {
 
@@ -50,13 +63,19 @@ MainWindow::MainWindow(QWidget* parent)
     m_statusReadout->setStyleSheet("color: #aaa; font-family: monospace; font-size: 11px; margin-right: 10px;");
     statusBar()->addPermanentWidget(m_statusReadout);
     statusBar()->setStyleSheet("QStatusBar { background-color: #202020; color: #aaa; border-top: 1px solid #333; font-size: 11px; }");
-    statusBar()->showMessage("Ready");
+
+    // Add status label for left status messages side-by-side with progress bar
+    m_statusLabel = new QLabel("Ready", this);
+    m_statusLabel->setStyleSheet("color: #aaa; font-family: sans-serif; font-size: 11px; margin-left: 5px; margin-right: 10px;");
+    statusBar()->addWidget(m_statusLabel);
 
     // Add and style progress bar in status bar
     m_progressBar = new QProgressBar(this);
     m_progressBar->setRange(0, 100);
     m_progressBar->setValue(0);
     m_progressBar->setTextVisible(true);
+    m_progressBar->setFixedWidth(150);
+    m_progressBar->setFixedHeight(14);
     m_progressBar->setStyleSheet(
         "QProgressBar {"
         "   border: 1px solid #555;"
@@ -81,6 +100,18 @@ MainWindow::MainWindow(QWidget* parent)
     logSub->setWindowTitle("Process Console");
     logSub->resize(600, 200);
     logSub->show();
+
+    // Print welcome ASCII art and message
+    QString welcomeArt = 
+        "  ____  _               _             \n"
+        " | __ )| |    __ _  ___| |_ _ __ ___  \n"
+        " |  _ \\| |   / _` |/ __| __| '__/ _ \\ \n"
+        " | |_) | |__| (_| |\\__ \\ |_| | | (_) |\n"
+        " |____/|_____\\__,_||___/\\__|_|  \\___/ \n";
+    logWindow->appendRawText(welcomeArt, "#00bcd4");
+    logWindow->appendRawText(" Welcome to BLastro - Astronomical Image Processing Platform\n"
+                             " Version 1.0.0 (Native C++ Port)\n"
+                             "----------------------------------------------------------------\n", "#a0a0a0");
 
     // Position log window near the bottom right by default
     logSub->move(0, 500);
@@ -124,6 +155,10 @@ void MainWindow::createMenus() {
 
     m_fileMenu->addSeparator();
 
+    QAction* preferencesAct = new QAction("&Preferences...", this);
+    connect(preferencesAct, &QAction::triggered, this, &MainWindow::onOpenPreferences);
+    m_fileMenu->addAction(preferencesAct);
+
     m_exitAct = new QAction("E&xit", this);
     connect(m_exitAct, &QAction::triggered, qApp, &QApplication::closeAllWindows);
     m_fileMenu->addAction(m_exitAct);
@@ -134,13 +169,35 @@ void MainWindow::createMenus() {
     connect(m_pixelMathAct, &QAction::triggered, this, &MainWindow::onOpenPixelMath);
     m_algoMenu->addAction(m_pixelMathAct);
 
+    m_calibrationAct = new QAction("&Calibration...", this);
+    connect(m_calibrationAct, &QAction::triggered, this, &MainWindow::onOpenCalibration);
+    m_algoMenu->addAction(m_calibrationAct);
+
+    m_debayerAct = new QAction("&Debayering...", this);
+    connect(m_debayerAct, &QAction::triggered, this, &MainWindow::onOpenDebayer);
+    m_algoMenu->addAction(m_debayerAct);
+
+    m_registerAct = new QAction("Star &Registration...", this);
+    connect(m_registerAct, &QAction::triggered, this, &MainWindow::onOpenRegister);
+    m_algoMenu->addAction(m_registerAct);
+
+    m_alignAct = new QAction("Image &Alignment...", this);
+    connect(m_alignAct, &QAction::triggered, this, &MainWindow::onOpenAlign);
+    m_algoMenu->addAction(m_alignAct);
+
     m_stackingAct = new QAction("&Stacking...", this);
     connect(m_stackingAct, &QAction::triggered, this, &MainWindow::onOpenStacking);
     m_algoMenu->addAction(m_stackingAct);
 
-    m_calibrationAct = new QAction("&Calibration...", this);
-    connect(m_calibrationAct, &QAction::triggered, this, &MainWindow::onOpenCalibration);
-    m_algoMenu->addAction(m_calibrationAct);
+    m_algoMenu->addSeparator();
+
+    m_backgroundAct = new QAction("&Background Extraction...", this);
+    connect(m_backgroundAct, &QAction::triggered, this, &MainWindow::onOpenBackgroundExtraction);
+    m_algoMenu->addAction(m_backgroundAct);
+
+    m_ghsAct = new QAction("&Generalized Hyperbolic Stretch (GHS)...", this);
+    connect(m_ghsAct, &QAction::triggered, this, &MainWindow::onOpenGhs);
+    m_algoMenu->addAction(m_ghsAct);
 
     m_algoMenu->addSeparator();
 
@@ -488,22 +545,65 @@ void MainWindow::onSaveActiveBatch() {
 void MainWindow::onOpenPixelMath() {
     PixelMathDialog* dlg = new PixelMathDialog(m_workspace, this);
     connect(dlg, &PixelMathDialog::algorithmExecuted, this, &MainWindow::executeAlgorithmSlot);
-    dlg->setAttribute(Qt::WA_DeleteOnClose);
-    dlg->show();
+    QMdiSubWindow* sub = m_workspaceArea->addSubWindow(dlg);
+    sub->setAttribute(Qt::WA_DeleteOnClose);
+    sub->show();
 }
 
 void MainWindow::onOpenStacking() {
     StackingDialog* dlg = new StackingDialog(m_workspace, this);
     connect(dlg, &StackingDialog::algorithmExecuted, this, &MainWindow::executeAlgorithmSlot);
-    dlg->setAttribute(Qt::WA_DeleteOnClose);
-    dlg->show();
+    QMdiSubWindow* sub = m_workspaceArea->addSubWindow(dlg);
+    sub->setAttribute(Qt::WA_DeleteOnClose);
+    sub->show();
 }
 
 void MainWindow::onOpenCalibration() {
     CalibrationDialog* dlg = new CalibrationDialog(m_workspace, this);
     connect(dlg, &CalibrationDialog::algorithmExecuted, this, &MainWindow::executeAlgorithmSlot);
-    dlg->setAttribute(Qt::WA_DeleteOnClose);
-    dlg->show();
+    QMdiSubWindow* sub = m_workspaceArea->addSubWindow(dlg);
+    sub->setAttribute(Qt::WA_DeleteOnClose);
+    sub->show();
+}
+
+void MainWindow::onOpenDebayer() {
+    DebayerDialog* dlg = new DebayerDialog(m_workspace, this);
+    connect(dlg, &DebayerDialog::algorithmExecuted, this, &MainWindow::executeAlgorithmSlot);
+    QMdiSubWindow* sub = m_workspaceArea->addSubWindow(dlg);
+    sub->setAttribute(Qt::WA_DeleteOnClose);
+    sub->show();
+}
+
+void MainWindow::onOpenRegister() {
+    RegisterDialog* dlg = new RegisterDialog(m_workspace, this);
+    connect(dlg, &RegisterDialog::algorithmExecuted, this, &MainWindow::executeAlgorithmSlot);
+    QMdiSubWindow* sub = m_workspaceArea->addSubWindow(dlg);
+    sub->setAttribute(Qt::WA_DeleteOnClose);
+    sub->show();
+}
+
+void MainWindow::onOpenAlign() {
+    AlignDialog* dlg = new AlignDialog(m_workspace, this);
+    connect(dlg, &AlignDialog::algorithmExecuted, this, &MainWindow::executeAlgorithmSlot);
+    QMdiSubWindow* sub = m_workspaceArea->addSubWindow(dlg);
+    sub->setAttribute(Qt::WA_DeleteOnClose);
+    sub->show();
+}
+
+void MainWindow::onOpenBackgroundExtraction() {
+    BackgroundExtractionDialog* dlg = new BackgroundExtractionDialog(m_workspace, this);
+    connect(dlg, &BackgroundExtractionDialog::algorithmExecuted, this, &MainWindow::executeAlgorithmSlot);
+    QMdiSubWindow* sub = m_workspaceArea->addSubWindow(dlg);
+    sub->setAttribute(Qt::WA_DeleteOnClose);
+    sub->show();
+}
+
+void MainWindow::onOpenGhs() {
+    GhsDialog* dlg = new GhsDialog(m_workspace, this);
+    connect(dlg, &GhsDialog::algorithmExecuted, this, &MainWindow::executeAlgorithmSlot);
+    QMdiSubWindow* sub = m_workspaceArea->addSubWindow(dlg);
+    sub->setAttribute(Qt::WA_DeleteOnClose);
+    sub->show();
 }
 
 void AlgorithmWorker::run() {
@@ -515,6 +615,16 @@ void AlgorithmWorker::run() {
             alg = std::make_unique<StackingAlgorithm>();
         } else if (m_name == "Calibration") {
             alg = std::make_unique<CalibrationAlgorithm>();
+        } else if (m_name == "Debayer") {
+            alg = std::make_unique<DebayerAlgorithm>();
+        } else if (m_name == "Register") {
+            alg = std::make_unique<RegisterAlgorithm>();
+        } else if (m_name == "Align") {
+            alg = std::make_unique<AlignAlgorithm>();
+        } else if (m_name == "BackgroundExtraction") {
+            alg = std::make_unique<BackgroundExtractionAlgorithm>();
+        } else if (m_name == "Ghs") {
+            alg = std::make_unique<GhsAlgorithmWrapper>();
         } else {
             throw std::runtime_error("Unknown algorithm: " + m_name);
         }
@@ -568,19 +678,29 @@ void MainWindow::closeEvent(QCloseEvent* event) {
     }
 
     m_pclBridge.reset(); // Cleanly unload the PCL module
+    TempDirectory::cleanup(); // Clean up temporary directories
     QMainWindow::closeEvent(event);
     QApplication::quit(); // Explicitly terminate the process
 }
 
 void MainWindow::executeAlgorithmSlot(const std::string& name, const std::map<std::string, std::string>& config) {
-    // Disable main window to prevent concurrent modifications
-    setEnabled(false);
+    // Disable menu bar and non-log MDI subwindows to prevent concurrent modifications,
+    // while keeping the main window and LogWindow responsive and interactive.
+    if (menuBar()) {
+        menuBar()->setEnabled(false);
+    }
+    for (auto* subWindow : m_workspaceArea->subWindowList()) {
+        if (subWindow && !qobject_cast<LogWindow*>(subWindow->widget())) {
+            subWindow->setEnabled(false);
+        }
+    }
     m_algorithmRunning = true;
 
-    // Reset and show progress bar
+    // Reset and show progress bar with standard range
+    m_progressBar->setRange(0, 100);
     m_progressBar->setValue(0);
     m_progressBar->show();
-    statusBar()->showMessage(QString("Running %1...").arg(QString::fromStdString(name)));
+    showStatusMessage(QString("Running %1...").arg(QString::fromStdString(name)));
 
     // Create background thread and worker
     QThread* thread = new QThread(this);
@@ -603,9 +723,18 @@ void MainWindow::executeAlgorithmSlot(const std::string& name, const std::map<st
 
         // Reset UI state
         m_progressBar->hide();
-        statusBar()->showMessage("Ready");
+        showStatusMessage("Ready");
         m_algorithmRunning = false;
-        setEnabled(true);
+
+        // Re-enable menu bar and all MDI subwindows
+        if (menuBar()) {
+            menuBar()->setEnabled(true);
+        }
+        for (auto* subWindow : m_workspaceArea->subWindowList()) {
+            if (subWindow) {
+                subWindow->setEnabled(true);
+            }
+        }
 
         if (success) {
             try {
@@ -616,7 +745,12 @@ void MainWindow::executeAlgorithmSlot(const std::string& name, const std::map<st
                 m_workspaceArea->removeElementView(qOutName);
                 m_workspaceArea->addElementView(qOutName, outElem);
 
-                statusBar()->showMessage(QString("Successfully completed %1: %2").arg(QString::fromStdString(name)).arg(qOutName), 5000);
+                showStatusMessage(QString("Successfully completed %1: %2").arg(QString::fromStdString(name)).arg(qOutName), 5000);
+                
+                // Refresh dialogs
+                for (auto* dlg : findChildren<AlgorithmDialog*>()) {
+                    dlg->refreshWorkspaceElements();
+                }
             } catch (const std::exception& e) {
                 QMessageBox::critical(this, "Display Error", 
                                      QString("Algorithm finished successfully, but failed to retrieve or display the output element:\n%1").arg(e.what()));
@@ -643,6 +777,11 @@ void MainWindow::addImageToWorkspace(const QString& name, const WorkspaceElement
     // Add to MDI workspace area
     m_workspaceArea->removeElementView(name);
     m_workspaceArea->addElementView(name, element);
+
+    // Refresh dialogs
+    for (auto* dlg : findChildren<AlgorithmDialog*>()) {
+        dlg->refreshWorkspaceElements();
+    }
 }
 
 void MainWindow::onSubWindowActivated(QMdiSubWindow* window) {
@@ -860,7 +999,7 @@ bool MainWindow::executePCLProcessOnActiveImage(const QString& processId, void* 
 
     qDebug() << "[MainWindow] Executing PCL process" << processId << "on active image" << activeName;
     
-    statusBar()->showMessage(QString("Running %1...").arg(processId));
+    showStatusMessage(QString("Running %1...").arg(processId));
     m_progressBar->setRange(0, 0);
     m_progressBar->show();
     qApp->processEvents();
@@ -868,7 +1007,7 @@ bool MainWindow::executePCLProcessOnActiveImage(const QString& processId, void* 
     bool ok = m_pclBridge->executeProcessInstance(processId, hProcess, buffers);
 
     m_progressBar->hide();
-    statusBar()->clearMessage();
+    showStatusMessage("Ready");
 
     if (ok) {
         printStats("After", buffers);
@@ -878,7 +1017,7 @@ bool MainWindow::executePCLProcessOnActiveImage(const QString& processId, void* 
             win->notifyImageUpdated();
         }
         
-        statusBar()->showMessage(QString("%1 completed successfully.").arg(processId), 5000);
+        showStatusMessage(QString("%1 completed successfully.").arg(processId), 5000);
         QMessageBox::information(this, "Process Execution", QString("%1 completed successfully.").arg(processId));
     } else {
         QMessageBox::critical(this, "Process Execution Error", QString("%1 execution failed. Check console for details.").arg(processId));
@@ -1064,6 +1203,11 @@ void MainWindow::updateWindowMenu() {
     }
     m_windowMenu->addAction(consoleAct);
 
+    // 2. Preferences
+    QAction* prefAct = new QAction("Preferences", this);
+    connect(prefAct, &QAction::triggered, this, &MainWindow::onOpenPreferences);
+    m_windowMenu->addAction(prefAct);
+
     // Categorize remaining MDI windows
     QList<QMdiSubWindow*> processes;
     QList<QMdiSubWindow*> images;
@@ -1130,10 +1274,45 @@ void MainWindow::onRenameElement(const QString& oldName, const QString& newName)
     
     if (m_workspace.renameElement(stdOld, stdNew)) {
         m_workspaceArea->renameElementView(oldName, newName);
-        statusBar()->showMessage(QString("Renamed '%1' to '%2'").arg(oldName, newName), 3000);
+        showStatusMessage(QString("Renamed '%1' to '%2'").arg(oldName, newName), 3000);
+        
+        // Refresh dialogs
+        for (auto* dlg : findChildren<AlgorithmDialog*>()) {
+            dlg->refreshWorkspaceElements();
+        }
     } else {
         QMessageBox::warning(this, "Rename Error", "Failed to rename workspace element.");
     }
+}
+
+void MainWindow::showStatusMessage(const QString& message, int timeout) {
+    if (!m_statusLabel) return;
+    m_statusLabel->setText(message);
+    if (timeout > 0) {
+        QTimer::singleShot(timeout, this, [this]() {
+            if (m_statusLabel && m_statusLabel->text() != "Ready" && !m_algorithmRunning) {
+                m_statusLabel->setText("Ready");
+            }
+        });
+    }
+}
+
+void MainWindow::onOpenPreferences() {
+    // Check if already open
+    for (auto* subWindow : m_workspaceArea->subWindowList()) {
+        if (subWindow && subWindow->widget()) {
+            if (auto* prefWin = qobject_cast<PreferencesWindow*>(subWindow->widget())) {
+                subWindow->show();
+                subWindow->setFocus();
+                return;
+            }
+        }
+    }
+
+    PreferencesWindow* dlg = new PreferencesWindow(this);
+    QMdiSubWindow* sub = m_workspaceArea->addSubWindow(dlg);
+    sub->setAttribute(Qt::WA_DeleteOnClose);
+    sub->show();
 }
 
 } // namespace blastro

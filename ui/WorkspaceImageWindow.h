@@ -23,6 +23,11 @@ public:
     void updateName(const QString& newName);
     void notifyImageUpdated();
 
+    // Live Preview Support
+    void setPreviewImage(const ImageVariant& previewImage);
+    void restoreOriginalImage();
+    void commitPreviewImage(const ImageVariant& finalImage);
+
 signals:
     void renameRequested(const QString& oldName, const QString& newName);
 
@@ -41,6 +46,9 @@ private:
     
     ImageView* m_imageView;
     QWidget* m_viewportWidget; // ImageView or BatchImageWidget
+
+    ImageVariant m_originalImageForPreview;
+    bool m_hasPreviewActive = false;
 
     // UI elements
     QWidget* m_headerBar;

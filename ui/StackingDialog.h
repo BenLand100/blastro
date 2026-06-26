@@ -2,9 +2,9 @@
 #include "AlgorithmDialog.h"
 #include <QComboBox>
 #include <QLineEdit>
-#include <QLabel>
 #include <QPushButton>
-#include <QGroupBox>
+#include <QDoubleSpinBox>
+#include <QLabel>
 
 namespace blastro {
 
@@ -16,28 +16,28 @@ public:
 
     std::map<std::string, std::string> getConfig() const override;
     std::string algorithmName() const override { return "Stacking"; }
+    void refreshWorkspaceElements() override;
 
 private slots:
-    void onRejectionChanged(int index);
     void onRunClicked();
+    void onPrefsClicked();
+    void onRejectionChanged(const QString& text);
 
 private:
-    QComboBox* m_targetBatchCombo;
+    QComboBox* m_targetInputCombo;
     QLineEdit* m_outputName;
     QComboBox* m_methodCombo;
     QComboBox* m_rejectionCombo;
+    QComboBox* m_modeCombo = nullptr;
+    QDoubleSpinBox* m_lowClipSpin;
+    QDoubleSpinBox* m_highClipSpin;
+    QLabel* m_clipLabel = nullptr;
+    QLabel* m_slashLabel = nullptr;
 
-    // Parameters Group
-    QGroupBox* m_paramGroup;
-    QLineEdit* m_sigmaLowEdit;
-    QLineEdit* m_sigmaHighEdit;
-    QLineEdit* m_quantileLowEdit;
-    QLineEdit* m_quantileHighEdit;
-    
-    QLabel* m_sigmaLowLabel;
-    QLabel* m_sigmaHighLabel;
-    QLabel* m_quantileLowLabel;
-    QLabel* m_quantileHighLabel;
+    // Advanced Preferences
+    std::string m_weightMethod = "none";
+    int m_patchSize = 1024;
+    int m_threads = -1;
 };
 
 } // namespace blastro

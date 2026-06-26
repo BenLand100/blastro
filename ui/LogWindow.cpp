@@ -114,4 +114,19 @@ void LogWindow::handleMessage(int type, const QString& msg) {
     }
 }
 
+void LogWindow::appendRawText(const QString& text, const QString& colorHtml) {
+    QScrollBar* bar = m_textEdit->verticalScrollBar();
+    bool autoScroll = (bar->value() == bar->maximum());
+
+    QString formattedMsg = QString("<pre style=\"color:%1; margin:0; font-family:'Courier New', Monaco, monospace; font-size:12px; line-height:1.2;\">%2</pre>")
+                               .arg(colorHtml)
+                               .arg(text.toHtmlEscaped());
+
+    m_textEdit->appendHtml(formattedMsg);
+
+    if (autoScroll) {
+        bar->setValue(bar->maximum());
+    }
+}
+
 } // namespace blastro

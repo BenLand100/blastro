@@ -4,6 +4,7 @@
 #include <QCheckBox>
 #include <QComboBox>
 #include <QRadioButton>
+#include <QLabel>
 
 namespace blastro {
 
@@ -15,6 +16,7 @@ public:
 
     std::map<std::string, std::string> getConfig() const override;
     std::string algorithmName() const override { return "PixelMath"; }
+    void refreshWorkspaceElements() override;
 
 private slots:
     void onUseSingleExpressionChanged(bool checked);
@@ -34,6 +36,7 @@ private:
     QComboBox* m_targetImageCombo;
     QRadioButton* m_createNewImage;
     QRadioButton* m_replaceTargetImage;
+    QLabel* m_infoLabel = nullptr;
 };
 
 } // namespace blastro
