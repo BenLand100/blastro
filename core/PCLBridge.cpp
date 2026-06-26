@@ -31,6 +31,7 @@
 #include <QToolButton>
 #include <QVariant>
 #include <QLineEdit>
+#include <QFileDialog>
 
 namespace blastro {
 
@@ -53,6 +54,9 @@ struct PCLInterfaceInfo {
     pcl::interface_initialization_routine initFn = nullptr;
     pcl::interface_launch_routine launchFn = nullptr;
     pcl::interface_control_routine editPreferencesFn = nullptr;
+    pcl::interface_process_import_routine importProcessFn = nullptr;
+    pcl::global_notification_routine globalPrefUpdatedFn = nullptr;
+    pcl::interface_process_validation_routine validateProcessFn = nullptr;
 };
 
 static std::unordered_map<meta_interface_handle, PCLInterfaceInfo> g_interfaces;
@@ -194,6 +198,10 @@ static api_bool mock_WriteSettingsUnsignedInteger(api_handle hModule, uint32 val
 static api_bool mock_GetGlobalString(const char* globalKey, char16_type* value, pcl::size_type* maxLen);
 static api_bool mock_GetGlobalInteger(const char* globalKey, void* value, api_bool isSigned);
 static void mock_SetInterfaceEditPreferencesRoutine(pcl::interface_control_routine f);
+static void mock_SetInterfaceProcessImportRoutine(pcl::interface_process_import_routine f);
+static void mock_SetGlobalPreferencesUpdatedNotificationRoutine(pcl::global_notification_routine f);
+static void mock_SetInterfaceProcessValidationRoutine(pcl::interface_process_validation_routine f);
+static void mock_SetProcessInterfaceValidationRoutine(pcl::process_interface_validation_routine f);
 static api_bool mock_GetControlResourcePixelRatio(const_control_handle h, double* ratio);
 static control_handle mock_CreateViewList(api_handle hModule, api_handle client, control_handle parent, uint32 flags);
 static void mock_RegenerateViewList(control_handle h, api_bool mainViews, api_bool previews, api_bool realTimePreview);
@@ -202,8 +210,14 @@ static int32 mock_ExecuteDialog(control_handle h);
 static api_bool mock_GetEditValid(const_control_handle h);
 static void mock_SetButtonDefaultEnabled(control_handle h, api_bool enable);
 static void mock_ReturnDialog(control_handle h, int32 result);
+static api_bool mock_ExecuteOpenFileDialog(char16_type* fileName, const char16_type* caption, const char16_type* initialPath, const char16_type* filters, const char16_type* selectedExtension);
+static api_bool mock_ExecuteOpenMultipleFilesDialog(char16_type* firstFileName, ::file_enumeration_callback callback, void* callbackData, const char16_type* caption, const char16_type* initialPath, const char16_type* filters, const char16_type* selectedExtension);
+static api_bool mock_ExecuteSaveFileDialog(char16_type* filePath, const char16_type* caption, const char16_type* initialPath, const char16_type* filters, const char16_type* selectedExtension, api_bool overwritePrompt);
+static api_bool mock_ExecuteGetDirectoryDialog(char16_type* dirPath, const char16_type* caption, const char16_type* initialPath);
 static void mock_SetProcessEditPreferencesRoutine(pcl::process_edit_preferences_routine f);
 static api_bool mock_EditProcessPreferences(meta_process_handle hMetaProcess);
+static void mock_SetProcessClassInitializationRoutine(pcl::process_class_initialization_routine f);
+static void mock_SetProcessExecutionPreferencesRoutine(pcl::process_execution_preferences_routine f);
 
 static void mock_BeginParameterDefinition(meta_parameter_handle hParam, const char* paramId, uint32 type);
 static void mock_SetParameterProcessVersionRange(uint32 minVer, uint32 maxVer);
@@ -726,6 +740,34 @@ static void mock_SetInterfaceEditPreferencesRoutine(pcl::interface_control_routi
     if (g_currentDefiningInterface) {
         g_interfaces[g_currentDefiningInterface].editPreferencesFn = f;
         qDebug() << "[PCL Bridge] Interface edit preferences routine set for:" << g_interfaces[g_currentDefiningInterface].id;
+    }
+}
+
+static void mock_SetInterfaceProcessImportRoutine(pcl::interface_process_import_routine f) {
+    if (g_currentDefiningInterface) {
+        g_interfaces[g_currentDefiningInterface].importProcessFn = f;
+        qDebug() << "[PCL Bridge] Interface process import routine set for:" << g_interfaces[g_currentDefiningInterface].id;
+    }
+}
+
+static void mock_SetGlobalPreferencesUpdatedNotificationRoutine(pcl::global_notification_routine f) {
+    if (g_currentDefiningInterface) {
+        g_interfaces[g_currentDefiningInterface].globalPrefUpdatedFn = f;
+        qDebug() << "[PCL Bridge] Global preferences updated notification routine set for:" << g_interfaces[g_currentDefiningInterface].id;
+    }
+}
+
+static void mock_SetInterfaceProcessValidationRoutine(pcl::interface_process_validation_routine f) {
+    if (g_currentDefiningInterface) {
+        g_interfaces[g_currentDefiningInterface].validateProcessFn = f;
+        qDebug() << "[PCL Bridge] Interface process validation routine set for:" << g_interfaces[g_currentDefiningInterface].id;
+    }
+}
+
+static void mock_SetProcessInterfaceValidationRoutine(pcl::process_interface_validation_routine f) {
+    if (g_currentDefiningProcess) {
+        g_processes[g_currentDefiningProcess].validateInterfaceFn = f;
+        qDebug() << "[PCL Bridge] Process interface validation routine set for:" << g_processes[g_currentDefiningProcess].id;
     }
 }
 
@@ -1978,6 +2020,10 @@ void PCLBridge::setupOverrides() {
     overridePCLStub("Global/GetGlobalString", reinterpret_cast<void*>(mock_GetGlobalString));
     overridePCLStub("Global/GetGlobalInteger", reinterpret_cast<void*>(mock_GetGlobalInteger));
     overridePCLStub("InterfaceDefinition/SetInterfaceEditPreferencesRoutine", reinterpret_cast<void*>(mock_SetInterfaceEditPreferencesRoutine));
+    overridePCLStub("InterfaceDefinition/SetInterfaceProcessImportRoutine", reinterpret_cast<void*>(mock_SetInterfaceProcessImportRoutine));
+    overridePCLStub("InterfaceDefinition/SetGlobalPreferencesUpdatedNotificationRoutine", reinterpret_cast<void*>(mock_SetGlobalPreferencesUpdatedNotificationRoutine));
+    overridePCLStub("InterfaceDefinition/SetInterfaceProcessValidationRoutine", reinterpret_cast<void*>(mock_SetInterfaceProcessValidationRoutine));
+    overridePCLStub("ProcessDefinition/SetProcessInterfaceValidationRoutine", reinterpret_cast<void*>(mock_SetProcessInterfaceValidationRoutine));
 
     // Control scaling & ViewList controls
     overridePCLStub("Control/GetControlResourcePixelRatio", reinterpret_cast<void*>(mock_GetControlResourcePixelRatio));
@@ -1992,6 +2038,12 @@ void PCLBridge::setupOverrides() {
     overridePCLStub("Dialog/ReturnDialog", reinterpret_cast<void*>(mock_ReturnDialog));
     overridePCLStub("Edit/GetEditValid", reinterpret_cast<void*>(mock_GetEditValid));
     overridePCLStub("Button/SetButtonDefaultEnabled", reinterpret_cast<void*>(mock_SetButtonDefaultEnabled));
+
+    // File / directory picker dialogs
+    overridePCLStub("Dialog/ExecuteOpenFileDialog", reinterpret_cast<void*>(mock_ExecuteOpenFileDialog));
+    overridePCLStub("Dialog/ExecuteOpenMultipleFilesDialog", reinterpret_cast<void*>(mock_ExecuteOpenMultipleFilesDialog));
+    overridePCLStub("Dialog/ExecuteSaveFileDialog", reinterpret_cast<void*>(mock_ExecuteSaveFileDialog));
+    overridePCLStub("Dialog/ExecuteGetDirectoryDialog", reinterpret_cast<void*>(mock_ExecuteGetDirectoryDialog));
 
     // Process & Parameter definitions
     overridePCLStub("ProcessDefinition/BeginParameterDefinition", reinterpret_cast<void*>(mock_BeginParameterDefinition));
@@ -2009,6 +2061,8 @@ void PCLBridge::setupOverrides() {
     overridePCLStub("ProcessDefinition/EndParameterDefinition", reinterpret_cast<void*>(mock_EndParameterDefinition));
     overridePCLStub("ProcessDefinition/SetProcessEditPreferencesRoutine", reinterpret_cast<void*>(mock_SetProcessEditPreferencesRoutine));
     overridePCLStub("Process/EditProcessPreferences", reinterpret_cast<void*>(mock_EditProcessPreferences));
+    overridePCLStub("ProcessDefinition/SetProcessClassInitializationRoutine", reinterpret_cast<void*>(mock_SetProcessClassInitializationRoutine));
+    overridePCLStub("ProcessDefinition/SetProcessExecutionPreferencesRoutine", reinterpret_cast<void*>(mock_SetProcessExecutionPreferencesRoutine));
 }
 
 bool PCLBridge::loadModule(const QString& path) {
@@ -2129,6 +2183,20 @@ bool PCLBridge::loadModule(const QString& path) {
         qDebug() << "[PCL Bridge] Invoking module OnLoad routine...";
         g_moduleOnLoad();
         qDebug() << "[PCL Bridge] Module OnLoad routine finished.";
+    }
+
+    // Call the class initialization and execution preferences routines for all registered processes
+    for (auto& pair : g_processes) {
+        if (pair.second.classInitFn) {
+            qDebug() << "[PCL Bridge] Invoking process class initialization routine for:" << pair.second.id;
+            pair.second.classInitFn(pair.first);
+            qDebug() << "[PCL Bridge] Process class initialization routine finished.";
+        }
+        if (pair.second.executionPreferencesFn) {
+            qDebug() << "[PCL Bridge] Invoking process execution preferences routine for:" << pair.second.id;
+            pair.second.executionPreferencesFn(pair.first);
+            qDebug() << "[PCL Bridge] Process execution preferences routine finished.";
+        }
     }
 
     return true;
@@ -2435,6 +2503,14 @@ bool PCLBridge::launchInterface(const QString& processId, QWidget* parentWindow)
     info.initFn(hInterface, hParentControl);
     qDebug() << "[PCL Bridge] Interface initialization callback completed.";
 
+    // If the interface registered a global preferences updated callback, notify it at startup
+    // so it can initialize its licensing and other global preference-dependent states.
+    if (info.globalPrefUpdatedFn) {
+        qDebug() << "[PCL Bridge] Calling interface global preferences updated notification...";
+        info.globalPrefUpdatedFn(hInterface);
+        qDebug() << "[PCL Bridge] Interface global preferences updated notification completed.";
+    }
+
     // Instantiate process handle
     auto procIdIt = g_processIdToHandle.find(idStr);
     meta_process_handle hMetaProcess = nullptr;
@@ -2457,6 +2533,31 @@ bool PCLBridge::launchInterface(const QString& processId, QWidget* parentWindow)
         uint32 flags = 0;
         bool launchOk = info.launchFn(hInterface, hMetaProcess, hProcess, &dynamic, &flags);
         qDebug() << "[PCL Bridge] Interface launch routine returned:" << launchOk << ", dynamic:" << (bool)dynamic;
+        
+        // 3. Import the process parameters into the interface!
+        if (launchOk && info.importProcessFn && hProcess) {
+            qDebug() << "[PCL Bridge] Calling interface process import routine (importProcessFn)...";
+            info.importProcessFn(hInterface, hProcess);
+            qDebug() << "[PCL Bridge] Interface process import routine completed.";
+
+            // Perform process validation at startup so the plugin runs its license-check and unlocks!
+            if (info.validateProcessFn) {
+                qDebug() << "[PCL Bridge] Calling interface process validation routine (validateProcessFn)...";
+                std::vector<char16_type> errorBuf(1024, 0);
+                api_bool valid = info.validateProcessFn(hInterface, hProcess, errorBuf.data(), errorBuf.size() - 1);
+                qDebug() << "[PCL Bridge] Interface process validation routine returned:" << (bool)valid;
+            }
+
+            // Perform process-interface validation!
+            if (hMetaProcess) {
+                const auto& procInfo = g_processes[hMetaProcess];
+                if (procInfo.validateInterfaceFn) {
+                    qDebug() << "[PCL Bridge] Calling process-interface validation routine (validateInterfaceFn)...";
+                    api_bool valid = procInfo.validateInterfaceFn(hProcess, hInterface);
+                    qDebug() << "[PCL Bridge] Process-interface validation routine returned:" << (bool)valid;
+                }
+            }
+        }
     }
 
     // Connect the Apply button to execute the process on the active image
@@ -2471,7 +2572,7 @@ bool PCLBridge::launchInterface(const QString& processId, QWidget* parentWindow)
 
     // Connect the Preferences button if available
     if (prefsButton) {
-        QObject::connect(prefsButton, &QPushButton::clicked, [info, hInterface, procEditPrefsFn, hMetaProcess]() {
+        QObject::connect(prefsButton, &QPushButton::clicked, [info, hInterface, procEditPrefsFn, hMetaProcess, hProcess]() {
             if (info.editPreferencesFn) {
                 qDebug() << "[PCL Bridge] Invoking interface edit preferences routine...";
                 info.editPreferencesFn(hInterface);
@@ -2480,6 +2581,36 @@ bool PCLBridge::launchInterface(const QString& processId, QWidget* parentWindow)
                 qDebug() << "[PCL Bridge] Invoking process edit preferences routine...";
                 procEditPrefsFn(hMetaProcess);
                 qDebug() << "[PCL Bridge] Process edit preferences routine finished.";
+            }
+
+            // Notify the interface that global preferences have been updated
+            if (info.globalPrefUpdatedFn) {
+                qDebug() << "[PCL Bridge] Calling interface global preferences updated notification after edit...";
+                info.globalPrefUpdatedFn(hInterface);
+            }
+
+            // Re-validate process after preferences edit!
+            if (info.validateProcessFn && hProcess) {
+                qDebug() << "[PCL Bridge] Calling interface process validation routine after edit...";
+                std::vector<char16_type> errorBuf(1024, 0);
+                info.validateProcessFn(hInterface, hProcess, errorBuf.data(), errorBuf.size() - 1);
+            }
+            if (hMetaProcess && hProcess) {
+                auto it = g_processes.find(hMetaProcess);
+                if (it != g_processes.end() && it->second.validateInterfaceFn) {
+                    qDebug() << "[PCL Bridge] Calling process-interface validation routine after edit...";
+                    it->second.validateInterfaceFn(hProcess, hInterface);
+                }
+            }
+
+            // Also notify the process that execution preferences might have changed!
+            if (hMetaProcess) {
+                auto it = g_processes.find(hMetaProcess);
+                if (it != g_processes.end() && it->second.executionPreferencesFn) {
+                    qDebug() << "[PCL Bridge] Invoking process execution preferences routine after edit...";
+                    it->second.executionPreferencesFn(hMetaProcess);
+                    qDebug() << "[PCL Bridge] Process execution preferences routine finished.";
+                }
             }
         });
     }
@@ -2804,6 +2935,125 @@ static api_bool mock_EditProcessPreferences(meta_process_handle hMetaProcess) {
         }
     }
     return false;
+}
+
+static void mock_SetProcessClassInitializationRoutine(pcl::process_class_initialization_routine f) {
+    if (g_currentDefiningProcess) {
+        g_processes[g_currentDefiningProcess].classInitFn = f;
+        qDebug() << "[PCL Bridge] Process class initialization routine set for:" << g_processes[g_currentDefiningProcess].id;
+    }
+}
+
+static void mock_SetProcessExecutionPreferencesRoutine(pcl::process_execution_preferences_routine f) {
+    if (g_currentDefiningProcess) {
+        g_processes[g_currentDefiningProcess].executionPreferencesFn = f;
+        qDebug() << "[PCL Bridge] Process execution preferences routine set for:" << g_processes[g_currentDefiningProcess].id;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// File / directory picker dialogs
+// ---------------------------------------------------------------------------
+
+// Helper: convert a PCL char16_type* string (UTF-16) to a QString
+static QString char16ToString(const char16_type* s) {
+    if (!s) return {};
+    return QString::fromUtf16(reinterpret_cast<const char16_t*>(s));
+}
+
+// Helper: write a QString back into a caller-owned char16_type buffer
+static void stringToChar16(const QString& src, char16_type* dst) {
+    if (!dst) return;
+    const ushort* utf16 = src.utf16();
+    int len = src.size();
+    for (int i = 0; i < len; ++i)
+        dst[i] = static_cast<char16_type>(utf16[i]);
+    dst[len] = 0;
+}
+
+// Convert PCL "Name (*.ext *.ext2);;..." filters to Qt "Name (*.ext *.ext2);;..." (already compatible)
+static QString pclFiltersToQt(const char16_type* filters) {
+    return char16ToString(filters);
+}
+
+static api_bool mock_ExecuteOpenFileDialog(
+        char16_type* fileName,
+        const char16_type* caption,
+        const char16_type* initialPath,
+        const char16_type* filters,
+        const char16_type* /*selectedExtension*/) {
+    QString cap  = char16ToString(caption);
+    QString init = char16ToString(initialPath);
+    QString filt = pclFiltersToQt(filters);
+    qDebug() << "[PCL Bridge] ExecuteOpenFileDialog: caption =" << cap << "initial =" << init;
+    QString chosen = QFileDialog::getOpenFileName(nullptr, cap, init, filt);
+    qDebug() << "[PCL Bridge] ExecuteOpenFileDialog: chosen =" << chosen;
+    if (chosen.isEmpty()) return false;
+    stringToChar16(chosen, fileName);
+    // Verify write back by reading from the buffer
+    QString verify = char16ToString(fileName);
+    qDebug() << "[PCL Bridge] ExecuteOpenFileDialog: written to buffer =" << verify;
+    return true;
+}
+
+static api_bool mock_ExecuteOpenMultipleFilesDialog(
+        char16_type* /*firstFileName*/,
+        ::file_enumeration_callback callback,
+        void* callbackData,
+        const char16_type* caption,
+        const char16_type* initialPath,
+        const char16_type* filters,
+        const char16_type* /*selectedExtension*/) {
+    QString cap  = char16ToString(caption);
+    QString init = char16ToString(initialPath);
+    QString filt = pclFiltersToQt(filters);
+    qDebug() << "[PCL Bridge] ExecuteOpenMultipleFilesDialog: caption =" << cap;
+    QStringList chosen = QFileDialog::getOpenFileNames(nullptr, cap, init, filt);
+    if (chosen.isEmpty()) return false;
+    for (const QString& path : chosen) {
+        const ushort* utf16 = path.utf16();
+        int len = path.size();
+        std::vector<char16_type> buf(len + 1);
+        for (int i = 0; i < len; ++i)
+            buf[i] = static_cast<char16_type>(utf16[i]);
+        buf[len] = 0;
+        if (callback) {
+            api_bool cont = callback(
+                reinterpret_cast<const char16_type*>(buf.data()), callbackData);
+            if (!cont) break;
+        }
+    }
+    return true;
+}
+
+static api_bool mock_ExecuteSaveFileDialog(
+        char16_type* filePath,
+        const char16_type* caption,
+        const char16_type* initialPath,
+        const char16_type* filters,
+        const char16_type* /*selectedExtension*/,
+        api_bool /*overwritePrompt*/) {
+    QString cap  = char16ToString(caption);
+    QString init = char16ToString(initialPath);
+    QString filt = pclFiltersToQt(filters);
+    qDebug() << "[PCL Bridge] ExecuteSaveFileDialog: caption =" << cap;
+    QString chosen = QFileDialog::getSaveFileName(nullptr, cap, init, filt);
+    if (chosen.isEmpty()) return false;
+    stringToChar16(chosen, filePath);
+    return true;
+}
+
+static api_bool mock_ExecuteGetDirectoryDialog(
+        char16_type* dirPath,
+        const char16_type* caption,
+        const char16_type* initialPath) {
+    QString cap  = char16ToString(caption);
+    QString init = char16ToString(initialPath);
+    qDebug() << "[PCL Bridge] ExecuteGetDirectoryDialog: caption =" << cap;
+    QString chosen = QFileDialog::getExistingDirectory(nullptr, cap, init);
+    if (chosen.isEmpty()) return false;
+    stringToChar16(chosen, dirPath);
+    return true;
 }
 
 } // namespace blastro

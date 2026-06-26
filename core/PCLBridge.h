@@ -59,6 +59,9 @@ struct PCLProcessInfo {
     pcl::process_execution_routine executeFn = nullptr;
     pcl::process_global_execution_routine executeGlobalFn = nullptr;
     pcl::process_edit_preferences_routine editPreferencesFn = nullptr;
+    pcl::process_class_initialization_routine classInitFn = nullptr;
+    pcl::process_execution_preferences_routine executionPreferencesFn = nullptr;
+    pcl::process_interface_validation_routine validateInterfaceFn = nullptr;
     bool hasEditPreferences = false;
 };
 
