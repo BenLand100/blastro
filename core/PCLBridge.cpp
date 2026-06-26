@@ -203,6 +203,7 @@ static api_bool mock_GetEditValid(const_control_handle h);
 static void mock_SetButtonDefaultEnabled(control_handle h, api_bool enable);
 static void mock_ReturnDialog(control_handle h, int32 result);
 static void mock_SetProcessEditPreferencesRoutine(pcl::process_edit_preferences_routine f);
+static api_bool mock_EditProcessPreferences(meta_process_handle hMetaProcess);
 
 static void mock_BeginParameterDefinition(meta_parameter_handle hParam, const char* paramId, uint32 type);
 static void mock_SetParameterProcessVersionRange(uint32 minVer, uint32 maxVer);
@@ -2007,6 +2008,7 @@ void PCLBridge::setupOverrides() {
     overridePCLStub("ProcessDefinition/SetScientificNotation", reinterpret_cast<void*>(mock_SetScientificNotation));
     overridePCLStub("ProcessDefinition/EndParameterDefinition", reinterpret_cast<void*>(mock_EndParameterDefinition));
     overridePCLStub("ProcessDefinition/SetProcessEditPreferencesRoutine", reinterpret_cast<void*>(mock_SetProcessEditPreferencesRoutine));
+    overridePCLStub("Process/EditProcessPreferences", reinterpret_cast<void*>(mock_EditProcessPreferences));
 }
 
 bool PCLBridge::loadModule(const QString& path) {
@@ -2080,7 +2082,7 @@ bool PCLBridge::loadModule(const QString& path) {
         return false;
     }
 
-    // 2. Initialize the module now that the meta-objects are instantiated so it resolves stubs to our overrides!
+    // 2. Initialize the module stubs and overrides now that the meta-objects are instantiated
     initPCLStubs();
     setupOverrides();
 
@@ -2376,14 +2378,16 @@ bool PCLBridge::launchInterface(const QString& processId, QWidget* parentWindow)
     QPushButton* prefsButton = nullptr;
     
     bool processHasPrefs = false;
+    pcl::process_edit_preferences_routine procEditPrefsFn = nullptr;
     auto procPrefsIdIt = g_processIdToHandle.find(idStr);
     if (procPrefsIdIt != g_processIdToHandle.end()) {
         meta_process_handle hMetaProcess = procPrefsIdIt->second;
         const auto& procInfo = g_processes[hMetaProcess];
         processHasPrefs = procInfo.hasEditPreferences;
+        procEditPrefsFn = procInfo.editPreferencesFn;
     }
 
-    if (info.editPreferencesFn && processHasPrefs) {
+    if (info.editPreferencesFn || processHasPrefs) {
         prefsButton = new QPushButton(QString::fromUtf8("🔧 Preferences"), hostWidget);
         prefsButton->setStyleSheet(
             "QPushButton {"
@@ -2466,11 +2470,17 @@ bool PCLBridge::launchInterface(const QString& processId, QWidget* parentWindow)
     });
 
     // Connect the Preferences button if available
-    if (prefsButton && info.editPreferencesFn) {
-        QObject::connect(prefsButton, &QPushButton::clicked, [info, hInterface]() {
-            qDebug() << "[PCL Bridge] Invoking interface edit preferences routine...";
-            info.editPreferencesFn(hInterface);
-            qDebug() << "[PCL Bridge] Interface edit preferences routine finished.";
+    if (prefsButton) {
+        QObject::connect(prefsButton, &QPushButton::clicked, [info, hInterface, procEditPrefsFn, hMetaProcess]() {
+            if (info.editPreferencesFn) {
+                qDebug() << "[PCL Bridge] Invoking interface edit preferences routine...";
+                info.editPreferencesFn(hInterface);
+                qDebug() << "[PCL Bridge] Interface edit preferences routine finished.";
+            } else if (procEditPrefsFn) {
+                qDebug() << "[PCL Bridge] Invoking process edit preferences routine...";
+                procEditPrefsFn(hMetaProcess);
+                qDebug() << "[PCL Bridge] Process edit preferences routine finished.";
+            }
         });
     }
 
@@ -2776,9 +2786,24 @@ static void mock_ReturnDialog(control_handle h, int32 result) {
 
 static void mock_SetProcessEditPreferencesRoutine(pcl::process_edit_preferences_routine f) {
     if (g_currentDefiningProcess) {
+        g_processes[g_currentDefiningProcess].editPreferencesFn = f;
         g_processes[g_currentDefiningProcess].hasEditPreferences = (f != nullptr);
         qDebug() << "[PCL Bridge] Process edit preferences routine set for:" << g_processes[g_currentDefiningProcess].id << "hasEditPreferences =" << g_processes[g_currentDefiningProcess].hasEditPreferences;
     }
+}
+
+static api_bool mock_EditProcessPreferences(meta_process_handle hMetaProcess) {
+    qDebug() << "[PCL Bridge] mock_EditProcessPreferences called for meta-process:" << hMetaProcess;
+    if (hMetaProcess) {
+        auto it = g_processes.find(hMetaProcess);
+        if (it != g_processes.end() && it->second.editPreferencesFn) {
+            qDebug() << "[PCL Bridge] Invoking process edit preferences routine...";
+            api_bool ok = it->second.editPreferencesFn(hMetaProcess);
+            qDebug() << "[PCL Bridge] Process edit preferences routine returned:" << ok;
+            return ok;
+        }
+    }
+    return false;
 }
 
 } // namespace blastro
