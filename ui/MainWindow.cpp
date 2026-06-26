@@ -87,6 +87,7 @@ MainWindow::MainWindow(QWidget* parent)
 
     // Connect to subwindow activation signal
     connect(m_workspaceArea, &QMdiArea::subWindowActivated, this, &MainWindow::onSubWindowActivated);
+    connect(m_workspaceArea, &WorkspaceArea::elementRenameRequested, this, &MainWindow::onRenameElement);
 }
 
 void MainWindow::createMenus() {
@@ -160,14 +161,16 @@ void MainWindow::onOpenImage() {
     QFileInfo info(filepath);
     QString ext = info.suffix().toLower();
     
-    // Prompt for workspace name
-    bool ok;
-    QString defaultName = QString("Image%1").arg(m_imageCounter++);
-    QString name = QInputDialog::getText(this, "Workspace Reference Name",
-                                         "Enter unique identifier for this image in workspace:",
-                                         QLineEdit::Normal, defaultName, &ok);
-    if (!ok || name.trimmed().isEmpty()) return;
-    name = name.trimmed();
+    // Use filename as the image name by default, resolving duplicates
+    QString baseName = info.completeBaseName();
+    if (baseName.isEmpty()) {
+        baseName = info.fileName();
+    }
+    QString name = baseName;
+    int counter = 1;
+    while (m_workspace.contains(name.toStdString())) {
+        name = QString("%1_%2").arg(baseName).arg(counter++);
+    }
 
     try {
         WorkspaceElement elem;
@@ -228,14 +231,21 @@ void MainWindow::onOpenBatch() {
         return;
     }
 
-    // Prompt for workspace name
-    bool ok;
-    QString defaultName = QString("Batch%1").arg(m_imageCounter++);
-    QString name = QInputDialog::getText(this, "Workspace Reference Name",
-                                         "Enter unique identifier for this batch in workspace:",
-                                         QLineEdit::Normal, defaultName, &ok);
-    if (!ok || name.trimmed().isEmpty()) return;
-    name = name.trimmed();
+    // Use filename as the batch name by default, resolving duplicates
+    QString baseName;
+    if (selectedFiles.size() == 1) {
+        QFileInfo info(selectedFiles.first());
+        baseName = info.completeBaseName();
+        if (baseName.isEmpty()) baseName = info.fileName();
+    } else {
+        QFileInfo info(selectedFiles.first());
+        baseName = info.completeBaseName() + "_batch";
+    }
+    QString name = baseName;
+    int counter = 1;
+    while (m_workspace.contains(name.toStdString())) {
+        name = QString("%1_%2").arg(baseName).arg(counter++);
+    }
 
     std::vector<std::string> stdPaths;
     for (const auto& path : filepaths) {
@@ -272,7 +282,15 @@ void MainWindow::onSaveActiveImage() {
     }
 
     QString filter = "FITS Files (*.fits *.fit);;PNG Image (*.png);;JPEG Image (*.jpg *.jpeg);;All Files (*.*)";
-    QString filepath = QFileDialog::getSaveFileName(this, "Save Image As", activeName, filter);
+    QString defaultPath = activeName;
+    if (!defaultPath.endsWith(".fits", Qt::CaseInsensitive) && 
+        !defaultPath.endsWith(".fit", Qt::CaseInsensitive) &&
+        !defaultPath.endsWith(".png", Qt::CaseInsensitive) &&
+        !defaultPath.endsWith(".jpg", Qt::CaseInsensitive) &&
+        !defaultPath.endsWith(".jpeg", Qt::CaseInsensitive)) {
+        defaultPath += ".fit";
+    }
+    QString filepath = QFileDialog::getSaveFileName(this, "Save Image As", defaultPath, filter);
     if (filepath.isEmpty()) return;
 
     QFileInfo info(filepath);
@@ -693,12 +711,12 @@ void MainWindow::loadAndShowPlugin(const QString& path) {
     }
     bool success = false;
     if (m_pclBridge->loadModule(path)) {
+        success = true;
         auto processes = m_pclBridge->registeredProcesses();
-        if (!processes.empty()) {
-            QString firstProcess = processes[0];
-            qDebug() << "[MainWindow] Automatically launching interface for registered process:" << firstProcess;
-            success = m_pclBridge->launchInterface(firstProcess, this);
-        } else {
+        for (const auto& proc : processes) {
+            addPCLProcessToMenu(proc);
+        }
+        if (processes.empty()) {
             qWarning() << "[MainWindow] No registered processes found in loaded module:" << path;
         }
     } else {
@@ -708,7 +726,7 @@ void MainWindow::loadAndShowPlugin(const QString& path) {
     if (!success) {
         if (QCoreApplication::arguments().contains("--test-load") || 
             QCoreApplication::arguments().contains("--load-plugin")) {
-            qCritical() << "[MainWindow] Plugin load or launch failed. Exiting.";
+            qCritical() << "[MainWindow] Plugin load failed. Exiting.";
             std::exit(1);
         }
     }
@@ -720,6 +738,48 @@ QMdiSubWindow* MainWindow::createPluginSubWindow(QWidget* widget, const QString&
     subWindow->setAttribute(Qt::WA_DeleteOnClose);
     subWindow->show();
     return subWindow;
+}
+
+QMdiSubWindow* MainWindow::createPCLPluginSubWindow(QWidget* widget, const QString& processId, const QString& title) {
+    QMdiSubWindow* subWindow = createPluginSubWindow(widget, title);
+    if (subWindow) {
+        m_openPCLInterfaces[processId] = subWindow;
+        connect(subWindow, &QObject::destroyed, this, [this, processId]() {
+            m_openPCLInterfaces.erase(processId);
+        });
+    }
+    return subWindow;
+}
+
+void MainWindow::addPCLProcessToMenu(const QString& processId) {
+    if (!m_algoMenu) return;
+
+    // Prevent duplicates
+    for (QAction* action : m_algoMenu->actions()) {
+        if (action->text() == processId) {
+            return;
+        }
+    }
+
+    QAction* act = new QAction(processId, this);
+    connect(act, &QAction::triggered, this, [this, processId]() {
+        openPCLInterface(processId);
+    });
+    m_algoMenu->addAction(act);
+}
+
+void MainWindow::openPCLInterface(const QString& processId) {
+    auto it = m_openPCLInterfaces.find(processId);
+    if (it != m_openPCLInterfaces.end() && it->second) {
+        m_workspaceArea->setActiveSubWindow(it->second);
+        it->second->show();
+        it->second->setFocus();
+    } else {
+        if (!m_pclBridge) {
+            m_pclBridge = std::make_unique<PCLBridge>();
+        }
+        m_pclBridge->launchInterface(processId, this);
+    }
 }
 
 void MainWindow::onLoadPCLModule() {
@@ -748,8 +808,9 @@ void MainWindow::onLoadPCLModule() {
                                  .arg(name, version, procListStr.isEmpty() ? "None" : procListStr));
         
         if (!processes.empty()) {
-            qDebug() << "[MainWindow] Automatically launching interface for process:" << processes[0];
-            m_pclBridge->launchInterface(processes[0], this);
+            for (const auto& proc : processes) {
+                addPCLProcessToMenu(proc);
+            }
         }
     } else {
         QMessageBox::critical(this, "Load Plugin Error", "Failed to load PixInsight module. Check console for details.");
@@ -811,9 +872,11 @@ bool MainWindow::executePCLProcessOnActiveImage(const QString& processId, void* 
 
     if (ok) {
         printStats("After", buffers);
-        WorkspaceElement elem = std::visit([](auto&& arg) -> WorkspaceElement { return arg; }, activeImg);
-        m_workspaceArea->removeElementView(activeName);
-        m_workspaceArea->addElementView(activeName, elem);
+        
+        // Notify the UI that the image has been modified in-place, preserving stretch settings
+        if (auto* win = m_workspaceArea->getImageWindow(activeName)) {
+            win->notifyImageUpdated();
+        }
         
         statusBar()->showMessage(QString("%1 completed successfully.").arg(processId), 5000);
         QMessageBox::information(this, "Process Execution", QString("%1 completed successfully.").arg(processId));
@@ -1053,6 +1116,24 @@ void MainWindow::restoreProcessConsole() {
     logSub->resize(600, 200);
     logSub->show();
     logSub->move(0, 500);
+}
+
+void MainWindow::onRenameElement(const QString& oldName, const QString& newName) {
+    std::string stdOld = oldName.toStdString();
+    std::string stdNew = newName.toStdString();
+    
+    if (m_workspace.contains(stdNew)) {
+        QMessageBox::warning(this, "Rename Error",
+                             QString("The name '%1' is already in use in the workspace.").arg(newName));
+        return;
+    }
+    
+    if (m_workspace.renameElement(stdOld, stdNew)) {
+        m_workspaceArea->renameElementView(oldName, newName);
+        statusBar()->showMessage(QString("Renamed '%1' to '%2'").arg(oldName, newName), 3000);
+    } else {
+        QMessageBox::warning(this, "Rename Error", "Failed to rename workspace element.");
+    }
 }
 
 } // namespace blastro

@@ -21,7 +21,7 @@ public:
     explicit ImageView(QWidget* parent = nullptr);
     ~ImageView() override = default;
 
-    void setImage(const ImageVariant& image);
+    void setImage(const ImageVariant& image, bool preserveStretch = false);
     ImageVariant currentImage() const { return m_currentImage; }
     
     // Display modes and stretching

@@ -92,9 +92,8 @@ static std::unordered_map<meta_process_handle, PCLProcessInfo> g_processes;
 static std::unordered_map<std::string, meta_process_handle> g_processIdToHandle;
 static meta_process_handle g_currentDefiningProcess = nullptr;
 
-// Module lifecycle callbacks
-static pcl::module_on_load_routine g_moduleOnLoad = nullptr;
-static pcl::module_on_unload_routine g_moduleOnUnload = nullptr;
+// Module lifecycle tracking
+static PCLModuleInfo* g_currentLoadingModule = nullptr;
 
 // Interface registry
 struct PCLInterfaceInfo {
@@ -803,12 +802,16 @@ static api_bool mock_SetViewPropertyValue(api_handle hModule, view_handle hView,
 // ----------------------------------------------------------------------------
 
 static void mock_SetModuleOnLoadRoutine(pcl::module_on_load_routine f) {
-    g_moduleOnLoad = f;
+    if (g_currentLoadingModule) {
+        g_currentLoadingModule->onLoadFn = f;
+    }
     qDebug() << "[PCL Bridge] Module OnLoad routine registered.";
 }
 
 static void mock_SetModuleOnUnloadRoutine(pcl::module_on_unload_routine f) {
-    g_moduleOnUnload = f;
+    if (g_currentLoadingModule) {
+        g_currentLoadingModule->onUnloadFn = f;
+    }
     qDebug() << "[PCL Bridge] Module OnUnload routine registered.";
 }
 
@@ -2190,18 +2193,20 @@ void PCLBridge::setupOverrides() {
 }
 
 bool PCLBridge::loadModule(const QString& path) {
-    unloadModule();
+    // Check if this module is already loaded to avoid duplicates
+    for (const auto& mod : m_modules) {
+        if (mod.filepath == path) {
+            qInfo() << "[PCL Bridge] Module is already loaded:" << path;
+            return true;
+        }
+    }
 
     // Dynamically pre-load TensorFlow dependencies for RC-Astro *XTerminator plugins.
-    // BlurXTerminator, StarXTerminator, and NoiseXTerminator all link libtensorflow.
-    // We pre-load with RTLD_GLOBAL so the symbols are available when the plugin is dlopen'd.
-    // This is a no-op if the libs are not present.
     {
         QString appDir = QCoreApplication::applicationDirPath();
         QString tfFrameworkPath = appDir + "/lib/libtensorflow_framework.so.2";
         QString tfPath = appDir + "/lib/libtensorflow.so.2";
 
-        // Fallback to development/build directory structures if run from build/
         if (!QFile::exists(tfPath)) {
             tfFrameworkPath = appDir + "/../lib/libtensorflow_framework.so.2";
             tfPath = appDir + "/../lib/libtensorflow.so.2";
@@ -2223,8 +2228,8 @@ bool PCLBridge::loadModule(const QString& path) {
     }
 
     qInfo() << "[PCL Bridge] Attempting to dlopen:" << path;
-    m_libHandle = dlopen(path.toUtf8().constData(), RTLD_LAZY | RTLD_GLOBAL);
-    if (!m_libHandle) {
+    void* libHandle = dlopen(path.toUtf8().constData(), RTLD_LAZY | RTLD_GLOBAL);
+    if (!libHandle) {
         qWarning() << "[PCL Bridge] dlopen failed:" << dlerror();
         return false;
     }
@@ -2234,15 +2239,21 @@ bool PCLBridge::loadModule(const QString& path) {
     typedef uint32 (*InitializeRoutine)(api_handle, function_resolver, uint32, void*);
     typedef int32 (*InstallRoutine)(int32);
 
-    IdentifyRoutine identify = reinterpret_cast<IdentifyRoutine>(dlsym(m_libHandle, "IdentifyPixInsightModule"));
-    InitializeRoutine initialize = reinterpret_cast<InitializeRoutine>(dlsym(m_libHandle, "InitializePixInsightModule"));
-    InstallRoutine install = reinterpret_cast<InstallRoutine>(dlsym(m_libHandle, "InstallPixInsightModule"));
+    IdentifyRoutine identify = reinterpret_cast<IdentifyRoutine>(dlsym(libHandle, "IdentifyPixInsightModule"));
+    InitializeRoutine initialize = reinterpret_cast<InitializeRoutine>(dlsym(libHandle, "InitializePixInsightModule"));
+    InstallRoutine install = reinterpret_cast<InstallRoutine>(dlsym(libHandle, "InstallPixInsightModule"));
 
     if (!identify || !initialize) {
         qWarning() << "[PCL Bridge] Missing mandatory PMIDN or PMINI symbols in module.";
-        unloadModule();
+        dlclose(libHandle);
         return false;
     }
+
+    // Create a new module info structure and set it as the current loading context
+    PCLModuleInfo newModule;
+    newModule.libHandle = libHandle;
+    newModule.filepath = path;
+    g_currentLoadingModule = &newModule;
 
     // 1. Install with FullInstall first to instantiate the MetaModule and all process/parameter meta-objects!
     if (install) {
@@ -2250,62 +2261,69 @@ bool PCLBridge::loadModule(const QString& path) {
         int32 installStatus = install(0); // InstallMode::FullInstall
         if (installStatus != 0) {
             qWarning() << "[PCL Bridge] InstallPixInsightModule (FullInstall) failed, code:" << installStatus;
-            unloadModule();
+            dlclose(libHandle);
+            g_currentLoadingModule = nullptr;
             return false;
         }
         qInfo() << "[PCL Bridge] Meta-objects instantiated successfully.";
     } else {
         qWarning() << "[PCL Bridge] Module has no installation entry point (PMINS), cannot initialize.";
-        unloadModule();
+        dlclose(libHandle);
+        g_currentLoadingModule = nullptr;
         return false;
     }
 
     // 2. Initialize the module stubs and overrides now that the meta-objects are instantiated
-    initPCLStubs();
-    setupOverrides();
+    if (!m_initialized) {
+        initPCLStubs();
+        setupOverrides();
+        m_initialized = true;
+    }
 
     api_handle hModule = reinterpret_cast<api_handle>(this);
     uint32 status = initialize(hModule, &PCLBridge::resolveCoreFunction, PCL_API_Version, nullptr);
     if (status != 0) {
         qWarning() << "[PCL Bridge] InitializePixInsightModule failed, code:" << status;
-        unloadModule();
+        dlclose(libHandle);
+        g_currentLoadingModule = nullptr;
         return false;
     }
-
-    m_initialized = true;
 
     // 3. Identify the module to get description metadata!
     qInfo() << "[PCL Bridge] Running IdentifyPixInsightModule...";
-    status = identify(&m_description, 0);
+    status = identify(&newModule.description, 0);
     if (status != 0) {
         qWarning() << "[PCL Bridge] IdentifyPixInsightModule phase 0 failed, code:" << status;
-        unloadModule();
+        dlclose(libHandle);
+        g_currentLoadingModule = nullptr;
         return false;
     }
 
-    status = identify(&m_description, 1);
+    status = identify(&newModule.description, 1);
     if (status != 0) {
         qWarning() << "[PCL Bridge] IdentifyPixInsightModule phase 1 failed, code:" << status;
-        unloadModule();
+        dlclose(libHandle);
+        g_currentLoadingModule = nullptr;
         return false;
     }
 
-    if (!m_description) {
+    if (!newModule.description) {
         qWarning() << "[PCL Bridge] Module description is null after identification.";
-        unloadModule();
+        dlclose(libHandle);
+        g_currentLoadingModule = nullptr;
         return false;
     }
 
     // Print metadata
     qInfo() << "[PCL Bridge] Module Identified Successfully:";
-    qInfo() << "  Name:       " << m_description->name;
-    qInfo() << "  Version:    " << m_description->versionInfo;
-    qInfo() << "  API Version:" << QString::number(m_description->apiVersion, 16);
+    qInfo() << "  Name:       " << newModule.description->name;
+    qInfo() << "  Version:    " << newModule.description->versionInfo;
+    qInfo() << "  API Version:" << QString::number(newModule.description->apiVersion, 16);
 
     // Call the module's OnLoad routine if registered!
-    if (g_moduleOnLoad) {
+    if (newModule.onLoadFn) {
         qInfo() << "[PCL Bridge] Invoking module OnLoad routine...";
-        g_moduleOnLoad();
+        newModule.onLoadFn();
         qInfo() << "[PCL Bridge] Module OnLoad routine finished.";
     }
 
@@ -2323,38 +2341,50 @@ bool PCLBridge::loadModule(const QString& path) {
         }
     }
 
+    m_modules.push_back(newModule);
+    m_description = newModule.description;
+    g_currentLoadingModule = nullptr;
+
     return true;
 }
 
 void PCLBridge::unloadModule() {
-    if (m_libHandle) {
-        // Call the module's OnUnload routine if registered!
-        if (g_moduleOnUnload) {
-            qInfo() << "[PCL Bridge] Invoking module OnUnload routine...";
-            g_moduleOnUnload();
-            g_moduleOnUnload = nullptr;
-        }
-        g_moduleOnLoad = nullptr;
+    for (auto& mod : m_modules) {
+        if (mod.libHandle) {
+            // Call the module's OnUnload routine if registered!
+            if (mod.onUnloadFn) {
+                qInfo() << "[PCL Bridge] Invoking module OnUnload routine for:" << mod.filepath;
+                mod.onUnloadFn();
+            }
 
-        // If identify is loaded, call PMIDN phase 0xff for cleanup
-        typedef uint32 (*IdentifyRoutine)(api_module_description**, int32);
-        IdentifyRoutine identify = reinterpret_cast<IdentifyRoutine>(dlsym(m_libHandle, "IdentifyPixInsightModule"));
-        if (identify && m_description) {
-            identify(&m_description, 0xff);
+            // If identify is loaded, call PMIDN phase 0xff for cleanup
+            typedef uint32 (*IdentifyRoutine)(api_module_description**, int32);
+            IdentifyRoutine identify = reinterpret_cast<IdentifyRoutine>(dlsym(mod.libHandle, "IdentifyPixInsightModule"));
+            if (identify && mod.description) {
+                identify(&mod.description, 0xff);
+            }
+            
+            dlclose(mod.libHandle);
+            qInfo() << "[PCL Bridge] Module unloaded:" << mod.filepath;
         }
-        
-        dlclose(m_libHandle);
-        m_libHandle = nullptr;
-        m_description = nullptr;
-        m_initialized = false;
-        qInfo() << "[PCL Bridge] Module unloaded.";
-        g_interfaceControls.clear();
-        for (auto& pair : g_threads) {
-            delete pair.second;
-        }
-        g_threads.clear();
-        g_currentThread = nullptr;
     }
+
+    m_modules.clear();
+    m_description = nullptr;
+    m_initialized = false;
+
+    g_processes.clear();
+    g_processIdToHandle.clear();
+    g_interfaces.clear();
+    g_interfaceIdToHandle.clear();
+    g_interfaceControls.clear();
+    
+    for (auto& pair : g_threads) {
+        delete pair.second;
+    }
+    g_threads.clear();
+    g_currentThread = nullptr;
+    g_activeImage = nullptr;
 }
 
 bool PCLBridge::executeProcess(const QString& processId, std::vector<ImageBufferPtr>& buffers) {
@@ -2762,7 +2792,7 @@ bool PCLBridge::launchInterface(const QString& processId, QWidget* parentWindow)
 
     MainWindow* mainWin = qobject_cast<MainWindow*>(parentWindow);
     if (mainWin) {
-        mainWin->createPluginSubWindow(hostWidget, processId + " Process Interface");
+        mainWin->createPCLPluginSubWindow(hostWidget, processId, processId + " Process Interface");
     } else {
         hostWidget->show();
     }

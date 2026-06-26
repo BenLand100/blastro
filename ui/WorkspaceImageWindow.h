@@ -20,11 +20,18 @@ public:
     WorkspaceElement element() const { return m_element; }
     QWidget* viewportWidget() const { return m_viewportWidget; }
 
+    void updateName(const QString& newName);
+    void notifyImageUpdated();
+
+signals:
+    void renameRequested(const QString& oldName, const QString& newName);
+
 private slots:
     void onModeButtonClicked(int id);
     void onStretchParamsChangedInWidget(double b, double w, double m);
     void onStretchParamsChangedInView(double b, double w, double m);
     void onFrameChanged(int index);
+    void onRenameClicked();
 
 private:
     void updateHistogram();
@@ -41,6 +48,7 @@ private:
     QPushButton* m_normalBtn;
     QPushButton* m_stretchBtn;
     QPushButton* m_autoBtn;
+    QPushButton* m_nameBtn;
 
     HistogramWidget* m_histogramWidget;
 };

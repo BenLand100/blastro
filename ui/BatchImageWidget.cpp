@@ -142,7 +142,7 @@ void BatchImageWidget::onIndexChanged(int index) {
     
     try {
         ImageVariant img = m_batch->getImage(m_currentIndex);
-        m_imageView->setImage(img);
+        m_imageView->setImage(img, true);
         emit frameChanged(index);
     } catch (const std::exception& e) {
         m_infoLabel->setText(QString("Error loading frame %1: %2").arg(index + 1).arg(e.what()));

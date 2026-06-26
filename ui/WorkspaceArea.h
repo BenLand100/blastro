@@ -8,6 +8,8 @@
 
 namespace blastro {
 
+class WorkspaceImageWindow;
+
 class WorkspaceArea : public QMdiArea {
     Q_OBJECT
 public:
@@ -22,10 +24,16 @@ public:
     
     // Renames an existing view's window title
     void renameElementView(const QString& oldName, const QString& newName);
+
+    // Retrieves a WorkspaceImageWindow pointer by name
+    WorkspaceImageWindow* getImageWindow(const QString& name) const;
     
     // Retrieves the currently active image view (handles single image or active frame of batch)
     ImageVariant getActiveImage() const;
     QString getActiveImageName() const;
+
+signals:
+    void elementRenameRequested(const QString& oldName, const QString& newName);
 
 private:
     QMap<QString, QMdiSubWindow*> m_subWindows;

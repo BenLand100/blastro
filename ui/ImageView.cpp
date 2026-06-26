@@ -37,7 +37,7 @@ ImageView::ImageView(QWidget* parent)
     updateLUT();
 }
 
-void ImageView::setImage(const ImageVariant& image) {
+void ImageView::setImage(const ImageVariant& image, bool preserveStretch) {
     m_currentImage = image;
     
     // Set scene rect to the image dimensions
@@ -58,10 +58,14 @@ void ImageView::setImage(const ImageVariant& image) {
         m_fitOnNextResize = true;
     }
     
-    if (m_displayMode == Autostretch) {
-        runAutostretch();
-    } else {
+    if (preserveStretch) {
         updateView();
+    } else {
+        if (m_displayMode == Autostretch) {
+            runAutostretch();
+        } else {
+            updateView();
+        }
     }
 }
 

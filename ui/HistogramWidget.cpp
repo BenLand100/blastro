@@ -59,19 +59,34 @@ HistogramWidget::DragTarget HistogramWidget::getCloseLine(const QPoint& pos) con
     double xW = valueToX(m_whitepoint);
     double xM = valueToX(m_blackpoint + m_midpoint * (m_whitepoint - m_blackpoint));
 
-    const int threshold = 8; // Pixels
-    
-    if (std::abs(pos.x() - xM) < threshold) {
-        return Mid;
+    double dxB = std::abs(pos.x() - xB);
+    double dxW = std::abs(pos.x() - xW);
+    double dxM = std::abs(pos.x() - xM);
+
+    double h = height();
+    // Add a penalty if the click is in the vertical half opposite to the handle's visual circle
+    double distB = dxB + (pos.y() < h / 2 ? 12.0 : 0.0);
+    double distW = dxW + (pos.y() < h / 2 ? 12.0 : 0.0);
+    double distM = dxM + (pos.y() >= h / 2 ? 12.0 : 0.0);
+
+    const double threshold = 10.0; // Grab threshold in pixels
+    double minDist = threshold;
+    DragTarget target = None;
+
+    if (distB < minDist) {
+        minDist = distB;
+        target = Black;
     }
-    if (std::abs(pos.x() - xB) < threshold) {
-        return Black;
+    if (distW < minDist) {
+        minDist = distW;
+        target = White;
     }
-    if (std::abs(pos.x() - xW) < threshold) {
-        return White;
+    if (distM < minDist) {
+        minDist = distM;
+        target = Mid;
     }
-    
-    return None;
+
+    return target;
 }
 
 void HistogramWidget::paintEvent(QPaintEvent* event) {

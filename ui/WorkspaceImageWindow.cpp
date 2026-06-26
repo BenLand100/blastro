@@ -2,6 +2,7 @@
 #include "BatchImageWidget.h"
 #include <QVBoxLayout>
 #include <QHBoxLayout>
+#include <QInputDialog>
 
 namespace blastro {
 
@@ -88,10 +89,14 @@ WorkspaceImageWindow::WorkspaceImageWindow(const QString& name, const WorkspaceE
     headerLayout->addWidget(m_histogramWidget, 1); // Stretch factor 1
     headerLayout->addSpacing(15);
 
-    // Label for name readout
-    QLabel* nameLabel = new QLabel(name, m_headerBar);
-    nameLabel->setStyleSheet("color: #888; font-weight: bold; font-family: monospace; font-size: 11px;");
-    headerLayout->addWidget(nameLabel);
+    // Clickable button for name readout (renaming)
+    m_nameBtn = new QPushButton(name, m_headerBar);
+    m_nameBtn->setStyleSheet(
+        "QPushButton { background: transparent; border: none; color: #888; font-weight: bold; font-family: monospace; font-size: 11px; text-align: right; padding: 0px; }"
+        "QPushButton:hover { color: #007acc; text-decoration: underline; }"
+    );
+    headerLayout->addWidget(m_nameBtn);
+    connect(m_nameBtn, &QPushButton::clicked, this, &WorkspaceImageWindow::onRenameClicked);
 
     mainLayout->addWidget(m_headerBar);
 
@@ -163,10 +168,6 @@ void WorkspaceImageWindow::onStretchParamsChangedInView(double b, double w, doub
 void WorkspaceImageWindow::onFrameChanged(int index) {
     Q_UNUSED(index);
     updateHistogram();
-    
-    if (m_imageView->displayMode() == ImageView::Autostretch) {
-        m_imageView->runAutostretch();
-    }
 }
 
 void WorkspaceImageWindow::updateHistogram() {
@@ -177,6 +178,34 @@ void WorkspaceImageWindow::updateHistogram() {
                                             m_imageView->whitepoint(), 
                                             m_imageView->midpoint());
     }
+}
+
+void WorkspaceImageWindow::onRenameClicked() {
+    bool ok;
+    QString newName = QInputDialog::getText(this, "Rename Workspace Item",
+                                          "Enter new unique name:",
+                                          QLineEdit::Normal, m_name, &ok);
+    if (ok && !newName.trimmed().isEmpty() && newName.trimmed() != m_name) {
+        emit renameRequested(m_name, newName.trimmed());
+    }
+}
+
+void WorkspaceImageWindow::updateName(const QString& newName) {
+    m_name = newName;
+    if (m_nameBtn) {
+        m_nameBtn->setText(newName);
+    }
+}
+
+void WorkspaceImageWindow::notifyImageUpdated() {
+    if (m_imageView) {
+        if (m_imageView->displayMode() == ImageView::Autostretch) {
+            m_imageView->runAutostretch();
+        } else {
+            m_imageView->setDisplayMode(m_imageView->displayMode());
+        }
+    }
+    updateHistogram();
 }
 
 } // namespace blastro

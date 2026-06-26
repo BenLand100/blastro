@@ -14,6 +14,7 @@
 #include <QCloseEvent>
 #include <QObject>
 #include <memory>
+#include <unordered_map>
 
 namespace blastro {
 
@@ -48,6 +49,7 @@ public:
 
     void loadAndShowPlugin(const QString& path);
     QMdiSubWindow* createPluginSubWindow(QWidget* widget, const QString& title);
+    QMdiSubWindow* createPCLPluginSubWindow(QWidget* widget, const QString& processId, const QString& title);
     bool executePCLProcessOnActiveImage(const QString& processId, void* hProcess);
     void testProcessOnImage(const QString& pluginPath, const QString& imagePath);
     bool loadImageDirectly(const QString& filepath, const QString& refName);
@@ -75,6 +77,7 @@ private slots:
 private slots:
     void updateWindowMenu();
     void restoreProcessConsole();
+    void onRenameElement(const QString& oldName, const QString& newName);
 
 private:
     void createMenus();
@@ -89,6 +92,10 @@ private:
     bool m_algorithmRunning = false;
 
     std::unique_ptr<PCLBridge> m_pclBridge;
+    std::unordered_map<QString, QMdiSubWindow*> m_openPCLInterfaces;
+
+    void addPCLProcessToMenu(const QString& processId);
+    void openPCLInterface(const QString& processId);
 
     // Menus
     QMenu* m_fileMenu;

@@ -22,6 +22,7 @@ QMdiSubWindow* WorkspaceArea::addElementView(const QString& name, const Workspac
     }
 
     WorkspaceImageWindow* viewWidget = new WorkspaceImageWindow(name, element, this);
+    connect(viewWidget, &WorkspaceImageWindow::renameRequested, this, &WorkspaceArea::elementRenameRequested);
 
     // Create MDI subwindow
     QMdiSubWindow* sub = addSubWindow(viewWidget);
@@ -59,6 +60,10 @@ void WorkspaceArea::renameElementView(const QString& oldName, const QString& new
         connect(sub, &QObject::destroyed, this, [this, newName]() {
             m_subWindows.remove(newName);
         });
+
+        if (auto* win = qobject_cast<WorkspaceImageWindow*>(sub->widget())) {
+            win->updateName(newName);
+        }
     }
 }
 
@@ -86,6 +91,16 @@ QString WorkspaceArea::getActiveImageName() const {
         }
     }
     return QString();
+}
+
+WorkspaceImageWindow* WorkspaceArea::getImageWindow(const QString& name) const {
+    if (m_subWindows.contains(name)) {
+        QMdiSubWindow* sub = m_subWindows[name];
+        if (sub) {
+            return qobject_cast<WorkspaceImageWindow*>(sub->widget());
+        }
+    }
+    return nullptr;
 }
 
 } // namespace blastro

@@ -73,6 +73,14 @@ struct PCLProcessInfo {
     bool hasEditPreferences = false;
 };
 
+struct PCLModuleInfo {
+    void* libHandle = nullptr;
+    api_module_description* description = nullptr;
+    pcl::module_on_load_routine onLoadFn = nullptr;
+    pcl::module_on_unload_routine onUnloadFn = nullptr;
+    QString filepath;
+};
+
 class PCLBridge {
 public:
     PCLBridge();
@@ -106,7 +114,7 @@ public:
     static void* resolveCoreFunction(const char* funcName);
 
 private:
-    void* m_libHandle = nullptr;
+    std::vector<PCLModuleInfo> m_modules;
     api_module_description* m_description = nullptr;
     bool m_initialized = false;
 
