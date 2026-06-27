@@ -32,7 +32,6 @@ DebayerDialog::DebayerDialog(WorkspaceRegistry& workspace, QWidget* parent)
 
     // 1. Target Input ComboBox
     m_targetInputCombo = new QComboBox(this);
-    refreshWorkspaceElements();
     formLayout->addRow("Target Input:", m_targetInputCombo);
 
     // 2. Output Name LineEdit
@@ -50,6 +49,14 @@ DebayerDialog::DebayerDialog(WorkspaceRegistry& workspace, QWidget* parent)
     connect(m_outputName, &QLineEdit::textEdited, this, [this](const QString& text) {
         m_outputPattern = text;
     });
+
+    refreshWorkspaceElements();
+
+    if (!m_targetInputCombo->currentText().isEmpty()) {
+        QString name = m_outputPattern;
+        name.replace("{input}", m_targetInputCombo->currentText());
+        m_outputName->setText(name);
+    }
 
     // 3. Bayer Pattern ComboBox
     m_patternCombo = new QComboBox(this);

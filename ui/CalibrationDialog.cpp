@@ -40,8 +40,6 @@ CalibrationDialog::CalibrationDialog(WorkspaceRegistry& workspace, QWidget* pare
     m_flatCombo = new QComboBox(this);
     m_flatCombo->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     
-    refreshWorkspaceElements();
-    
     connect(m_targetInputCombo, &QComboBox::currentTextChanged, this, [this](const QString& text) {
         if (!text.isEmpty()) {
             QString name = m_outputPattern;
@@ -53,6 +51,14 @@ CalibrationDialog::CalibrationDialog(WorkspaceRegistry& workspace, QWidget* pare
     connect(m_outputName, &QLineEdit::textEdited, this, [this](const QString& text) {
         m_outputPattern = text;
     });
+
+    refreshWorkspaceElements();
+
+    if (!m_targetInputCombo->currentText().isEmpty()) {
+        QString name = m_outputPattern;
+        name.replace("{input}", m_targetInputCombo->currentText());
+        m_outputName->setText(name);
+    }
 
     formLayout->addRow("Target Input:", m_targetInputCombo);
     formLayout->addRow("Output Name:", m_outputName);
