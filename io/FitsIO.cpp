@@ -369,7 +369,7 @@ bool FitsIO::writeBatch(const std::string& filepath, ImageBatchPtr batch) {
     }
 }
 
-ImageVariant FitsIO::readImagePatch(const std::string& filepath, int xStart, int yStart, int patchW, int patchH) {
+ImageVariant FitsIO::readImagePatch(const std::string& filepath, int xStart, int yStart, int patchW, int patchH, int planeIndex) {
     try {
         std::unique_ptr<CCfits::FITS> pInfile(new CCfits::FITS(filepath, CCfits::Read, true));
         CCfits::PHDU& image = pInfile->pHDU();
@@ -423,7 +423,25 @@ ImageVariant FitsIO::readImagePatch(const std::string& filepath, int xStart, int
                 }
                 return rgbImg;
             } else {
-                throw std::runtime_error("Unsupported FITS dimensions for patch read");
+                // 3D FITS cube plane/frame patch
+                if (planeIndex < 0 || planeIndex >= depth) {
+                    throw std::runtime_error("FITS cube plane index out of range");
+                }
+                std::valarray<float> contents;
+                std::vector<long> fp = { xStart + 1, yStart + 1, planeIndex + 1 };
+                std::vector<long> lp = { xStart + patchW, yStart + patchH, planeIndex + 1 };
+                std::vector<long> stride = { 1, 1, 1 };
+                image.read(contents, fp, lp, stride);
+
+                auto grayImg = std::make_shared<GrayscaleImage>(patchW, patchH);
+                auto buffer = grayImg->buffer();
+                float scale = determineScaleFactor(image.bitpix(), contents);
+                for (int y = 0; y < patchH; ++y) {
+                    for (int x = 0; x < patchW; ++x) {
+                        buffer->setPixel(x, y, contents[y * patchW + x] / scale);
+                    }
+                }
+                return grayImg;
             }
         } else {
             throw std::runtime_error("Unsupported FITS dimensions for patch read");

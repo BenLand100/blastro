@@ -15,7 +15,7 @@ public:
     ImageBatchPtr readBatch(const std::vector<std::string>& filepaths) override;
 
     // 2D Patch support
-    ImageVariant readImagePatch(const std::string& filepath, int xStart, int yStart, int patchW, int patchH);
+    ImageVariant readImagePatch(const std::string& filepath, int xStart, int yStart, int patchW, int patchH, int planeIndex = 0);
     bool writeImagePatch(const std::string& filepath, const ImageVariant& patch, int xStart, int yStart);
 
     // ImageWriter interface

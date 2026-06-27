@@ -54,7 +54,7 @@ static ImageVariant loadPatch(ImageBatchPtr batch, int idx, int xStart, int ySta
     std::string filepath = batch->frameFilepath(idx);
     if (!filepath.empty()) {
         try {
-            return fits.readImagePatch(filepath, xStart, yStart, patchW, patchH);
+            return fits.readImagePatch(filepath, xStart, yStart, patchW, patchH, idx);
         } catch (const std::exception& e) {
             Logger::warning("Stacking", QString("Failed to read patch from disk for %1: %2. Falling back to in-memory crop.")
                             .arg(QString::fromStdString(filepath)).arg(e.what()));
