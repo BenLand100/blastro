@@ -81,4 +81,4 @@ We welcome contributions! If you're interested in adding new algorithms or impro
 
 ## License
 
-*(Add License Information Here)*
+This software is licensed under the terms of the GNU General Public License version 3.0 (GPL v3). See the [LICENSE](LICENSE) file for the full license text.
