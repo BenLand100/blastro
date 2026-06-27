@@ -40,7 +40,7 @@ PreferencesWindow::PreferencesWindow(QWidget* parent)
     mainLayout->setSpacing(15);
 
     // Group 1: PCL Settings
-    QGroupBox* pclGroup = new QGroupBox("PixInsight PCL Settings", this);
+    QGroupBox* pclGroup = new QGroupBox("PCL Settings", this);
     QFormLayout* pclForm = new QFormLayout(pclGroup);
     pclForm->setSpacing(8);
 

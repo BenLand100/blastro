@@ -38,6 +38,7 @@ ImageView::ImageView(QWidget* parent)
 }
 
 void ImageView::setImage(const ImageVariant& image, bool preserveStretch) {
+    clearCLAHE();
     m_currentImage = image;
     
     // Set scene rect to the image dimensions
@@ -71,11 +72,122 @@ void ImageView::setImage(const ImageVariant& image, bool preserveStretch) {
 
 void ImageView::setDisplayMode(DisplayMode mode) {
     if (mode == Autostretch) {
+        if (m_displayMode == Autostretch) {
+            m_autoStretchLevel = (m_autoStretchLevel + 1) % 3;
+        } else {
+            m_autoStretchLevel = 0; // Start with the lowest intensity
+        }
         runAutostretch();
     } else {
         m_displayMode = mode;
         updateLUT(); // Precompute LUT for the new mode
         updateView();
+    }
+}
+
+void ImageView::setChannelMode(ChannelMode mode) {
+    if (m_channelMode != mode) {
+        m_channelMode = mode;
+        updateView();
+    }
+}
+
+void ImageView::clearCLAHE() {
+    m_claheGray.clear();
+    m_claheR.clear();
+    m_claheG.clear();
+    m_claheB.clear();
+}
+
+static void runFastCLAHE(const float* src, float* dst, int width, int height, int gridX = 8, int gridY = 8, float clipLimitVal = 40.0f) {
+    if (width <= 0 || height <= 0 || !src || !dst) return;
+    int numBins = 256;
+    int tileSizeX = width / gridX;
+    int tileSizeY = height / gridY;
+    if (tileSizeX <= 0 || tileSizeY <= 0) return;
+
+    // 1. Compute histograms for each tile
+    std::vector<std::vector<int>> histograms(gridX * gridY, std::vector<int>(numBins, 0));
+    for (int ty = 0; ty < gridY; ++ty) {
+        for (int tx = 0; tx < gridX; ++tx) {
+            int tileIdx = ty * gridX + tx;
+            int xStart = tx * tileSizeX;
+            int yStart = ty * tileSizeY;
+            int xEnd = (tx == gridX - 1) ? width : xStart + tileSizeX;
+            int yEnd = (ty == gridY - 1) ? height : yStart + tileSizeY;
+            int tilePixels = (xEnd - xStart) * (yEnd - yStart);
+
+            auto& hist = histograms[tileIdx];
+            for (int y = yStart; y < yEnd; ++y) {
+                for (int x = xStart; x < xEnd; ++x) {
+                    float val = src[y * width + x];
+                    int bin = std::max(0, std::min(numBins - 1, static_cast<int>(val * (numBins - 1))));
+                    hist[bin]++;
+                }
+            }
+
+            // Clip histogram
+            int clipLimit = static_cast<int>(clipLimitVal * tilePixels / numBins);
+            if (clipLimit < 1) clipLimit = 1;
+            int excess = 0;
+            for (int b = 0; b < numBins; ++b) {
+                if (hist[b] > clipLimit) {
+                    excess += hist[b] - clipLimit;
+                    hist[b] = clipLimit;
+                }
+            }
+            int binIncr = excess / numBins;
+            int remainder = excess % numBins;
+            for (int b = 0; b < numBins; ++b) {
+                hist[b] += binIncr;
+            }
+            for (int b = 0; b < remainder; ++b) {
+                hist[b]++;
+            }
+
+            // Convert to CDF
+            float sum = 0.0f;
+            for (int b = 0; b < numBins; ++b) {
+                sum += hist[b];
+                hist[b] = static_cast<int>(sum);
+            }
+        }
+    }
+
+    // 2. Interpolate for each pixel
+    for (int y = 0; y < height; ++y) {
+        float fy = static_cast<float>(y) / tileSizeY - 0.5f;
+        int ty = std::max(0, std::min(gridY - 1, static_cast<int>(std::floor(fy))));
+        float ty_weight = fy - ty;
+
+        for (int x = 0; x < width; ++x) {
+            float fx = static_cast<float>(x) / tileSizeX - 0.5f;
+            int tx = std::max(0, std::min(gridX - 1, static_cast<int>(std::floor(fx))));
+            float tx_weight = fx - tx;
+
+            float val = src[y * width + x];
+            int bin = std::max(0, std::min(numBins - 1, static_cast<int>(val * (numBins - 1))));
+
+            // Get neighboring tiles
+            int tx0 = tx;
+            int tx1 = std::min(gridX - 1, tx + 1);
+            int ty0 = ty;
+            int ty1 = std::min(gridY - 1, ty + 1);
+
+            float cdf00 = histograms[ty0 * gridX + tx0][bin];
+            float cdf10 = histograms[ty0 * gridX + tx1][bin];
+            float cdf01 = histograms[ty1 * gridX + tx0][bin];
+            float cdf11 = histograms[ty1 * gridX + tx1][bin];
+
+            // Bilinear interpolation
+            float cdf = (1.0f - ty_weight) * ((1.0f - tx_weight) * cdf00 + tx_weight * cdf10) +
+                        ty_weight * ((1.0f - tx_weight) * cdf01 + tx_weight * cdf11);
+
+            // Scale to [0, 1] based on total pixels of neighboring tiles
+            int numPix00 = (tx0 == gridX - 1 ? width - tx0 * tileSizeX : tileSizeX) * (ty0 == gridY - 1 ? height - ty0 * tileSizeY : tileSizeY);
+            float outVal = cdf / numPix00;
+            dst[y * width + x] = std::max(0.0f, std::min(1.0f, outVal));
+        }
     }
 }
 
@@ -156,13 +268,12 @@ void ImageView::runAutostretch() {
     // Sort to find quantiles
     std::sort(samples.begin(), samples.end());
 
-    // Guess Blackpoint (2% quantile)
-    int bpIdx = static_cast<int>(samples.size() * 0.02);
+    // Guess Blackpoint (0.01% quantile)
+    int bpIdx = static_cast<int>(samples.size() * 0.0001);
     double bp = samples[bpIdx];
 
-    // Guess Whitepoint (98% quantile)
-    int wpIdx = static_cast<int>(samples.size() * 0.98);
-    double wp = samples[wpIdx];
+    // Whitepoint is kept at 1.0 to ensure starless and star-heavy images have comparable stretches
+    double wp = 1.0;
 
     // Ensure bp < wp
     if (bp >= wp) {
@@ -178,8 +289,13 @@ void ImageView::runAutostretch() {
     double med = (originalMedian - bp) / (wp - bp);
     med = std::max(0.001, std::min(0.999, med));
 
-    // Target background median is 0.25 (standard for astrophotography stretch)
+    // Target background median based on intensity level (0 = lowest, 1 = medium, 2 = highest)
     double T = 0.25;
+    if (m_autoStretchLevel == 0) {
+        T = 0.0625;
+    } else if (m_autoStretchLevel == 1) {
+        T = 0.125;
+    }
     
     // Solve for midpoint: M = (med * (T - 1)) / (2 * med * T - T - med)
     double mp = (med * (T - 1.0)) / (2.0 * med * T - T - med);
@@ -420,17 +536,57 @@ void ImageView::drawBackground(QPainter* painter, const QRectF& rect) {
         if (img && img->buffer()) {
             imgW = img->width();
             imgH = img->height();
-            bufGray = img->buffer()->data();
+            if (m_displayMode == LocalHist) {
+                if (m_claheGray.empty()) {
+                    m_claheGray.resize(imgW * imgH);
+                    runFastCLAHE(img->buffer()->data(), m_claheGray.data(), imgW, imgH);
+                }
+                bufGray = m_claheGray.data();
+            } else {
+                bufGray = img->buffer()->data();
+            }
         }
     } else if (std::holds_alternative<RGBImagePtr>(m_currentImage)) {
         auto img = std::get<RGBImagePtr>(m_currentImage);
         if (img && img->r() && img->g() && img->b()) {
             imgW = img->width();
             imgH = img->height();
-            bufR = img->r()->buffer()->data();
-            bufG = img->g()->buffer()->data();
-            bufB = img->b()->buffer()->data();
-            isRGB = true;
+            
+            const float* origR = img->r()->buffer()->data();
+            const float* origG = img->g()->buffer()->data();
+            const float* origB = img->b()->buffer()->data();
+
+            if (m_displayMode == LocalHist) {
+                if (m_claheR.empty()) {
+                    m_claheR.resize(imgW * imgH);
+                    m_claheG.resize(imgW * imgH);
+                    m_claheB.resize(imgW * imgH);
+                    runFastCLAHE(origR, m_claheR.data(), imgW, imgH);
+                    runFastCLAHE(origG, m_claheG.data(), imgW, imgH);
+                    runFastCLAHE(origB, m_claheB.data(), imgW, imgH);
+                }
+                bufR = m_claheR.data();
+                bufG = m_claheG.data();
+                bufB = m_claheB.data();
+            } else {
+                bufR = origR;
+                bufG = origG;
+                bufB = origB;
+            }
+
+            // Channel selection redirection
+            if (m_channelMode == RED_ONLY) {
+                bufGray = bufR;
+                isRGB = false;
+            } else if (m_channelMode == GREEN_ONLY) {
+                bufGray = bufG;
+                isRGB = false;
+            } else if (m_channelMode == BLUE_ONLY) {
+                bufGray = bufB;
+                isRGB = false;
+            } else {
+                isRGB = true;
+            }
         }
     }
 
@@ -469,7 +625,12 @@ void ImageView::drawBackground(QPainter* painter, const QRectF& rect) {
                     float g = bufG[idx];
                     float b = bufB[idx];
 
-                    if (m_displayMode != Normal) {
+                    if (m_displayMode == LocalHist) {
+                        int rVal = qBound(0, static_cast<int>(r * 255.0f), 255);
+                        int gVal = qBound(0, static_cast<int>(g * 255.0f), 255);
+                        int bVal = qBound(0, static_cast<int>(b * 255.0f), 255);
+                        line[vx] = qRgb(rVal, gVal, bVal);
+                    } else if (m_displayMode != Normal) {
                         int idxR = qBound(0, static_cast<int>(r * 65535.0f), 65535);
                         int idxG = qBound(0, static_cast<int>(g * 65535.0f), 65535);
                         int idxB = qBound(0, static_cast<int>(b * 65535.0f), 65535);
@@ -483,7 +644,10 @@ void ImageView::drawBackground(QPainter* painter, const QRectF& rect) {
                 } else {
                     float val = bufGray[idx];
 
-                    if (m_displayMode != Normal) {
+                    if (m_displayMode == LocalHist) {
+                        int grayVal = qBound(0, static_cast<int>(val * 255.0f), 255);
+                        line[vx] = qRgb(grayVal, grayVal, grayVal);
+                    } else if (m_displayMode != Normal) {
                         int idxLut = qBound(0, static_cast<int>(val * 65535.0f), 65535);
                         line[vx] = qRgb(m_lut[idxLut], m_lut[idxLut], m_lut[idxLut]);
                     } else {

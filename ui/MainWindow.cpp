@@ -10,7 +10,7 @@
 #include "algorithms/RegisterAlgorithm.h"
 #include "algorithms/AlignAlgorithm.h"
 #include "algorithms/BackgroundExtractionAlgorithm.h"
-#include "algorithms/GhsAlgorithmWrapper.h"
+#include "algorithms/StretchingAlgorithmWrapper.h"
 #include "algorithms/StarFinder.h"
 #include "PixelMathDialog.h"
 #include "StackingDialog.h"
@@ -19,7 +19,7 @@
 #include "RegisterDialog.h"
 #include "AlignDialog.h"
 #include "BackgroundExtractionDialog.h"
-#include "GhsDialog.h"
+#include "StretchingDialog.h"
 #include "PreferencesWindow.h"
 #include "core/TempDirectory.h"
 #include "WorkspaceImageWindow.h"
@@ -129,12 +129,12 @@ void MainWindow::createMenus() {
     m_fileMenu = menuBar()->addMenu("&File");
     
     // Image Group
-    m_openAct = new QAction("&Open Image...", this);
+    m_openAct = new QAction("&Open Image", this);
     m_openAct->setShortcut(QKeySequence::Open);
     connect(m_openAct, &QAction::triggered, this, &MainWindow::onOpenImage);
     m_fileMenu->addAction(m_openAct);
 
-    m_saveAct = new QAction("&Save Active Image...", this);
+    m_saveAct = new QAction("&Save Active Image", this);
     m_saveAct->setShortcut(QKeySequence::Save);
     connect(m_saveAct, &QAction::triggered, this, &MainWindow::onSaveActiveImage);
     m_saveAct->setEnabled(false); // Grayed out by default
@@ -143,23 +143,23 @@ void MainWindow::createMenus() {
     m_fileMenu->addSeparator();
 
     // Batch Group
-    m_openBatchAct = new QAction("Open &Batch...", this);
+    m_openBatchAct = new QAction("Open &Batch", this);
     connect(m_openBatchAct, &QAction::triggered, this, &MainWindow::onOpenBatch);
     m_fileMenu->addAction(m_openBatchAct);
 
-    m_addToBatchAct = new QAction("&Add to Batch...", this);
+    m_addToBatchAct = new QAction("&Add to Batch", this);
     connect(m_addToBatchAct, &QAction::triggered, this, &MainWindow::onAddToBatch);
     m_addToBatchAct->setEnabled(false); // Grayed out by default
     m_fileMenu->addAction(m_addToBatchAct);
 
-    m_saveBatchAct = new QAction("Save Active &Batch...", this);
+    m_saveBatchAct = new QAction("Save Active &Batch", this);
     connect(m_saveBatchAct, &QAction::triggered, this, &MainWindow::onSaveActiveBatch);
     m_saveBatchAct->setEnabled(false); // Grayed out by default
     m_fileMenu->addAction(m_saveBatchAct);
 
     m_fileMenu->addSeparator();
 
-    QAction* preferencesAct = new QAction("&Preferences...", this);
+    QAction* preferencesAct = new QAction("&Preferences", this);
     connect(preferencesAct, &QAction::triggered, this, &MainWindow::onOpenPreferences);
     m_fileMenu->addAction(preferencesAct);
 
@@ -169,43 +169,43 @@ void MainWindow::createMenus() {
 
     m_algoMenu = menuBar()->addMenu("&Algorithms");
     
-    m_pixelMathAct = new QAction("&Pixel Math...", this);
-    connect(m_pixelMathAct, &QAction::triggered, this, &MainWindow::onOpenPixelMath);
-    m_algoMenu->addAction(m_pixelMathAct);
-
-    m_calibrationAct = new QAction("&Calibration...", this);
+    m_calibrationAct = new QAction("&Calibration", this);
     connect(m_calibrationAct, &QAction::triggered, this, &MainWindow::onOpenCalibration);
     m_algoMenu->addAction(m_calibrationAct);
 
-    m_debayerAct = new QAction("&Debayering...", this);
+    m_debayerAct = new QAction("&Debayering", this);
     connect(m_debayerAct, &QAction::triggered, this, &MainWindow::onOpenDebayer);
     m_algoMenu->addAction(m_debayerAct);
 
-    m_registerAct = new QAction("Star &Registration...", this);
+    m_registerAct = new QAction("Star &Registration", this);
     connect(m_registerAct, &QAction::triggered, this, &MainWindow::onOpenRegister);
     m_algoMenu->addAction(m_registerAct);
 
-    m_alignAct = new QAction("Image &Alignment...", this);
+    m_alignAct = new QAction("&Alignment", this);
     connect(m_alignAct, &QAction::triggered, this, &MainWindow::onOpenAlign);
     m_algoMenu->addAction(m_alignAct);
 
-    m_stackingAct = new QAction("&Stacking...", this);
+    m_stackingAct = new QAction("&Stacking", this);
     connect(m_stackingAct, &QAction::triggered, this, &MainWindow::onOpenStacking);
     m_algoMenu->addAction(m_stackingAct);
 
     m_algoMenu->addSeparator();
 
-    m_backgroundAct = new QAction("&Background Extraction...", this);
+    m_backgroundAct = new QAction("&Background Extraction", this);
     connect(m_backgroundAct, &QAction::triggered, this, &MainWindow::onOpenBackgroundExtraction);
     m_algoMenu->addAction(m_backgroundAct);
 
-    m_ghsAct = new QAction("&Generalized Hyperbolic Stretch (GHS)...", this);
-    connect(m_ghsAct, &QAction::triggered, this, &MainWindow::onOpenGhs);
-    m_algoMenu->addAction(m_ghsAct);
+    m_stretchAct = new QAction("&Stretching", this);
+    connect(m_stretchAct, &QAction::triggered, this, &MainWindow::onOpenGhs);
+    m_algoMenu->addAction(m_stretchAct);
+
+    m_pixelMathAct = new QAction("&Pixel Math", this);
+    connect(m_pixelMathAct, &QAction::triggered, this, &MainWindow::onOpenPixelMath);
+    m_algoMenu->addAction(m_pixelMathAct);
 
     m_algoMenu->addSeparator();
 
-    m_loadPluginAct = new QAction("&Load PixInsight Module...", this);
+    m_loadPluginAct = new QAction("&Load PCL Module", this);
     connect(m_loadPluginAct, &QAction::triggered, this, &MainWindow::onLoadPCLModule);
     m_algoMenu->addAction(m_loadPluginAct);
 
@@ -603,8 +603,8 @@ void MainWindow::onOpenBackgroundExtraction() {
 }
 
 void MainWindow::onOpenGhs() {
-    GhsDialog* dlg = new GhsDialog(m_workspace, this);
-    connect(dlg, &GhsDialog::algorithmExecuted, this, &MainWindow::executeAlgorithmSlot);
+    StretchingDialog* dlg = new StretchingDialog(m_workspace, this);
+    connect(dlg, &StretchingDialog::algorithmExecuted, this, &MainWindow::executeAlgorithmSlot);
     QMdiSubWindow* sub = m_workspaceArea->addSubWindow(dlg);
     sub->setAttribute(Qt::WA_DeleteOnClose);
     sub->show();
@@ -627,8 +627,8 @@ void AlgorithmWorker::run() {
             alg = std::make_unique<AlignAlgorithm>();
         } else if (m_name == "BackgroundExtraction") {
             alg = std::make_unique<BackgroundExtractionAlgorithm>();
-        } else if (m_name == "Ghs") {
-            alg = std::make_unique<GhsAlgorithmWrapper>();
+        } else if (m_name == "Stretching") {
+            alg = std::make_unique<StretchingAlgorithmWrapper>();
         } else {
             throw std::runtime_error("Unknown algorithm: " + m_name);
         }
@@ -688,16 +688,9 @@ void MainWindow::closeEvent(QCloseEvent* event) {
 }
 
 void MainWindow::executeAlgorithmSlot(const std::string& name, const std::map<std::string, std::string>& config) {
-    // Disable menu bar and non-log MDI subwindows to prevent concurrent modifications,
+    // Disable menu bar and inner widgets of non-log MDI subwindows to prevent concurrent modifications,
     // while keeping the main window and LogWindow responsive and interactive.
-    if (menuBar()) {
-        menuBar()->setEnabled(false);
-    }
-    for (auto* subWindow : m_workspaceArea->subWindowList()) {
-        if (subWindow && !qobject_cast<LogWindow*>(subWindow->widget())) {
-            subWindow->setEnabled(false);
-        }
-    }
+    setProcessingState(true);
     m_algorithmRunning = true;
 
     // Reset and show progress bar with standard range
@@ -730,15 +723,8 @@ void MainWindow::executeAlgorithmSlot(const std::string& name, const std::map<st
         showStatusMessage("Ready");
         m_algorithmRunning = false;
 
-        // Re-enable menu bar and all MDI subwindows
-        if (menuBar()) {
-            menuBar()->setEnabled(true);
-        }
-        for (auto* subWindow : m_workspaceArea->subWindowList()) {
-            if (subWindow) {
-                subWindow->setEnabled(true);
-            }
-        }
+        // Re-enable menu bar and inner widgets of all MDI subwindows
+        setProcessingState(false);
 
         if (success) {
             try {
@@ -860,10 +846,40 @@ void MainWindow::updateStatusReadout(int x, int y, bool isRGB, const std::vector
     m_statusReadout->setText(text);
 }
 
-void MainWindow::loadAndShowPlugin(const QString& path) {
+void MainWindow::ensurePCLBridge() {
     if (!m_pclBridge) {
-        m_pclBridge = std::make_unique<PCLBridge>();
+        m_pclBridge = std::make_unique<PCLBridge>(this);
+        connect(m_pclBridge.get(), &PCLBridge::progressUpdated, this, [this](int percent) {
+            if (m_progressBar) {
+                if (m_progressBar->isHidden()) {
+                    m_progressBar->setRange(0, 100);
+                    m_progressBar->show();
+                }
+                m_progressBar->setValue(percent);
+                if (percent >= 100) {
+                    m_progressBar->hide();
+                }
+            }
+        });
     }
+}
+
+void MainWindow::setProcessingState(bool processing) {
+    menuBar()->setDisabled(processing);
+    for (auto* subWin : m_workspaceArea->subWindowList()) {
+        auto* widget = subWin->widget();
+        if (widget) {
+            // Keep Process Console fully functional and responsive
+            if (qobject_cast<LogWindow*>(widget)) {
+                continue;
+            }
+            widget->setDisabled(processing);
+        }
+    }
+}
+
+void MainWindow::loadAndShowPlugin(const QString& path) {
+    ensurePCLBridge();
     bool success = false;
     if (m_pclBridge->loadModule(path)) {
         success = true;
@@ -930,21 +946,17 @@ void MainWindow::openPCLInterface(const QString& processId) {
         it->second->show();
         it->second->setFocus();
     } else {
-        if (!m_pclBridge) {
-            m_pclBridge = std::make_unique<PCLBridge>();
-        }
+        ensurePCLBridge();
         m_pclBridge->launchInterface(processId, this);
     }
 }
 
 void MainWindow::onLoadPCLModule() {
-    QString filter = "PixInsight Modules (*.so);;All Files (*.*)";
-    QString filepath = QFileDialog::getOpenFileName(this, "Load PixInsight Module", "/opt/PixInsight/bin", filter);
+    QString filter = "PCL Modules (*.so);;All Files (*.*)";
+    QString filepath = QFileDialog::getOpenFileName(this, "Load PCL Module", "/opt/PixInsight/bin", filter);
     if (filepath.isEmpty()) return;
 
-    if (!m_pclBridge) {
-        m_pclBridge = std::make_unique<PCLBridge>();
-    }
+    ensurePCLBridge();
 
     if (m_pclBridge->loadModule(filepath)) {
         const api_module_description* desc = m_pclBridge->moduleDescription();
@@ -959,7 +971,7 @@ void MainWindow::onLoadPCLModule() {
         }
 
         QMessageBox::information(this, "Load Plugin",
-                                 QString("Successfully loaded PixInsight module:\n%1 (v%2)\n\nRegistered processes:\n%3")
+                                 QString("Successfully loaded PCL module:\n%1 (v%2)\n\nRegistered processes:\n%3")
                                  .arg(name, version, procListStr.isEmpty() ? "None" : procListStr));
         
         if (!processes.empty()) {
@@ -968,7 +980,7 @@ void MainWindow::onLoadPCLModule() {
             }
         }
     } else {
-        QMessageBox::critical(this, "Load Plugin Error", "Failed to load PixInsight module. Check console for details.");
+        QMessageBox::critical(this, "Load Plugin Error", "Failed to load PCL module. Check console for details.");
     }
 }
 
@@ -1020,7 +1032,9 @@ bool MainWindow::executePCLProcessOnActiveImage(const QString& processId, void* 
     m_progressBar->show();
     qApp->processEvents();
 
+    setProcessingState(true);
     bool ok = m_pclBridge->executeProcessInstance(processId, hProcess, buffers);
+    setProcessingState(false);
 
     m_progressBar->hide();
     showStatusMessage("Ready");
@@ -1071,9 +1085,7 @@ void MainWindow::testProcessOnImage(const QString& pluginPath, const QString& im
     }
 
     qDebug() << "[MainWindow] Image loaded successfully. Loading PCL module:" << pluginPath;
-    if (!m_pclBridge) {
-        m_pclBridge = std::make_unique<PCLBridge>();
-    }
+    ensurePCLBridge();
 
     if (!m_pclBridge->loadModule(pluginPath)) {
         qCritical() << "[MainWindow] Failed to load PCL module:" << pluginPath;
@@ -1109,8 +1121,9 @@ void MainWindow::testProcessOnImage(const QString& pluginPath, const QString& im
         return;
     }
 
-    qDebug() << "[MainWindow] Executing process" << processId << "on loaded image with default settings...";
+    setProcessingState(true);
     bool ok = m_pclBridge->executeProcess(processId, buffers);
+    setProcessingState(false);
     if (ok) {
         qDebug() << "[MainWindow] Process execution completed successfully!";
         
@@ -1223,6 +1236,17 @@ void MainWindow::updateWindowMenu() {
     QAction* prefAct = new QAction("Preferences", this);
     connect(prefAct, &QAction::triggered, this, &MainWindow::onOpenPreferences);
     m_windowMenu->addAction(prefAct);
+
+    m_windowMenu->addSeparator();
+
+    // 3. Cascade/Tile Layouts
+    QAction* cascadeAct = new QAction("Cascade", this);
+    connect(cascadeAct, &QAction::triggered, m_workspaceArea, &QMdiArea::cascadeSubWindows);
+    m_windowMenu->addAction(cascadeAct);
+
+    QAction* tileAct = new QAction("Tile", this);
+    connect(tileAct, &QAction::triggered, m_workspaceArea, &QMdiArea::tileSubWindows);
+    m_windowMenu->addAction(tileAct);
 
     // Categorize remaining MDI windows
     QList<QMdiSubWindow*> processes;

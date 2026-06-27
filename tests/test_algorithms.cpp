@@ -5,7 +5,7 @@
 #include "algorithms/RegisterAlgorithm.h"
 #include "algorithms/AlignAlgorithm.h"
 #include "algorithms/BackgroundExtractionAlgorithm.h"
-#include "algorithms/GhsAlgorithm.h"
+#include "algorithms/StretchingAlgorithm.h"
 #include "core/WorkspaceRegistry.h"
 #include "core/ImageBatch.h"
 #include "core/GrayscaleImage.h"
@@ -1013,7 +1013,7 @@ void testGhsStretching() {
     // 2. Test hyperbolic stretch (form = 1)
     double SP = 0.1;
     double D = 3.0;
-    auto stretchedGrayscale1 = GhsAlgorithm::stretchGrayscale(img, 0.0, 1.0, SP, D, 1);
+    auto stretchedGrayscale1 = StretchingAlgorithm::stretchGhsGrayscale(img, 0.0, 1.0, SP, D, 0.0, 1.0, 1);
     assert(stretchedGrayscale1 != nullptr);
     
     // Check bounds and monotonicity
@@ -1031,7 +1031,7 @@ void testGhsStretching() {
     assert(midOut > midIn && "GHS stretch failed to boost midtone values");
 
     // 3. Test exponential stretch (form = 0)
-    auto stretchedGrayscale0 = GhsAlgorithm::stretchGrayscale(img, 0.0, 1.0, SP, D, 0);
+    auto stretchedGrayscale0 = StretchingAlgorithm::stretchGhsGrayscale(img, 0.0, 1.0, SP, D, 0.0, 1.0, 0);
     assert(stretchedGrayscale0 != nullptr);
     float val0 = stretchedGrayscale0->buffer()->pixel(50, 50);
     assert(val0 != midOut && "Exponential and hyperbolic stretches should produce different profiles");
@@ -1043,7 +1043,7 @@ void testGhsStretching() {
     rgbImg->g()->buffer()->setPixel(50, 50, 0.02f);
     rgbImg->b()->buffer()->setPixel(50, 50, 0.03f);
 
-    auto stretchedRGB = GhsAlgorithm::stretchRGB(rgbImg, 0.0, 1.0, SP, D, 1, true);
+    auto stretchedRGB = StretchingAlgorithm::stretchGhsRGB(rgbImg, 0.0, 1.0, SP, D, 0.0, 1.0, 1, true);
     assert(stretchedRGB != nullptr);
 
     float rOut = stretchedRGB->r()->buffer()->pixel(50, 50);
@@ -1055,7 +1055,7 @@ void testGhsStretching() {
     assert(approxEqual(bOut / rOut, 3.0, 1e-4) && "Color-preserving GHS stretch failed to preserve R:B ratio");
 
     // 5. Test RGB Independent Channel Stretch
-    auto stretchedRGBIndep = GhsAlgorithm::stretchRGB(rgbImg, 0.0, 1.0, SP, D, 1, false);
+    auto stretchedRGBIndep = StretchingAlgorithm::stretchGhsRGB(rgbImg, 0.0, 1.0, SP, D, 0.0, 1.0, 1, false);
     assert(stretchedRGBIndep != nullptr);
 
     float rOutIndep = stretchedRGBIndep->r()->buffer()->pixel(50, 50);

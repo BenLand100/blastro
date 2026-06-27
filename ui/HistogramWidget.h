@@ -13,11 +13,19 @@ public:
     void setHistogram(const std::vector<int>& hist);
     void setStretchParams(double b, double w, double m);
     
+    void setGhsMode(bool ghs);
+    void setGhsParams(double sp, double d);
+    void setGhsProtections(double shadowProtect, double highlightProtect);
+    
+    void setDrawCurve(bool draw);
+    
     bool isActive() const { return m_active; }
     void setActive(bool active);
 
 signals:
     void stretchParamsChanged(double b, double w, double m);
+    void ghsParamsChanged(double sp, double d);
+    void ghsProtectionsChanged(double shadowProtect, double highlightProtect);
 
 protected:
     void paintEvent(QPaintEvent* event) override;
@@ -31,7 +39,10 @@ private:
         None,
         Black,
         Mid,
-        White
+        White,
+        SymmetryPoint,
+        ShadowProtect,
+        HighlightProtect
     };
 
     double valueToX(double val) const;
@@ -39,9 +50,21 @@ private:
     DragTarget getCloseLine(const QPoint& pos) const;
 
     std::vector<int> m_histogram;
+    
+    // Mode
+    bool m_ghsMode = false;
+    bool m_drawCurve = true;
+
+    // HT parameters
     double m_blackpoint;
     double m_whitepoint;
     double m_midpoint; // Relative to [B, W]
+
+    // GHS parameters
+    double m_spPoint = 0.5;
+    double m_stretchFactor = 3.0;
+    double m_shadowProtect = 0.0;
+    double m_highlightProtect = 1.0;
 
     // Zoom & Scroll
     double m_zoom;

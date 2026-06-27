@@ -17,6 +17,12 @@ WorkspaceImageWindow::WorkspaceImageWindow(const QString& name, const WorkspaceE
       m_normalBtn(new QPushButton("Normal", this)),
       m_stretchBtn(new QPushButton("Stretch", this)),
       m_autoBtn(new QPushButton("Auto", this)),
+      m_localHistBtn(new QPushButton("Local Hist", this)),
+      m_channelGroup(new QButtonGroup(this)),
+      m_rChanBtn(new QPushButton("R", this)),
+      m_gChanBtn(new QPushButton("G", this)),
+      m_bChanBtn(new QPushButton("B", this)),
+      m_rgbChanBtn(new QPushButton("RGB", this)),
       m_histogramWidget(new HistogramWidget(this)) {
 
     // 1. Create viewport based on element type
@@ -55,7 +61,8 @@ WorkspaceImageWindow::WorkspaceImageWindow(const QString& name, const WorkspaceE
         "QPushButton:checked { background-color: #007acc; color: #fff; border-color: #007acc; }"
         "QPushButton#normal { border-top-left-radius: 4px; border-bottom-left-radius: 4px; border-right: none; }"
         "QPushButton#stretch { border-radius: 0px; border-right: none; }"
-        "QPushButton#auto { border-top-right-radius: 4px; border-bottom-right-radius: 4px; }";
+        "QPushButton#auto { border-radius: 0px; border-right: none; }"
+        "QPushButton#localHist { border-top-right-radius: 4px; border-bottom-right-radius: 4px; }";
 
     m_normalBtn->setObjectName("normal");
     m_normalBtn->setCheckable(true);
@@ -64,25 +71,32 @@ WorkspaceImageWindow::WorkspaceImageWindow(const QString& name, const WorkspaceE
     m_stretchBtn->setCheckable(true);
     m_autoBtn->setObjectName("auto");
     m_autoBtn->setCheckable(true);
+    m_localHistBtn->setObjectName("localHist");
+    m_localHistBtn->setCheckable(true);
 
     m_normalBtn->setStyleSheet(segmentedStyle);
     m_stretchBtn->setStyleSheet(segmentedStyle);
     m_autoBtn->setStyleSheet(segmentedStyle);
+    m_localHistBtn->setStyleSheet(segmentedStyle);
 
     m_modeGroup->addButton(m_normalBtn, 0);
     m_modeGroup->addButton(m_stretchBtn, 1);
     m_modeGroup->addButton(m_autoBtn, 2);
+    m_modeGroup->addButton(m_localHistBtn, 3);
     m_modeGroup->setExclusive(true);
 
     headerLayout->addWidget(m_normalBtn);
     headerLayout->addWidget(m_stretchBtn);
     headerLayout->addWidget(m_autoBtn);
+    headerLayout->addWidget(m_localHistBtn);
 
     // Place the HistogramWidget directly in the header, stretching horizontally.
     // It is kept visible always to act as a layout-stable empty spacer in Normal mode.
     m_histogramWidget->setActive(false);
     m_histogramWidget->setVisible(true);
     m_histogramWidget->setContentsMargins(10, 0, 10, 0);
+    m_histogramWidget->setFixedHeight(24);
+    m_histogramWidget->setDrawCurve(false);
     
     // Add some spacing before the histogram
     headerLayout->addSpacing(15);
@@ -97,6 +111,79 @@ WorkspaceImageWindow::WorkspaceImageWindow(const QString& name, const WorkspaceE
     );
     headerLayout->addWidget(m_nameBtn);
     connect(m_nameBtn, &QPushButton::clicked, this, &WorkspaceImageWindow::onRenameClicked);
+
+    // Channel selection styling and configuration for RGB
+    bool isRGBElement = false;
+    if (std::holds_alternative<RGBImagePtr>(element)) {
+        isRGBElement = true;
+    } else if (std::holds_alternative<ImageBatchPtr>(element)) {
+        auto batch = std::get<ImageBatchPtr>(element);
+        if (batch && batch->count() > 0) {
+            if (std::holds_alternative<RGBImagePtr>(batch->getImage(0))) {
+                isRGBElement = true;
+            }
+        }
+    }
+
+    QString chanStyle = 
+        "QPushButton { background-color: #2b2b2b; color: #888; border: 1px solid #444; padding: 2px 6px; font-size: 10px; font-weight: bold; min-width: 20px; }"
+        "QPushButton:hover { background-color: #3b3b3b; color: #fff; }"
+        "QPushButton:checked { color: #fff; font-weight: bold; }"
+        "QPushButton#rgbChan { border-top-left-radius: 3px; border-bottom-left-radius: 3px; border-right: none; }"
+        "QPushButton#rgbChan:checked { background-color: #555; border-color: #555; }"
+        "QPushButton#rChan { border-radius: 0px; border-right: none; }"
+        "QPushButton#rChan:checked { background-color: #a33; border-color: #a33; }"
+        "QPushButton#gChan { border-radius: 0px; border-right: none; }"
+        "QPushButton#gChan:checked { background-color: #3a3; border-color: #3a3; }"
+        "QPushButton#bChan { border-top-right-radius: 3px; border-bottom-right-radius: 3px; }"
+        "QPushButton#bChan:checked { background-color: #33a; border-color: #33a; }";
+
+    m_rgbChanBtn->setObjectName("rgbChan");
+    m_rgbChanBtn->setCheckable(true);
+    m_rgbChanBtn->setChecked(true);
+    m_rChanBtn->setObjectName("rChan");
+    m_rChanBtn->setCheckable(true);
+    m_gChanBtn->setObjectName("gChan");
+    m_gChanBtn->setCheckable(true);
+    m_bChanBtn->setObjectName("bChan");
+    m_bChanBtn->setCheckable(true);
+
+    m_rgbChanBtn->setStyleSheet(chanStyle);
+    m_rChanBtn->setStyleSheet(chanStyle);
+    m_gChanBtn->setStyleSheet(chanStyle);
+    m_bChanBtn->setStyleSheet(chanStyle);
+
+    m_channelGroup->addButton(m_rgbChanBtn, 0);
+    m_channelGroup->addButton(m_rChanBtn, 1);
+    m_channelGroup->addButton(m_gChanBtn, 2);
+    m_channelGroup->addButton(m_bChanBtn, 3);
+    m_channelGroup->setExclusive(true);
+
+    if (isRGBElement) {
+        headerLayout->addSpacing(8);
+        headerLayout->addWidget(m_rgbChanBtn);
+        headerLayout->addWidget(m_rChanBtn);
+        headerLayout->addWidget(m_gChanBtn);
+        headerLayout->addWidget(m_bChanBtn);
+    } else {
+        m_rgbChanBtn->hide();
+        m_rChanBtn->hide();
+        m_gChanBtn->hide();
+        m_bChanBtn->hide();
+    }
+
+    connect(m_channelGroup, qOverload<int>(&QButtonGroup::idClicked), this, [this](int id) {
+        if (!m_imageView) return;
+        if (id == 0) {
+            m_imageView->setChannelMode(ImageView::RGB_ALL);
+        } else if (id == 1) {
+            m_imageView->setChannelMode(ImageView::RED_ONLY);
+        } else if (id == 2) {
+            m_imageView->setChannelMode(ImageView::GREEN_ONLY);
+        } else if (id == 3) {
+            m_imageView->setChannelMode(ImageView::BLUE_ONLY);
+        }
+    });
 
     mainLayout->addWidget(m_headerBar);
 
@@ -142,6 +229,9 @@ void WorkspaceImageWindow::onModeButtonClicked(int id) {
         m_imageView->setDisplayMode(ImageView::Autostretch);
         m_histogramWidget->setActive(true);
         updateHistogram();
+    } else if (id == 3) { // Local Hist
+        m_imageView->setDisplayMode(ImageView::LocalHist);
+        m_histogramWidget->setActive(false);
     }
 }
 
@@ -150,7 +240,7 @@ void WorkspaceImageWindow::onStretchParamsChangedInWidget(double b, double w, do
     m_imageView->setStretchParams(b, w, m);
     m_imageView->blockSignals(false);
 
-    if (m_modeGroup->checkedId() == 0 || m_modeGroup->checkedId() == 2) {
+    if (m_modeGroup->checkedId() == 0 || m_modeGroup->checkedId() == 2 || m_modeGroup->checkedId() == 3) {
         m_modeGroup->button(1)->setChecked(true); // Switch checked button to Stretch
     }
 }
@@ -166,6 +256,9 @@ void WorkspaceImageWindow::onStretchParamsChangedInView(double b, double w, doub
     } else if (m_imageView->displayMode() == ImageView::Stretch) {
         m_stretchBtn->setChecked(true);
         m_histogramWidget->setActive(true);
+    } else if (m_imageView->displayMode() == ImageView::LocalHist) {
+        m_localHistBtn->setChecked(true);
+        m_histogramWidget->setActive(false);
     } else {
         m_normalBtn->setChecked(true);
         m_histogramWidget->setActive(false);

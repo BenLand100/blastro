@@ -16,7 +16,15 @@ public:
     enum DisplayMode {
         Normal,
         Stretch,
-        Autostretch
+        Autostretch,
+        LocalHist
+    };
+
+    enum ChannelMode {
+        RGB_ALL,
+        RED_ONLY,
+        GREEN_ONLY,
+        BLUE_ONLY
     };
 
     explicit ImageView(QWidget* parent = nullptr);
@@ -24,6 +32,10 @@ public:
 
     void setImage(const ImageVariant& image, bool preserveStretch = false);
     ImageVariant currentImage() const { return m_currentImage; }
+    
+    // Channel mode
+    ChannelMode channelMode() const { return m_channelMode; }
+    void setChannelMode(ChannelMode mode);
     
     // Display modes and stretching
     DisplayMode displayMode() const { return m_displayMode; }
@@ -67,6 +79,7 @@ private:
     void updateView();
     void updateLUT();
     float applyMTF(float v, float B, float W, float M);
+    void clearCLAHE();
 
     QGraphicsScene* m_scene;
     ImageVariant m_currentImage;
@@ -74,10 +87,18 @@ private:
 
     // Stretching state
     DisplayMode m_displayMode;
+    ChannelMode m_channelMode = RGB_ALL;
+    int m_autoStretchLevel = 0;
     double m_blackpoint;
     double m_whitepoint;
     double m_midpoint;
     std::vector<unsigned char> m_lut;
+
+    // CLAHE cache
+    mutable std::vector<float> m_claheGray;
+    mutable std::vector<float> m_claheR;
+    mutable std::vector<float> m_claheG;
+    mutable std::vector<float> m_claheB;
 
     // Panning state
     bool m_isPanning;

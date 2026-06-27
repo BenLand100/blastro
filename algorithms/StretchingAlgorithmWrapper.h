@@ -3,12 +3,12 @@
 
 namespace blastro {
 
-class GhsAlgorithmWrapper : public Algorithm {
+class StretchingAlgorithmWrapper : public Algorithm {
 public:
-    GhsAlgorithmWrapper() = default;
-    ~GhsAlgorithmWrapper() override = default;
+    StretchingAlgorithmWrapper() = default;
+    ~StretchingAlgorithmWrapper() override = default;
 
-    std::string name() const override { return "Ghs"; }
+    std::string name() const override { return "Stretching"; }
     void execute(WorkspaceRegistry& workspace, 
                  const std::map<std::string, std::string>& config, 
                  ProgressCallback progress = nullptr) override;

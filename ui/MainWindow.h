@@ -86,6 +86,9 @@ private slots:
     void onRenameElement(const QString& oldName, const QString& newName);
     void onOpenPreferences();
 
+    void ensurePCLBridge();
+    void setProcessingState(bool processing);
+
 private:
     void createMenus();
     void addImageToWorkspace(const QString& name, const WorkspaceElement& element);
@@ -125,7 +128,7 @@ private:
     QAction* m_registerAct;
     QAction* m_alignAct;
     QAction* m_backgroundAct;
-    QAction* m_ghsAct;
+    QAction* m_stretchAct;
     QAction* m_loadPluginAct = nullptr;
 };
 

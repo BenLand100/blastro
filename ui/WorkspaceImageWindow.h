@@ -57,7 +57,15 @@ private:
     QPushButton* m_normalBtn;
     QPushButton* m_stretchBtn;
     QPushButton* m_autoBtn;
+    QPushButton* m_localHistBtn;
     QPushButton* m_nameBtn;
+
+    // Channel selection buttons for RGB Images
+    QButtonGroup* m_channelGroup;
+    QPushButton* m_rChanBtn;
+    QPushButton* m_gChanBtn;
+    QPushButton* m_bChanBtn;
+    QPushButton* m_rgbChanBtn;
 
     HistogramWidget* m_histogramWidget;
 };

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QObject>
 #include <QString>
 #include <pcl/api/APIDefs.h>
 #include <memory>
@@ -11,8 +12,9 @@ class QWidget;
 
 namespace blastro {
 
-// Mock structure representing a PixInsight image
+// Mock structure representing a PCL image
 struct PCLImageMock {
+    uint32 magic = 0x494d474d; // 'IMGM'
     uint32 width = 0;
     uint32 height = 0;
     uint32 numChannels = 0;
@@ -45,14 +47,15 @@ struct PCLImageMock {
 
 struct PCLWindowMock;
 
-// Mock structure representing a PixInsight view
+// Mock structure representing a PCL view
 struct PCLViewMock {
+    uint32 magic = 0x56494557; // 'VIEW'
     QString id;
     PCLImageMock* hImage = nullptr;
     PCLWindowMock* parentWindow = nullptr;
 };
 
-// Mock structure representing a PixInsight window
+// Mock structure representing a PCL window
 struct PCLWindowMock {
     PCLViewMock* mainView = nullptr;
 };
@@ -81,12 +84,13 @@ struct PCLModuleInfo {
     QString filepath;
 };
 
-class PCLBridge {
+class PCLBridge : public QObject {
+    Q_OBJECT
 public:
-    PCLBridge();
+    PCLBridge(QObject* parent = nullptr);
     ~PCLBridge();
 
-    // Dynamically load a PixInsight .so module
+    // Dynamically load a PCL .so module
     bool loadModule(const QString& path);
     
     // Unload the module and free resources
@@ -113,6 +117,9 @@ public:
     // Static function resolver callback passed to the PCL module
     static void* resolveCoreFunction(const char* funcName);
 
+signals:
+    void progressUpdated(int percent);
+
 private:
     std::vector<PCLModuleInfo> m_modules;
     api_module_description* m_description = nullptr;
@@ -123,3 +130,4 @@ private:
 };
 
 } // namespace blastro
+

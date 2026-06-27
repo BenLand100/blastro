@@ -13,7 +13,7 @@ add_library(blastro_ui
     RegisterDialog.cpp
     AlignDialog.cpp
     BackgroundExtractionDialog.cpp
-    GhsDialog.cpp
+    StretchingDialog.cpp
     LogWindow.cpp
     PreferencesWindow.cpp
     StatsPlotWidget.cpp

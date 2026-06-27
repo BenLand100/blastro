@@ -10,8 +10,11 @@
 #include <QFontMetrics>
 #include <QApplication>
 #include <QDebug>
+#include <QRegularExpression>
 #include <iostream>
 #include <unordered_map>
+#include <unordered_set>
+#include <mutex>
 #include <vector>
 #include <cstring>
 #include <algorithm>
@@ -171,6 +174,9 @@ namespace blastro {
 
 static std::unordered_map<process_handle, std::unordered_map<ParameterKey, ParameterValue>> g_processParameters;
 static PCLImageMock* g_activeImage = nullptr;
+static PCLBridge* g_pclBridgeInstance = nullptr;
+static std::unordered_set<PCLImageMock*> g_heapImages;
+static std::unordered_map<image_handle, PCLImageMock*> g_attachedImages;
 
 // ----------------------------------------------------------------------------
 // PixelTraits LUT Mock
@@ -360,14 +366,102 @@ static api_bool mock_ValidateConsole(const_console_handle) {
     return true;
 }
 
+static QString g_consoleBuffer;
+static std::mutex g_consoleMutex;
+
+static void writeConsoleBuffer(const QString& str, bool appendNewline) {
+    std::lock_guard<std::mutex> lock(g_consoleMutex);
+    g_consoleBuffer += str;
+    if (appendNewline) {
+        g_consoleBuffer += "\n";
+    }
+
+    // 1. Process conditional breaks <cbr> and <cbr/>
+    int cbrIdx;
+    while ((cbrIdx = g_consoleBuffer.indexOf("<cbr")) != -1) {
+        int endTag = g_consoleBuffer.indexOf('>', cbrIdx);
+        if (endTag == -1) break;
+        int tagLen = endTag - cbrIdx + 1;
+        bool needNewline = (cbrIdx > 0 && g_consoleBuffer[cbrIdx - 1] != '\n');
+        g_consoleBuffer.replace(cbrIdx, tagLen, needNewline ? "\n" : "");
+    }
+
+    // 2. Process standard breaks <br> and <br/>
+    int brIdx;
+    while ((brIdx = g_consoleBuffer.indexOf("<br")) != -1) {
+        int endTag = g_consoleBuffer.indexOf('>', brIdx);
+        if (endTag == -1) break;
+        g_consoleBuffer.replace(brIdx, endTag - brIdx + 1, "\n");
+    }
+
+    // 3. Translate carriage returns to newlines
+    g_consoleBuffer.replace('\r', '\n');
+
+    // 4. Strip cosmetic/positioning tags
+    static const QStringList tagsToStrip = {
+        "<end>", "<beg>", "<eol>", "<bol>", "<bwd>", "<fwd>", "<up>", "<down>", "<bsp>"
+    };
+    for (const auto& tag : tagsToStrip) {
+        g_consoleBuffer.replace(tag, "");
+    }
+    
+    // Process complete lines
+    int newlineIdx;
+    while ((newlineIdx = g_consoleBuffer.indexOf('\n')) != -1) {
+        QString line = g_consoleBuffer.left(newlineIdx);
+        g_consoleBuffer.remove(0, newlineIdx + 1);
+        
+        // Intercept progress bar tags like <* pbr 50 *>
+        int startIdx = 0;
+        while ((startIdx = line.indexOf("<*", startIdx)) != -1) {
+            int endIdx = line.indexOf("*>", startIdx);
+            if (endIdx == -1) break;
+            
+            QString tag = line.mid(startIdx + 2, endIdx - startIdx - 2).trimmed();
+            if (tag.startsWith("pbr ") || tag.startsWith("pbr_")) {
+                QString valStr = tag.mid(4).trimmed();
+                if (valStr.endsWith('%')) valStr.chop(1);
+                bool ok = false;
+                double val = valStr.toDouble(&ok);
+                if (ok) {
+                    int pct = 0;
+                    if (val <= 1.0 && val > 0.0) {
+                        pct = static_cast<int>(val * 100.0);
+                    } else {
+                        pct = static_cast<int>(val);
+                    }
+                    if (pct >= 0 && pct <= 100) {
+                        if (g_pclBridgeInstance) {
+                            emit g_pclBridgeInstance->progressUpdated(pct);
+                        }
+                    }
+                }
+            }
+            line.remove(startIdx, endIdx - startIdx + 2);
+        }
+        // Intercept general progress indicators like 50%
+        static QRegularExpression pctRe("(\\d+)%");
+        auto match = pctRe.match(line);
+        if (match.hasMatch()) {
+            bool ok = false;
+            int pct = match.captured(1).toInt(&ok);
+            if (ok && pct >= 0 && pct <= 100) {
+                if (g_pclBridgeInstance) {
+                    emit g_pclBridgeInstance->progressUpdated(pct);
+                }
+            }
+        }
+
+        // Print the cleaned line to the process console
+        if (!line.trimmed().isEmpty()) {
+            Logger::info("PCL", line);
+        }
+    }
+}
+
 static api_bool mock_WriteConsole(console_handle, const char16_type* text, api_bool appendNewline) {
     QString str = QString::fromUtf16(reinterpret_cast<const char16_t*>(text));
-    if (appendNewline) {
-        qInfo().noquote() << "[PCL Console]" << str;
-    } else {
-        std::cout << str.toStdString();
-        std::flush(std::cout);
-    }
+    writeConsoleBuffer(str, appendNewline);
     return true;
 }
 
@@ -379,7 +473,11 @@ static api_bool mock_ShowConsole(console_handle, api_bool) {
     return true;
 }
 
-static void mock_ProcessEvents(api_bool) {}
+static void mock_ProcessEvents(api_bool excludeUserInputEvents) {
+    if (qApp) {
+        qApp->processEvents(excludeUserInputEvents ? QEventLoop::ExcludeUserInputEvents : QEventLoop::AllEvents);
+    }
+}
 
 static api_bool mock_GetParameterValue(const_process_handle hProcess, meta_parameter_handle hParam,
                                        pcl::size_type rowIndex, uint32* parType, void* value, pcl::size_type* length) {
@@ -476,14 +574,37 @@ static void mock_EndProcessDefinition() {
     g_currentDefiningProcess = nullptr;
 }
 
-static const PCLImageMock* resolveImageMock(const_image_handle h) {
-    if (!h) return nullptr;
-    return reinterpret_cast<const PCLImageMock*>(h);
+static bool isViewMock(const void* h) {
+    if (!h) return false;
+    const auto* v = reinterpret_cast<const PCLViewMock*>(h);
+    return v->magic == 0x56494557;
 }
 
 static PCLImageMock* resolveImageMockMutable(image_handle h) {
     if (!h) return nullptr;
-    return reinterpret_cast<PCLImageMock*>(h);
+    
+    // Check if it's an attached client handle
+    auto it = g_attachedImages.find(h);
+    if (it != g_attachedImages.end()) {
+        return it->second;
+    }
+    
+    // Check if it's a heap-allocated image mock
+    auto* img = reinterpret_cast<PCLImageMock*>(h);
+    if (g_heapImages.count(img)) {
+        return img;
+    }
+    
+    // Fallback to active image if the handle matches g_activeImage
+    if (img == g_activeImage) {
+        return g_activeImage;
+    }
+    
+    return nullptr;
+}
+
+static const PCLImageMock* resolveImageMock(const_image_handle h) {
+    return resolveImageMockMutable(const_cast<image_handle>(h));
 }
 
 static api_bool mock_GetImageGeometry(const_image_handle h, uint32* w, uint32* h_out, uint32* n) {
@@ -691,6 +812,24 @@ static api_bool mock_UnlockView(const_view_handle hView) {
     return true;
 }
 
+static image_handle mock_CreateImage(uint32 w, uint32 h, uint32 n, uint32 nbits, api_bool flt, uint32 cs, void*) {
+    qDebug() << "[PCL Bridge] mock_CreateImage called: w =" << w << "h =" << h << "n =" << n;
+    auto* img = new PCLImageMock();
+    img->width = w;
+    img->height = h;
+    img->numChannels = n;
+    img->bitsPerSample = nbits;
+    img->isFloat = flt;
+    img->colorSpace = cs;
+    img->ownedChannels.resize(n);
+    for (uint32 i = 0; i < n; ++i) {
+        img->ownedChannels[i].resize(w * h, 0.0f);
+    }
+    img->updatePointers();
+    g_heapImages.insert(img);
+    return reinterpret_cast<image_handle>(img);
+}
+
 static api_bool mock_AttachToImage(image_handle hImage, const_view_handle hView, api_bool readOnly) {
     qDebug() << "[PCL Bridge] mock_AttachToImage called: image =" << hImage << "view =" << hView << "readOnly =" << readOnly;
     if (!hImage) {
@@ -698,12 +837,43 @@ static api_bool mock_AttachToImage(image_handle hImage, const_view_handle hView,
         return false;
     }
     
-    if (g_activeImage) {
-        qDebug() << "[PCL Bridge] mock_AttachToImage: successfully associated SharedImage" << hImage << "with active image mock" << g_activeImage;
-    } else {
-        qWarning() << "[PCL Bridge] mock_AttachToImage: no active image mock registered!";
+    PCLImageMock* source = nullptr;
+    if (hView) {
+        if (isViewMock(hView)) {
+            auto* view = reinterpret_cast<const PCLViewMock*>(hView);
+            source = view->hImage;
+        } else {
+            auto* srcImg = reinterpret_cast<PCLImageMock*>(const_cast<void*>(hView));
+            if (g_heapImages.count(srcImg) || srcImg == g_activeImage) {
+                source = srcImg;
+            }
+        }
+    }
+    if (!source) {
+        source = g_activeImage;
+    }
+
+    if (!source) {
+        qWarning() << "[PCL Bridge] mock_AttachToImage: failed to find source image mock!";
         return false;
     }
+
+    auto* target = resolveImageMockMutable(hImage);
+    if (target) {
+        target->width = source->width;
+        target->height = source->height;
+        target->numChannels = source->numChannels;
+        target->bitsPerSample = source->bitsPerSample;
+        target->isFloat = source->isFloat;
+        target->colorSpace = source->colorSpace;
+        target->wrappedBuffers = source->wrappedBuffers;
+        target->ownedChannels = source->ownedChannels;
+        target->updatePointers();
+        qDebug() << "[PCL Bridge] mock_AttachToImage: successfully copied source image to target mock";
+    }
+
+    g_attachedImages[hImage] = source;
+    qDebug() << "[PCL Bridge] mock_AttachToImage: mapped client handle" << hImage << "to source mock" << source;
     
     return true;
 }
@@ -730,6 +900,12 @@ static api_bool mock_GetImageRGBWS(const_image_handle hImage, api_RGBWS* rgbws) 
 
 static api_bool mock_DetachFromImage(image_handle hImage) {
     qDebug() << "[PCL Bridge] mock_DetachFromImage called: image =" << hImage;
+    g_attachedImages.erase(hImage);
+    auto* img = reinterpret_cast<PCLImageMock*>(hImage);
+    if (img && g_heapImages.count(img)) {
+        g_heapImages.erase(img);
+        delete img;
+    }
     return true;
 }
 
@@ -1434,12 +1610,7 @@ static thread_handle mock_GetCurrentThread() {
 
 static void mock_AppendThreadConsoleOutputText(thread_handle, const char16_type* text, api_bool appendNewline) {
     QString str = QString::fromUtf16(reinterpret_cast<const char16_t*>(text));
-    if (appendNewline) {
-        qInfo().noquote() << "[PCL Thread Console]" << str;
-    } else {
-        std::cout << str.toStdString();
-        std::flush(std::cout);
-    }
+    writeConsoleBuffer(str, appendNewline);
 }
 
 static api_bool mock_GetSizerDisplayPixelRatio(const_sizer_handle h, double* ratio) {
@@ -1919,10 +2090,15 @@ static void mock_GetViewLocks(const_view_handle hView, api_bool* readLocked, api
 // PCLBridge Implementation
 // ----------------------------------------------------------------------------
 
-PCLBridge::PCLBridge() {}
+PCLBridge::PCLBridge(QObject* parent) : QObject(parent) {
+    g_pclBridgeInstance = this;
+}
 
 PCLBridge::~PCLBridge() {
     unloadModule();
+    if (g_pclBridgeInstance == this) {
+        g_pclBridgeInstance = nullptr;
+    }
 }
 
 void PCLBridge::setupOverrides() {
@@ -2107,6 +2283,7 @@ void PCLBridge::setupOverrides() {
     overridePCLStub("Thread/SetThreadExecRoutine", reinterpret_cast<void*>(mock_SetThreadExecRoutine));
     overridePCLStub("Thread/AppendThreadConsoleOutputText", reinterpret_cast<void*>(mock_AppendThreadConsoleOutputText));
 
+    overridePCLStub("SharedImage/CreateImage", reinterpret_cast<void*>(mock_CreateImage));
     overridePCLStub("SharedImage/GetImageGeometry", reinterpret_cast<void*>(mock_GetImageGeometry));
     overridePCLStub("SharedImage/GetImageFormat", reinterpret_cast<void*>(mock_GetImageFormat));
     overridePCLStub("SharedImage/GetImagePixelData", reinterpret_cast<void*>(mock_GetImagePixelData));
@@ -2459,6 +2636,7 @@ bool PCLBridge::executeProcess(const QString& processId, std::vector<ImageBuffer
     g_activeImage = &imgMock;
 
     PCLViewMock viewMock;
+    viewMock.magic = 0x56494557;
     viewMock.id = "BLastroActiveView";
     viewMock.hImage = &imgMock;
 
@@ -2543,6 +2721,7 @@ bool PCLBridge::executeProcessInstance(const QString& processId, void* hProcess,
     g_activeImage = &imgMock;
 
     PCLViewMock viewMock;
+    viewMock.magic = 0x56494557;
     viewMock.id = "BLastroActiveView";
     viewMock.hImage = &imgMock;
 
