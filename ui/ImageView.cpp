@@ -591,9 +591,9 @@ void ImageView::drawBackground(QPainter* painter, const QRectF& rect) {
                     for (int i = 0; i < totalPixels; ++i) {
                         stretched[i] = applyMTF(rawData[i], B, W, M);
                     }
-                    float clip = 10.0f;
-                    if (m_localHistLevel == 1) clip = 20.0f;
-                    else if (m_localHistLevel == 2) clip = 30.0f;
+                    float clip = 1.5f;
+                    if (m_localHistLevel == 1) clip = 3.0f;
+                    else if (m_localHistLevel == 2) clip = 5.0f;
                     runFastCLAHE(stretched.data(), m_claheGray.data(), imgW, imgH, 8, 8, clip);
                 }
                 bufGray = m_claheGray.data();
@@ -641,9 +641,9 @@ void ImageView::drawBackground(QPainter* painter, const QRectF& rect) {
                         M = std::max(0.001f, std::min(0.999f, M));
                     }
                     
-                    float clip = 10.0f;
-                    if (m_localHistLevel == 1) clip = 20.0f;
-                    else if (m_localHistLevel == 2) clip = 30.0f;
+                    float clip = 1.5f;
+                    if (m_localHistLevel == 1) clip = 3.0f;
+                    else if (m_localHistLevel == 2) clip = 5.0f;
                     
                     for (int i = 0; i < totalPixels; ++i) {
                         stretched[i] = applyMTF(origR[i], B, W, M);
