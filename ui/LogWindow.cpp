@@ -7,6 +7,125 @@
 
 namespace blastro {
 
+static QString parseAnsiToHtml(const QString& input) {
+    QString output;
+    int i = 0;
+    int len = input.length();
+    bool bold = false;
+    QString currentColor = "";
+    int openSpans = 0;
+
+    auto closeSpans = [&]() {
+        while (openSpans > 0) {
+            output.append("</span>");
+            openSpans--;
+        }
+        bold = false;
+        currentColor = "";
+    };
+
+    while (i < len) {
+        if (input[i] == QChar(27) || input[i] == QChar(0x1B)) {
+            if (i + 1 < len && input[i + 1] == '[') {
+                int j = i + 2;
+                while (j < len && (input[j].isDigit() || input[j] == ';')) {
+                    j++;
+                }
+                if (j < len && input[j] == 'm') {
+                    // Extract code parameters
+                    QString seq = input.mid(i + 2, j - (i + 2));
+                    QStringList parts = seq.split(';');
+                    
+                    bool reset = false;
+                    bool newBold = bold;
+                    QString newColor = currentColor;
+                    bool hasColorOrBoldChange = false;
+
+                    for (const QString& part : parts) {
+                        if (part.isEmpty()) {
+                            reset = true;
+                            continue;
+                        }
+                        bool ok = false;
+                        int code = part.toInt(&ok);
+                        if (!ok) continue;
+
+                        if (code == 0) {
+                            reset = true;
+                        } else if (code == 1) {
+                            newBold = true;
+                            hasColorOrBoldChange = true;
+                        } else if (code == 22) { // normal intensity
+                            newBold = false;
+                            hasColorOrBoldChange = true;
+                        } else if (code >= 30 && code <= 37) {
+                            // Standard foreground colors
+                            static const QString colors[] = {
+                                "#7f7f7f", // 30 Black
+                                "#f44336", // 31 Red
+                                "#4caf50", // 32 Green
+                                "#ffeb3b", // 33 Yellow
+                                "#2196f3", // 34 Blue
+                                "#e040fb", // 35 Magenta
+                                "#00bcd4", // 36 Cyan
+                                "#ffffff"  // 37 White
+                            };
+                            newColor = colors[code - 30];
+                            hasColorOrBoldChange = true;
+                        } else if (code == 39) {
+                            newColor = ""; // Default foreground
+                            hasColorOrBoldChange = true;
+                        } else if (code >= 90 && code <= 97) {
+                            // Bright foreground colors
+                            static const QString colors[] = {
+                                "#b0bec5", // 90 Bright Black (Gray)
+                                "#ff8a80", // 91 Bright Red
+                                "#b9f6ca", // 92 Bright Green
+                                "#ffe57f", // 93 Bright Yellow
+                                "#80d8ff", // 94 Bright Blue
+                                "#ff80f0", // 95 Bright Magenta
+                                "#84ffff", // 96 Bright Cyan
+                                "#ffffff"  // 97 Bright White
+                            };
+                            newColor = colors[code - 90];
+                            hasColorOrBoldChange = true;
+                        }
+                    }
+
+                    if (reset) {
+                        closeSpans();
+                    } else if (hasColorOrBoldChange) {
+                        closeSpans();
+                        bold = newBold;
+                        currentColor = newColor;
+
+                        QString style;
+                        if (!currentColor.isEmpty()) {
+                            style += QString("color:%1;").arg(currentColor);
+                        }
+                        if (bold) {
+                            style += "font-weight:bold;";
+                        }
+                        if (!style.isEmpty()) {
+                            output.append(QString("<span style=\"%1\">").arg(style));
+                            openSpans++;
+                        }
+                    }
+
+                    i = j + 1; // Skip past 'm'
+                    continue;
+                }
+            }
+        }
+        
+        output.append(input[i]);
+        i++;
+    }
+
+    closeSpans();
+    return output;
+}
+
 LogWindow* LogWindow::s_instance = nullptr;
 QMutex LogWindow::s_mutex;
 
@@ -119,7 +238,7 @@ void LogWindow::handleMessage(int type, const QString& msg) {
                                .arg(timeStr)
                                .arg(color)
                                .arg(prefix)
-                               .arg(msg.toHtmlEscaped());
+                               .arg(parseAnsiToHtml(msg.toHtmlEscaped()));
 
     m_textEdit->appendHtml(formattedMsg);
 
@@ -162,12 +281,19 @@ void LogWindow::handleRichMessage(const QString& channel, const QString& message
         msgWeight = "bold";
     }
 
+    bool isUpdate = message.startsWith('\r');
+    QString cleanMsg = message;
+    if (isUpdate) {
+        cleanMsg.remove(0, 1);
+    }
+
     // Check if scrollbar is at the bottom before appending
     QScrollBar* bar = m_textEdit->verticalScrollBar();
     bool autoScroll = (bar->value() == bar->maximum());
 
     // Format message with HTML for coloring and layout
     QString formattedMsg;
+    QString parsedMessage = parseAnsiToHtml(cleanMsg.toHtmlEscaped());
     if (levelStr == "header") {
         formattedMsg = QString("<div style=\"margin-top: 8px; margin-bottom: 4px;\">"
                                "<span style=\"color:#666666;\">[%1]</span> "
@@ -179,7 +305,7 @@ void LogWindow::handleRichMessage(const QString& channel, const QString& message
                            .arg(channel)
                            .arg(msgColor)
                            .arg(msgWeight)
-                           .arg(message.toHtmlEscaped());
+                           .arg(parsedMessage);
     } else {
         formattedMsg = QString("<span style=\"color:#666666;\">[%1]</span> "
                                "<span style=\"color:%2; font-weight:bold;\">[%3]</span> "
@@ -189,10 +315,18 @@ void LogWindow::handleRichMessage(const QString& channel, const QString& message
                            .arg(channel)
                            .arg(msgColor)
                            .arg(msgWeight)
-                           .arg(message.toHtmlEscaped());
+                           .arg(parsedMessage);
     }
 
-    m_textEdit->appendHtml(formattedMsg);
+    if (isUpdate && m_textEdit->document()->blockCount() > 0) {
+        QTextCursor cursor(m_textEdit->document());
+        cursor.movePosition(QTextCursor::End);
+        cursor.movePosition(QTextCursor::StartOfBlock, QTextCursor::KeepAnchor);
+        cursor.removeSelectedText();
+        cursor.insertHtml(formattedMsg);
+    } else {
+        m_textEdit->appendHtml(formattedMsg);
+    }
 
     if (autoScroll) {
         bar->setValue(bar->maximum());

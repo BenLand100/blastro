@@ -23,6 +23,7 @@ public:
 
     void updateName(const QString& newName);
     void notifyImageUpdated();
+    void setUpdatesSuspended(bool suspended);
 
     // Live Preview Support
     void setPreviewImage(const ImageVariant& previewImage);

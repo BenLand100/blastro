@@ -124,6 +124,16 @@ void ImageView::clearCLAHE() {
     m_claheB.clear();
 }
 
+void ImageView::setUpdatesSuspended(bool suspended) {
+    if (m_updatesSuspended != suspended) {
+        m_updatesSuspended = suspended;
+        if (!m_updatesSuspended) {
+            clearCLAHE();
+        }
+        updateView();
+    }
+}
+
 static void runFastCLAHE(const float* src, float* dst, int width, int height, int gridX = 8, int gridY = 8, float clipLimitVal = 40.0f) {
     if (width <= 0 || height <= 0 || !src || !dst) return;
     int numBins = 256;
@@ -362,6 +372,9 @@ void ImageView::runAutostretch() {
 
 std::vector<int> ImageView::getHistogram(int bins) const {
     std::vector<int> hist(bins, 0);
+    if (m_updatesSuspended) {
+        return hist;
+    }
     int width = 0;
     int height = 0;
 
@@ -487,6 +500,11 @@ void ImageView::mouseReleaseEvent(QMouseEvent* event) {
 }
 
 void ImageView::mouseMoveEvent(QMouseEvent* event) {
+    if (m_updatesSuspended) {
+        emit mousePosChanged(-1, -1, false, {});
+        QGraphicsView::mouseMoveEvent(event);
+        return;
+    }
     if (m_isPanning) {
         QPoint delta = event->pos() - m_lastMousePos;
         m_lastMousePos = event->pos();
@@ -569,6 +587,33 @@ void ImageView::drawBackground(QPainter* painter, const QRectF& rect) {
     int vpW = viewport()->width();
     int vpH = viewport()->height();
     if (vpW <= 0 || vpH <= 0) return;
+
+    if (m_updatesSuspended) {
+        if (!m_cachedViewportImage.isNull()) {
+            painter->save();
+            painter->setTransform(QTransform()); // Reset transform to viewport coordinates
+            
+            if (m_cachedViewportImage.size() != QSize(vpW, vpH)) {
+                painter->drawImage(0, 0, m_cachedViewportImage.scaled(vpW, vpH, Qt::IgnoreAspectRatio, Qt::SmoothTransformation));
+            } else {
+                painter->drawImage(0, 0, m_cachedViewportImage);
+            }
+            
+            // If the frame is not selected, draw a red X overlay
+            if (!m_isFrameSelected) {
+                QPen pen(QColor(220, 50, 50, 180), 4);
+                painter->setPen(pen);
+                painter->drawLine(10, 10, vpW - 10, vpH - 10);
+                painter->drawLine(10, vpH - 10, vpW - 10, 10);
+            }
+            
+            painter->restore();
+            return;
+        } else {
+            painter->fillRect(viewport()->rect(), QColor("#1e1e1e"));
+            return;
+        }
+    }
 
     // 1. Get the image dimensions and buffer pointers
     int imgW = 0, imgH = 0;
@@ -788,6 +833,8 @@ void ImageView::drawBackground(QPainter* painter, const QRectF& rect) {
     painter->save();
     painter->setTransform(QTransform()); // Reset transform to viewport coordinates
     painter->drawImage(0, 0, vpImg);
+
+    m_cachedViewportImage = vpImg;
 
     // If the frame is not selected, draw a red X overlay
     if (!m_isFrameSelected) {

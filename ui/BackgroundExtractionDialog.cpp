@@ -1,55 +1,22 @@
 #include "BackgroundExtractionDialog.h"
-#include "core/Preferences.h"
 #include "algorithms/BackgroundExtractor.h"
+#include "core/GrayscaleImage.h"
+#include "core/RGBImage.h"
+#include "core/Preferences.h"
 #include "WorkspaceArea.h"
 #include <QVBoxLayout>
 #include <QFormLayout>
 #include <QHBoxLayout>
 #include <QMessageBox>
 #include <QMainWindow>
-#include <QThread>
-#include <QCloseEvent>
 
 namespace blastro {
 
-static GrayscaleImagePtr cloneGrayscale(GrayscaleImagePtr src) {
-    if (!src) return nullptr;
-    int w = src->width();
-    int h = src->height();
-    auto dstBuf = std::make_shared<ImageBuffer>(w, h);
-    std::copy(src->buffer()->data(), src->buffer()->data() + w * h, dstBuf->data());
-    return std::make_shared<GrayscaleImage>(dstBuf);
-}
-
-static RGBImagePtr cloneRGB(RGBImagePtr src) {
-    if (!src) return nullptr;
-    auto r = cloneGrayscale(src->r());
-    auto g = cloneGrayscale(src->g());
-    auto b = cloneGrayscale(src->b());
-    return std::make_shared<RGBImage>(r, g, b);
-}
-
-static ImageVariant cloneImageVariant(const ImageVariant& img) {
-    if (std::holds_alternative<GrayscaleImagePtr>(img)) {
-        return cloneGrayscale(std::get<GrayscaleImagePtr>(img));
-    } else if (std::holds_alternative<RGBImagePtr>(img)) {
-        return cloneRGB(std::get<RGBImagePtr>(img));
-    }
-    return ImageVariant();
-}
-
 BackgroundExtractionDialog::BackgroundExtractionDialog(WorkspaceRegistry& workspace, QWidget* parent)
-    : AlgorithmDialog(workspace, parent),
-      m_previewTimer(new QTimer(this)) {
+    : AlgorithmDialog(workspace, parent) {
     
     setWindowTitle("Background Gradient Extraction");
-    resize(360, 220);
-
-    // Debounce timer: wait 150ms after slider stops moving to update the live preview
-    m_previewTimer->setSingleShot(true);
-    connect(m_previewTimer, &QTimer::timeout, this, &BackgroundExtractionDialog::updatePreview);
-
-
+    resize(360, 180);
 
     QVBoxLayout* mainLayout = new QVBoxLayout(this);
     mainLayout->setContentsMargins(15, 15, 15, 15);
@@ -74,7 +41,6 @@ BackgroundExtractionDialog::BackgroundExtractionDialog(WorkspaceRegistry& worksp
 
     connect(m_orderSlider, &QSlider::valueChanged, m_orderSpin, &QSpinBox::setValue);
     connect(m_orderSpin, qOverload<int>(&QSpinBox::valueChanged), m_orderSlider, &QSlider::setValue);
-    connect(m_orderSlider, &QSlider::valueChanged, this, &BackgroundExtractionDialog::onParameterChanged);
 
     // 2. Sigma Cut (1.0 to 10.0)
     QHBoxLayout* sigmaLayout = new QHBoxLayout();
@@ -93,26 +59,18 @@ BackgroundExtractionDialog::BackgroundExtractionDialog(WorkspaceRegistry& worksp
         m_sigmaSpin->blockSignals(true);
         m_sigmaSpin->setValue(val / 10.0);
         m_sigmaSpin->blockSignals(false);
-        onParameterChanged();
     });
     connect(m_sigmaSpin, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double val) {
         m_sigmaSlider->blockSignals(true);
         m_sigmaSlider->setValue(static_cast<int>(val * 10.0));
         m_sigmaSlider->blockSignals(false);
-        onParameterChanged();
     });
 
-    // 3. Channel Equalization & Preview Toggles
+    // 3. Channel Equalization Toggle
     QHBoxLayout* togglesLayout = new QHBoxLayout();
     m_equalizeChk = new QCheckBox("Equalize Channels", this);
     m_equalizeChk->setChecked(true);
     togglesLayout->addWidget(m_equalizeChk);
-    connect(m_equalizeChk, &QCheckBox::stateChanged, this, &BackgroundExtractionDialog::onParameterChanged);
-
-    m_previewChk = new QCheckBox("Live Preview", this);
-    m_previewChk->setChecked(false);
-    togglesLayout->addWidget(m_previewChk);
-    connect(m_previewChk, &QCheckBox::stateChanged, this, &BackgroundExtractionDialog::onParameterChanged);
     
     formLayout->addRow("", togglesLayout);
 
@@ -139,13 +97,6 @@ BackgroundExtractionDialog::BackgroundExtractionDialog(WorkspaceRegistry& worksp
     mainLayout->addLayout(btnLayout);
 }
 
-BackgroundExtractionDialog::~BackgroundExtractionDialog() {
-    m_previewTimer->stop();
-    if (auto win = getActiveImageWindow()) {
-        win->restoreOriginalImage();
-    }
-}
-
 WorkspaceImageWindow* BackgroundExtractionDialog::getActiveImageWindow() const {
     QWidget* p = parentWidget();
     while (p) {
@@ -162,44 +113,6 @@ WorkspaceImageWindow* BackgroundExtractionDialog::getActiveImageWindow() const {
     return nullptr;
 }
 
-void BackgroundExtractionDialog::onParameterChanged() {
-    if (m_previewChk->isChecked()) {
-        m_previewTimer->start(150); // Debounce trigger
-    } else {
-        m_previewTimer->stop();
-        if (auto win = getActiveImageWindow()) {
-            win->restoreOriginalImage();
-        }
-    }
-}
-
-void BackgroundExtractionDialog::updatePreview() {
-    auto win = getActiveImageWindow();
-    if (!win) return;
-
-    ImageVariant baseImg = win->originalImage();
-    if (baseImg.index() == 0 && std::get<0>(baseImg) == nullptr) return;
-    
-    // Perform extraction
-    int order = m_orderSpin->value();
-    double sigma = m_sigmaSpin->value();
-    bool equalize = m_equalizeChk->isChecked();
-
-    ImageVariant previewResult;
-
-    if (std::holds_alternative<GrayscaleImagePtr>(baseImg)) {
-        auto gray = std::get<GrayscaleImagePtr>(baseImg);
-        auto cloned = cloneGrayscale(gray);
-        previewResult = BackgroundExtractor::extractGrayscale(cloned, order, sigma, m_sampleFrac, m_huberDelta, equalize);
-    } else if (std::holds_alternative<RGBImagePtr>(baseImg)) {
-        auto rgb = std::get<RGBImagePtr>(baseImg);
-        auto cloned = cloneRGB(rgb);
-        previewResult = BackgroundExtractor::extractRGB(cloned, order, sigma, m_sampleFrac, m_huberDelta, equalize);
-    }
-
-    win->setPreviewImage(previewResult);
-}
-
 void BackgroundExtractionDialog::onApplyClicked() {
     auto win = getActiveImageWindow();
     if (!win) {
@@ -208,42 +121,7 @@ void BackgroundExtractionDialog::onApplyClicked() {
         return;
     }
 
-    int order = m_orderSpin->value();
-    double sigma = m_sigmaSpin->value();
-    bool equalize = m_equalizeChk->isChecked();
-
-    ImageVariant baseImg = win->originalImage();
-    ImageVariant finalResult;
-
-    if (std::holds_alternative<GrayscaleImagePtr>(baseImg)) {
-        auto gray = std::get<GrayscaleImagePtr>(baseImg);
-        auto cloned = cloneGrayscale(gray);
-        finalResult = BackgroundExtractor::extractGrayscale(cloned, order, sigma, m_sampleFrac, m_huberDelta, equalize);
-    } else if (std::holds_alternative<RGBImagePtr>(baseImg)) {
-        auto rgb = std::get<RGBImagePtr>(baseImg);
-        auto cloned = cloneRGB(rgb);
-        finalResult = BackgroundExtractor::extractRGB(cloned, order, sigma, m_sampleFrac, m_huberDelta, equalize);
-    }
-
-    if (m_previewChk->isChecked()) {
-        win->commitPreviewImage(finalResult);
-    } else {
-        // If preview wasn't running, we manually trigger an in-place mutation
-        win->setPreviewImage(finalResult);
-        win->commitPreviewImage(finalResult);
-    }
-
-    m_previewChk->blockSignals(true);
-    m_previewChk->setChecked(false);
-    m_previewChk->blockSignals(false);
-}
-
-void BackgroundExtractionDialog::closeEvent(QCloseEvent* event) {
-    m_previewTimer->stop();
-    if (auto win = getActiveImageWindow()) {
-        win->restoreOriginalImage();
-    }
-    QWidget::closeEvent(event);
+    emit algorithmExecuted(algorithmName(), getConfig());
 }
 
 void BackgroundExtractionDialog::onPrefsClicked() {
@@ -289,7 +167,6 @@ void BackgroundExtractionDialog::onPrefsClicked() {
         m_sampleFrac = fracSpin->value();
         m_huberDelta = deltaSpin->value();
         m_threads = threadSpin->value();
-        onParameterChanged(); // Trigger preview refresh if active
     }
 }
 

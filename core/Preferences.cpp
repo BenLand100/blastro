@@ -12,9 +12,9 @@ Preferences& Preferences::instance() {
 
 Preferences::Preferences() {
     // Default values
-    m_pclModuleFolder = "/opt/PixInsight/bin";
-    m_pclLibFolder = "/opt/PixInsight/lib";
-    m_pclLibraryFolder = "/opt/PixInsight/library";
+    m_pclModuleFolder = (QDir::currentPath() + "/plugins/bin").toStdString();
+    m_pclLibFolder = (QDir::currentPath() + "/plugins/lib").toStdString();
+    m_pclLibraryFolder = (QDir::currentPath() + "/plugins/library").toStdString();
     m_pclLoadTensorflow = false;
     m_temporaryFolder = "/tmp";
     m_intermediateFolder = (QDir::currentPath() + "/process").toStdString();
@@ -24,6 +24,7 @@ Preferences::Preferences() {
     m_threadCount = (cores > 0) ? static_cast<int>(cores) : 4;
     m_stackingMode = "ram";
     m_maxRamUsage = 16;
+    m_updateRepositories = { "https://pixinsight.deepsnrastro.com/" };
     
     load();
 }
@@ -118,6 +119,16 @@ void Preferences::setMaxRamUsage(int gb) {
     m_maxRamUsage = gb;
 }
 
+std::vector<std::string> Preferences::getUpdateRepositories() const {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return m_updateRepositories;
+}
+
+void Preferences::setUpdateRepositories(const std::vector<std::string>& repos) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_updateRepositories = repos;
+}
+
 void Preferences::load() {
     std::lock_guard<std::mutex> lock(m_mutex);
     QSettings settings("BLastro", "BLastro");
@@ -130,6 +141,16 @@ void Preferences::load() {
     m_threadCount = settings.value("Preferences/ThreadCount", m_threadCount).toInt();
     m_stackingMode = settings.value("Preferences/StackingMode", QString::fromStdString(m_stackingMode)).toString().toStdString();
     m_maxRamUsage = settings.value("Preferences/MaxRamUsage", m_maxRamUsage).toInt();
+
+    QStringList defaultRepos;
+    for (const auto& r : m_updateRepositories) {
+        defaultRepos.append(QString::fromStdString(r));
+    }
+    QStringList reposList = settings.value("Preferences/UpdateRepositories", defaultRepos).toStringList();
+    m_updateRepositories.clear();
+    for (const auto& r : reposList) {
+        m_updateRepositories.push_back(r.toStdString());
+    }
 }
 
 void Preferences::save() {
@@ -144,6 +165,12 @@ void Preferences::save() {
     settings.setValue("Preferences/ThreadCount", m_threadCount);
     settings.setValue("Preferences/StackingMode", QString::fromStdString(m_stackingMode));
     settings.setValue("Preferences/MaxRamUsage", m_maxRamUsage);
+
+    QStringList reposList;
+    for (const auto& r : m_updateRepositories) {
+        reposList.append(QString::fromStdString(r));
+    }
+    settings.setValue("Preferences/UpdateRepositories", reposList);
 }
 
 } // namespace blastro

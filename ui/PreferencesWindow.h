@@ -4,6 +4,7 @@
 #include <QCheckBox>
 #include <QSpinBox>
 #include <QComboBox>
+#include <QListWidget>
 
 namespace blastro {
 
@@ -20,6 +21,8 @@ private slots:
     void onBrowseLibrary();
     void onBrowseTemp();
     void onBrowseIntermediate();
+    void onAddRepo();
+    void onRemoveRepo();
 
 private:
     QLineEdit* m_moduleEdit;
@@ -30,6 +33,8 @@ private:
     QLineEdit* m_intermediateEdit;
     QSpinBox* m_threadSpin;
     QSpinBox* m_ramSpin;
+    QListWidget* m_reposListWidget;
+    QLineEdit* m_newRepoEdit;
 };
 
 } // namespace blastro

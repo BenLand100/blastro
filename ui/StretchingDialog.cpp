@@ -282,10 +282,6 @@ StretchingDialog::StretchingDialog(WorkspaceRegistry& workspace, QWidget* parent
     connect(m_copyStretchesBtn, &QPushButton::clicked, this, &StretchingDialog::onCopyLiveStretch);
     ctrlLayout->addWidget(m_copyStretchesBtn);
 
-    m_autoBtn = new QPushButton("Auto", this);
-    connect(m_autoBtn, &QPushButton::clicked, this, &StretchingDialog::onAutoClicked);
-    ctrlLayout->addWidget(m_autoBtn);
-
     ctrlLayout->addStretch(1);
 
     m_previewChk = new QCheckBox("Live Preview", this);
@@ -475,90 +471,6 @@ void StretchingDialog::onCopyLiveStretch() {
     }
 }
 
-void StretchingDialog::onAutoClicked() {
-    auto win = getActiveImageWindow();
-    if (!win) return;
-    auto imgVar = win->currentImage();
-    
-    // Sample pixels (up to 20,000 samples)
-    int imgW = 0, imgH = 0;
-    const float* bufGray = nullptr;
-    const float* bufR = nullptr;
-    const float* bufG = nullptr;
-    const float* bufB = nullptr;
-    bool isRGB = false;
-
-    if (std::holds_alternative<GrayscaleImagePtr>(imgVar)) {
-        auto img = std::get<GrayscaleImagePtr>(imgVar);
-        if (img && img->buffer()) {
-            imgW = img->width();
-            imgH = img->height();
-            bufGray = img->buffer()->data();
-        }
-    } else if (std::holds_alternative<RGBImagePtr>(imgVar)) {
-        auto img = std::get<RGBImagePtr>(imgVar);
-        if (img && img->r() && img->g() && img->b()) {
-            imgW = img->width();
-            imgH = img->height();
-            bufR = img->r()->buffer()->data();
-            bufG = img->g()->buffer()->data();
-            bufB = img->b()->buffer()->data();
-            isRGB = true;
-        }
-    }
-
-    if (imgW <= 0 || imgH <= 0) return;
-
-    int totalPixels = imgW * imgH;
-    int sampleStep = std::max(1, totalPixels / 20000);
-    std::vector<float> samples;
-    samples.reserve(totalPixels / sampleStep);
-
-    for (int i = 0; i < totalPixels; i += sampleStep) {
-        if (isRGB) {
-            samples.push_back((bufR[i] + bufG[i] + bufB[i]) / 3.0f);
-        } else {
-            samples.push_back(bufGray[i]);
-        }
-    }
-
-    if (samples.empty()) return;
-    std::sort(samples.begin(), samples.end());
-
-    int bpIdx = static_cast<int>(samples.size() * 0.0001);
-    double bp = samples[bpIdx];
-    double wp = 1.0;
-    if (bp >= wp) {
-        bp = 0.0;
-        wp = 1.0;
-    }
-
-    int medIdx = static_cast<int>(samples.size() * 0.5);
-    double originalMedian = samples[medIdx];
-
-    double med = (originalMedian - bp) / (wp - bp);
-    med = std::max(0.001, std::min(0.999, med));
-    double T = 0.25; // Standard high autostretch target for Manual adjustment
-    double mp = (med * (T - 1.0)) / (2.0 * med * T - T - med);
-    mp = std::max(0.001, std::min(0.999, mp));
-
-    m_blackpoint = bp;
-    m_whitepoint = wp;
-    m_midpoint = mp;
-
-    m_tabWidget->setCurrentIndex(0); // HT Tab
-    m_isGhsMode = false;
-    if (m_histogramWidget) {
-        m_histogramWidget->setGhsMode(false);
-    }
-
-    syncUiFromValues();
-    onParameterChanged();
-
-    if (m_histogramWidget) {
-        m_histogramWidget->snapToBlackToMid();
-    }
-}
 
 void StretchingDialog::onParameterChanged() {
     if (!m_histogramWidget) return;

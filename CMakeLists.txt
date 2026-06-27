@@ -47,7 +47,7 @@ add_subdirectory(io)
 add_subdirectory(algorithms)
 add_subdirectory(ui)
 
-add_executable(blastro main.cpp)
+add_executable(blastro main.cpp ui/resources.qrc)
 target_link_libraries(blastro PRIVATE
     blastro_core
     blastro_io

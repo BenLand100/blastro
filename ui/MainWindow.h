@@ -41,6 +41,31 @@ private:
     WorkspaceRegistry& m_workspace;
 };
 
+class PCLProcessWorker : public QObject {
+    Q_OBJECT
+public:
+    PCLProcessWorker(const QString& processId,
+                     void* hProcess,
+                     const std::vector<ImageBufferPtr>& buffers,
+                     PCLBridge* bridge,
+                     QObject* parent = nullptr)
+        : QObject(parent), m_processId(processId), m_hProcess(hProcess), m_buffers(buffers), m_bridge(bridge) {}
+    ~PCLProcessWorker() override = default;
+
+public slots:
+    void run();
+
+signals:
+    void progressUpdated(int percent);
+    void finished(bool success, QString errorMsg);
+
+private:
+    QString m_processId;
+    void* m_hProcess;
+    std::vector<ImageBufferPtr> m_buffers;
+    PCLBridge* m_bridge;
+};
+
 class MainWindow : public QMainWindow {
     Q_OBJECT
 public:
@@ -79,6 +104,7 @@ private slots:
     
     // Plugins
     void onLoadPCLModule();
+    void onCheckForUpdates();
 
 private slots:
     void updateWindowMenu();
@@ -130,6 +156,8 @@ private:
     QAction* m_backgroundAct;
     QAction* m_stretchAct;
     QAction* m_loadPluginAct = nullptr;
+    QAction* m_checkForUpdatesAct = nullptr;
+    QAction* m_pclSeparatorBelow = nullptr;
 };
 
 } // namespace blastro

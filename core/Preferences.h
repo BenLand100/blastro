@@ -1,6 +1,7 @@
 #pragma once
 #include <string>
 #include <mutex>
+#include <vector>
 
 namespace blastro {
 
@@ -36,6 +37,9 @@ public:
     int getMaxRamUsage() const;
     void setMaxRamUsage(int gb);
 
+    std::vector<std::string> getUpdateRepositories() const;
+    void setUpdateRepositories(const std::vector<std::string>& repos);
+
     // Save and load
     void load();
     void save();
@@ -53,6 +57,7 @@ private:
     int m_threadCount;
     std::string m_stackingMode;
     int m_maxRamUsage;
+    std::vector<std::string> m_updateRepositories;
 
     mutable std::mutex m_mutex;
 };

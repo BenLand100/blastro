@@ -3,6 +3,7 @@
 #include <QMdiSubWindow>
 #include <QVBoxLayout>
 #include <QMessageBox>
+#include <QIcon>
 
 namespace blastro {
 
@@ -27,6 +28,7 @@ QMdiSubWindow* WorkspaceArea::addElementView(const QString& name, const Workspac
     // Create MDI subwindow
     QMdiSubWindow* sub = addSubWindow(viewWidget);
     sub->setWindowTitle(name);
+    sub->setWindowIcon(QIcon(":/icons/bl_symbol_icon.png"));
     sub->setAttribute(Qt::WA_DeleteOnClose);
     sub->resize(800, 600);
     

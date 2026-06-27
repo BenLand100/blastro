@@ -2,6 +2,7 @@
 #include "ui/LogWindow.h"
 #include "core/PCLBridge.h"
 #include <QApplication>
+#include <QIcon>
 #include <QTimer>
 #include <QDebug>
 #include <cstring>
@@ -45,6 +46,7 @@ int main(int argc, char* argv[]) {
 
     if (argc > 3 && (std::strcmp(argv[1], "--test-process") == 0 || std::strcmp(argv[1], "--run-plugin") == 0)) {
         QApplication app(argc, argv);
+        app.setWindowIcon(QIcon(":/icons/bl_spacey_icon.png"));
         QString pluginPath = argv[2];
         QString imagePath = argv[3];
         qDebug() << "Test process execution: plugin =" << pluginPath << "image =" << imagePath;
@@ -61,6 +63,7 @@ int main(int argc, char* argv[]) {
 
     if (argc > 2 && (std::strcmp(argv[1], "--test-register") == 0)) {
         QApplication app(argc, argv);
+        app.setWindowIcon(QIcon(":/icons/bl_spacey_icon.png"));
         QString cubePath = argv[2];
         int refIdx = (argc > 3) ? std::atoi(argv[3]) : 0;
         QString method = (argc > 4) ? argv[4] : "centroid";
@@ -85,6 +88,7 @@ int main(int argc, char* argv[]) {
 
     if (argc > 2 && (std::strcmp(argv[1], "--test-load") == 0 || std::strcmp(argv[1], "--load-plugin") == 0)) {
         QApplication app(argc, argv);
+        app.setWindowIcon(QIcon(":/icons/bl_spacey_icon.png"));
         QString path = argv[2];
         qDebug() << "Test loading PCL module from:" << path << "in GUI mode";
         
@@ -99,6 +103,7 @@ int main(int argc, char* argv[]) {
     }
 
     QApplication app(argc, argv);
+    app.setWindowIcon(QIcon(":/icons/bl_spacey_icon.png"));
     
     // Parse flexible GUI preload arguments and positional image files
     QString loadPluginPath;

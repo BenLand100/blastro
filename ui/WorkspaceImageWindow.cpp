@@ -75,6 +75,8 @@ WorkspaceImageWindow::WorkspaceImageWindow(const QString& name, const WorkspaceE
         "QPushButton { background-color: #333; color: #aaa; border: 1px solid #555; padding: 4px 12px; font-size: 11px; font-weight: bold; }"
         "QPushButton:hover { background-color: #444; color: #fff; }"
         "QPushButton:checked { background-color: #007acc; color: #fff; border-color: #007acc; }"
+        "QPushButton:disabled { background-color: #1a1a1a; color: #555; border-color: #2a2a2a; }"
+        "QPushButton:checked:disabled { background-color: #224466; color: #888; border-color: #224466; }"
         "QPushButton#normal { border-top-left-radius: 4px; border-bottom-left-radius: 4px; border-right: none; }"
         "QPushButton#auto { border-radius: 0px; border-right: none; }"
         "QPushButton#stretch { border-radius: 0px; border-right: none; }"
@@ -163,14 +165,19 @@ WorkspaceImageWindow::WorkspaceImageWindow(const QString& name, const WorkspaceE
         "QPushButton { background-color: #2b2b2b; color: #888; border: 1px solid #444; padding: 2px 6px; font-size: 10px; font-weight: bold; min-width: 20px; }"
         "QPushButton:hover { background-color: #3b3b3b; color: #fff; }"
         "QPushButton:checked { color: #fff; font-weight: bold; }"
+        "QPushButton:disabled { background-color: #1c1c1c; color: #555; border-color: #2a2a2a; }"
         "QPushButton#rgbChan { border-top-left-radius: 3px; border-bottom-left-radius: 3px; border-right: none; }"
         "QPushButton#rgbChan:checked { background-color: #555; border-color: #555; }"
+        "QPushButton#rgbChan:checked:disabled { background-color: #333; border-color: #333; }"
         "QPushButton#rChan { border-radius: 0px; border-right: none; }"
         "QPushButton#rChan:checked { background-color: #a33; border-color: #a33; }"
+        "QPushButton#rChan:checked:disabled { background-color: #533; border-color: #533; }"
         "QPushButton#gChan { border-radius: 0px; border-right: none; }"
         "QPushButton#gChan:checked { background-color: #3a3; border-color: #3a3; }"
+        "QPushButton#gChan:checked:disabled { background-color: #353; border-color: #353; }"
         "QPushButton#bChan { border-top-right-radius: 3px; border-bottom-right-radius: 3px; }"
-        "QPushButton#bChan:checked { background-color: #33a; border-color: #33a; }";
+        "QPushButton#bChan:checked { background-color: #33a; border-color: #33a; }"
+        "QPushButton#bChan:checked:disabled { background-color: #335; border-color: #335; }";
 
     m_rgbChanBtn->setObjectName("rgbChan");
     m_rgbChanBtn->setCheckable(true);
@@ -354,6 +361,9 @@ void WorkspaceImageWindow::onFrameChanged(int index) {
 }
 
 void WorkspaceImageWindow::updateHistogram() {
+    if (m_imageView && m_imageView->isUpdatesSuspended()) {
+        return;
+    }
     // Query histogram with 16-bit (65536 bins) resolution for high-detail zooming
     m_histogramWidget->setHistogram(m_imageView->getHistogram(65536));
     if (m_histogramWidget->isActive()) {
@@ -469,6 +479,12 @@ void WorkspaceImageWindow::notifyImageUpdated() {
         }
     }
     updateHistogram();
+}
+
+void WorkspaceImageWindow::setUpdatesSuspended(bool suspended) {
+    if (m_imageView) {
+        m_imageView->setUpdatesSuspended(suspended);
+    }
 }
 
 void WorkspaceImageWindow::setPreviewImage(const ImageVariant& previewImage) {

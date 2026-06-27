@@ -10,6 +10,7 @@
 #include <QMessageBox>
 #include <QMainWindow>
 #include <QStatusBar>
+#include <QTabWidget>
 
 namespace blastro {
 
@@ -17,7 +18,7 @@ PreferencesWindow::PreferencesWindow(QWidget* parent)
     : QWidget(parent) {
     
     setWindowTitle("BLastro Preferences");
-    resize(500, 480);
+    resize(520, 520);
 
     setStyleSheet(
         "QWidget { background-color: #202020; color: #ffffff; }"
@@ -33,11 +34,23 @@ PreferencesWindow::PreferencesWindow(QWidget* parent)
         "QPushButton#primaryButton:pressed { background-color: #0060a0; }"
         "QGroupBox { font-weight: bold; border: 1px solid #555555; margin-top: 10px; padding: 12px; color: #ffffff; }"
         "QGroupBox::title { subcontrol-origin: margin; left: 10px; }"
+        "QTabWidget::pane { border: 1px solid #555555; background-color: #202020; top: -1px; }"
+        "QTabBar::tab { background-color: #333333; color: #aaaaaa; padding: 6px 12px; border: 1px solid #555555; border-bottom: none; border-top-left-radius: 4px; border-top-right-radius: 4px; font-size: 11px; font-weight: bold; margin-right: 2px; }"
+        "QTabBar::tab:selected { background-color: #202020; color: #ffffff; border-bottom: 1px solid #202020; }"
+        "QTabBar::tab:hover { background-color: #444444; color: #ffffff; }"
     );
 
     QVBoxLayout* mainLayout = new QVBoxLayout(this);
     mainLayout->setContentsMargins(15, 15, 15, 15);
     mainLayout->setSpacing(15);
+
+    QTabWidget* tabWidget = new QTabWidget(this);
+
+    // Tab 1: General Settings
+    QWidget* generalTab = new QWidget(this);
+    QVBoxLayout* generalLayout = new QVBoxLayout(generalTab);
+    generalLayout->setContentsMargins(10, 10, 10, 10);
+    generalLayout->setSpacing(10);
 
     // Group 1: PCL Settings
     QGroupBox* pclGroup = new QGroupBox("PCL Settings", this);
@@ -70,8 +83,7 @@ PreferencesWindow::PreferencesWindow(QWidget* parent)
 
     m_tensorflowChk = new QCheckBox("Load TensorFlow dynamically on startup", this);
     pclForm->addRow("", m_tensorflowChk);
-
-    mainLayout->addWidget(pclGroup);
+    generalLayout->addWidget(pclGroup);
 
     // Group 2: Path Configurations
     QGroupBox* pathsGroup = new QGroupBox("Path Configurations", this);
@@ -93,8 +105,7 @@ PreferencesWindow::PreferencesWindow(QWidget* parent)
     layoutIntermediate->addWidget(m_intermediateEdit, 1);
     layoutIntermediate->addWidget(btnBrowseIntermediate);
     pathsForm->addRow("Intermediate Folder (Batches):", layoutIntermediate);
-
-    mainLayout->addWidget(pathsGroup);
+    generalLayout->addWidget(pathsGroup);
 
     // Group 3: System Resource Settings
     QGroupBox* sysGroup = new QGroupBox("System Resource Settings", this);
@@ -109,8 +120,41 @@ PreferencesWindow::PreferencesWindow(QWidget* parent)
     m_ramSpin->setRange(1, 512);
     m_ramSpin->setSuffix(" GB");
     sysForm->addRow("Maximum RAM Limit:", m_ramSpin);
+    generalLayout->addWidget(sysGroup);
 
-    mainLayout->addWidget(sysGroup);
+    tabWidget->addTab(generalTab, "General Settings");
+
+    // Tab 2: PCL Repositories
+    QWidget* reposTab = new QWidget(this);
+    QVBoxLayout* reposLayout = new QVBoxLayout(reposTab);
+    reposLayout->setContentsMargins(10, 10, 10, 10);
+    reposLayout->setSpacing(10);
+
+    QGroupBox* reposGroup = new QGroupBox("PCL Repositories List", this);
+    QVBoxLayout* reposGroupLayout = new QVBoxLayout(reposGroup);
+    reposGroupLayout->setSpacing(8);
+
+    m_reposListWidget = new QListWidget(this);
+    m_reposListWidget->setStyleSheet("background-color: #3a3a3a; color: #ffffff; border: 1px solid #555555; border-radius: 3px; font-size: 11px;");
+    reposGroupLayout->addWidget(m_reposListWidget, 1);
+
+    QHBoxLayout* addLayout = new QHBoxLayout();
+    m_newRepoEdit = new QLineEdit(this);
+    m_newRepoEdit->setPlaceholderText("Enter repository URL (e.g., https://example.com/)...");
+    QPushButton* btnAddRepo = new QPushButton("Add", this);
+    connect(btnAddRepo, &QPushButton::clicked, this, &PreferencesWindow::onAddRepo);
+    QPushButton* btnRemoveRepo = new QPushButton("Remove", this);
+    connect(btnRemoveRepo, &QPushButton::clicked, this, &PreferencesWindow::onRemoveRepo);
+
+    addLayout->addWidget(m_newRepoEdit, 1);
+    addLayout->addWidget(btnAddRepo);
+    addLayout->addWidget(btnRemoveRepo);
+    reposGroupLayout->addLayout(addLayout);
+
+    reposLayout->addWidget(reposGroup, 1);
+    tabWidget->addTab(reposTab, "PCL Repositories");
+
+    mainLayout->addWidget(tabWidget, 1);
 
     // Bottom buttons
     QHBoxLayout* btnLayout = new QHBoxLayout();
@@ -147,6 +191,11 @@ PreferencesWindow::PreferencesWindow(QWidget* parent)
     m_intermediateEdit->setText(QString::fromStdString(prefs.getIntermediateFolder()));
     m_threadSpin->setValue(prefs.getThreadCount());
     m_ramSpin->setValue(prefs.getMaxRamUsage());
+
+    m_reposListWidget->clear();
+    for (const auto& repo : prefs.getUpdateRepositories()) {
+        m_reposListWidget->addItem(QString::fromStdString(repo));
+    }
 }
 
 void PreferencesWindow::onBrowseModule() {
@@ -194,6 +243,13 @@ void PreferencesWindow::onSaveClicked() {
     prefs.setIntermediateFolder(m_intermediateEdit->text().trimmed().toStdString());
     prefs.setThreadCount(m_threadSpin->value());
     prefs.setMaxRamUsage(m_ramSpin->value());
+
+    std::vector<std::string> repos;
+    for (int i = 0; i < m_reposListWidget->count(); ++i) {
+        repos.push_back(m_reposListWidget->item(i)->text().trimmed().toStdString());
+    }
+    prefs.setUpdateRepositories(repos);
+
     prefs.save();
 
     // Find main window status bar to show a message
@@ -221,4 +277,23 @@ void PreferencesWindow::onSaveClicked() {
     close();
 }
 
+void PreferencesWindow::onAddRepo() {
+    QString url = m_newRepoEdit->text().trimmed();
+    if (!url.isEmpty()) {
+        if (!url.endsWith('/')) {
+            url.append('/');
+        }
+        m_reposListWidget->addItem(url);
+        m_newRepoEdit->clear();
+    }
+}
+
+void PreferencesWindow::onRemoveRepo() {
+    QListWidgetItem* item = m_reposListWidget->currentItem();
+    if (item) {
+        delete m_reposListWidget->takeItem(m_reposListWidget->row(item));
+    }
+}
+
 } // namespace blastro
+

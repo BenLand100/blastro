@@ -1,7 +1,9 @@
 #include "core/PCLBridge.h"
 #include "core/Logger.h"
+#include "core/Preferences.h"
 #include "ui/MainWindow.h"
 #include "core/PCLStubs.h"
+#include <QDir>
 #include <pcl/api/APIInterface.h>
 #include <dlfcn.h>
 #include <QFile>
@@ -9,6 +11,7 @@
 #include <QFont>
 #include <QFontMetrics>
 #include <QApplication>
+#include <QThread>
 #include <QDebug>
 #include <QRegularExpression>
 #include <iostream>
@@ -366,82 +369,128 @@ static api_bool mock_ValidateConsole(const_console_handle) {
     return true;
 }
 
-static QString g_consoleBuffer;
+static QString g_currentConsoleLine;
+static int g_consoleCursorPos = 0;
+static bool g_currentLineLogged = false;
 static std::mutex g_consoleMutex;
 
-static void writeConsoleBuffer(const QString& str, bool appendNewline) {
-    std::lock_guard<std::mutex> lock(g_consoleMutex);
-    g_consoleBuffer += str;
-    if (appendNewline) {
-        g_consoleBuffer += "\n";
-    }
-
+static QString cleanConsoleTags(QString text) {
     // 1. Process conditional breaks <cbr> and <cbr/>
     int cbrIdx;
-    while ((cbrIdx = g_consoleBuffer.indexOf("<cbr")) != -1) {
-        int endTag = g_consoleBuffer.indexOf('>', cbrIdx);
+    while ((cbrIdx = text.indexOf("<cbr")) != -1) {
+        int endTag = text.indexOf('>', cbrIdx);
         if (endTag == -1) break;
         int tagLen = endTag - cbrIdx + 1;
-        bool needNewline = (cbrIdx > 0 && g_consoleBuffer[cbrIdx - 1] != '\n');
-        g_consoleBuffer.replace(cbrIdx, tagLen, needNewline ? "\n" : "");
+        text.replace(cbrIdx, tagLen, "\n");
     }
 
     // 2. Process standard breaks <br> and <br/>
     int brIdx;
-    while ((brIdx = g_consoleBuffer.indexOf("<br")) != -1) {
-        int endTag = g_consoleBuffer.indexOf('>', brIdx);
+    while ((brIdx = text.indexOf("<br")) != -1) {
+        int endTag = text.indexOf('>', brIdx);
         if (endTag == -1) break;
-        g_consoleBuffer.replace(brIdx, endTag - brIdx + 1, "\n");
+        text.replace(brIdx, endTag - brIdx + 1, "\n");
     }
 
-    // 3. Translate carriage returns to newlines
-    g_consoleBuffer.replace('\r', '\n');
-
-    // 4. Strip cosmetic/positioning tags
+    // 3. Strip cosmetic/positioning tags
     static const QStringList tagsToStrip = {
         "<end>", "<beg>", "<eol>", "<bol>", "<bwd>", "<fwd>", "<up>", "<down>", "<bsp>"
     };
     for (const auto& tag : tagsToStrip) {
-        g_consoleBuffer.replace(tag, "");
+        text.replace(tag, "");
     }
-    
-    // Process complete lines
-    int newlineIdx;
-    while ((newlineIdx = g_consoleBuffer.indexOf('\n')) != -1) {
-        QString line = g_consoleBuffer.left(newlineIdx);
-        g_consoleBuffer.remove(0, newlineIdx + 1);
+
+    // 4. Intercept progress bar tags like <* pbr 50 *>
+    int startIdx = 0;
+    while ((startIdx = text.indexOf("<*", startIdx)) != -1) {
+        int endIdx = text.indexOf("*>", startIdx);
+        if (endIdx == -1) break;
         
-        // Intercept progress bar tags like <* pbr 50 *>
-        int startIdx = 0;
-        while ((startIdx = line.indexOf("<*", startIdx)) != -1) {
-            int endIdx = line.indexOf("*>", startIdx);
-            if (endIdx == -1) break;
-            
-            QString tag = line.mid(startIdx + 2, endIdx - startIdx - 2).trimmed();
-            if (tag.startsWith("pbr ") || tag.startsWith("pbr_")) {
-                QString valStr = tag.mid(4).trimmed();
-                if (valStr.endsWith('%')) valStr.chop(1);
-                bool ok = false;
-                double val = valStr.toDouble(&ok);
-                if (ok) {
-                    int pct = 0;
-                    if (val <= 1.0 && val > 0.0) {
-                        pct = static_cast<int>(val * 100.0);
-                    } else {
-                        pct = static_cast<int>(val);
-                    }
-                    if (pct >= 0 && pct <= 100) {
-                        if (g_pclBridgeInstance) {
-                            emit g_pclBridgeInstance->progressUpdated(pct);
-                        }
+        QString tag = text.mid(startIdx + 2, endIdx - startIdx - 2).trimmed();
+        if (tag.startsWith("pbr ") || tag.startsWith("pbr_")) {
+            QString valStr = tag.mid(4).trimmed();
+            if (valStr.endsWith('%')) valStr.chop(1);
+            bool ok = false;
+            double val = valStr.toDouble(&ok);
+            if (ok) {
+                int pct = 0;
+                if (val <= 1.0 && val > 0.0) {
+                    pct = static_cast<int>(val * 100.0);
+                } else {
+                    pct = static_cast<int>(val);
+                }
+                if (pct >= 0 && pct <= 100) {
+                    if (g_pclBridgeInstance) {
+                        emit g_pclBridgeInstance->progressUpdated(pct);
                     }
                 }
             }
-            line.remove(startIdx, endIdx - startIdx + 2);
         }
-        // Intercept general progress indicators like 50%
+        text.remove(startIdx, endIdx - startIdx + 2);
+    }
+    return text;
+}
+
+static void writeConsoleBuffer(const QString& str, bool appendNewline) {
+    std::lock_guard<std::mutex> lock(g_consoleMutex);
+    
+    QString cleanStr = cleanConsoleTags(str);
+    bool lineStateChanged = false;
+
+    QString channel = "PCL";
+    if (g_pclBridgeInstance && g_pclBridgeInstance->moduleDescription() && g_pclBridgeInstance->moduleDescription()->name) {
+        channel = QString::fromUtf8(g_pclBridgeInstance->moduleDescription()->name);
+    }
+
+    for (int i = 0; i < cleanStr.length(); ++i) {
+        QChar c = cleanStr[i];
+        if (c == '\n') {
+            // Finalize the current line
+            if (g_currentLineLogged) {
+                Logger::info(channel, "\r" + g_currentConsoleLine);
+            } else if (!g_currentConsoleLine.isEmpty()) {
+                Logger::info(channel, g_currentConsoleLine);
+            }
+            g_currentConsoleLine.clear();
+            g_consoleCursorPos = 0;
+            g_currentLineLogged = false;
+            lineStateChanged = false;
+        } else if (c == '\r') {
+            g_consoleCursorPos = 0;
+            lineStateChanged = true;
+        } else if (c == '\b') {
+            if (g_consoleCursorPos > 0) {
+                g_consoleCursorPos--;
+            }
+            lineStateChanged = true;
+        } else {
+            // Overwrite or append
+            if (g_consoleCursorPos < g_currentConsoleLine.length()) {
+                g_currentConsoleLine[g_consoleCursorPos] = c;
+            } else {
+                while (g_currentConsoleLine.length() < g_consoleCursorPos) {
+                    g_currentConsoleLine.append(' ');
+                }
+                g_currentConsoleLine.append(c);
+            }
+            g_consoleCursorPos++;
+            lineStateChanged = true;
+        }
+    }
+
+    if (appendNewline) {
+        if (g_currentLineLogged) {
+            Logger::info(channel, "\r" + g_currentConsoleLine);
+        } else if (!g_currentConsoleLine.isEmpty()) {
+            Logger::info(channel, g_currentConsoleLine);
+        }
+        g_currentConsoleLine.clear();
+        g_consoleCursorPos = 0;
+        g_currentLineLogged = false;
+    } else if (lineStateChanged && !g_currentConsoleLine.isEmpty()) {
+        // Parse progress percentage from current state
         static QRegularExpression pctRe("(\\d+)%");
-        auto match = pctRe.match(line);
+        auto match = pctRe.match(g_currentConsoleLine);
         if (match.hasMatch()) {
             bool ok = false;
             int pct = match.captured(1).toInt(&ok);
@@ -452,9 +501,12 @@ static void writeConsoleBuffer(const QString& str, bool appendNewline) {
             }
         }
 
-        // Print the cleaned line to the process console
-        if (!line.trimmed().isEmpty()) {
-            Logger::info("PCL", line);
+        // Print/update in LogWindow
+        if (g_currentLineLogged) {
+            Logger::info(channel, "\r" + g_currentConsoleLine);
+        } else {
+            Logger::info(channel, g_currentConsoleLine);
+            g_currentLineLogged = true;
         }
     }
 }
@@ -474,7 +526,7 @@ static api_bool mock_ShowConsole(console_handle, api_bool) {
 }
 
 static void mock_ProcessEvents(api_bool excludeUserInputEvents) {
-    if (qApp) {
+    if (qApp && QThread::currentThread() == qApp->thread()) {
         qApp->processEvents(excludeUserInputEvents ? QEventLoop::ExcludeUserInputEvents : QEventLoop::AllEvents);
     }
 }
@@ -2092,6 +2144,7 @@ static void mock_GetViewLocks(const_view_handle hView, api_bool* readLocked, api
 
 PCLBridge::PCLBridge(QObject* parent) : QObject(parent) {
     g_pclBridgeInstance = this;
+    g_verbosePCL = (qEnvironmentVariableIntValue("BLASTRO_DEBUG_PCL") == 1);
 }
 
 PCLBridge::~PCLBridge() {
@@ -2395,30 +2448,36 @@ bool PCLBridge::loadModule(const QString& path) {
     // Check if this module is already loaded to avoid duplicates
     for (const auto& mod : m_modules) {
         if (mod.filepath == path) {
-            qInfo() << "[PCL Bridge] Module is already loaded:" << path;
+            qDebug() << "[PCL Bridge] Module is already loaded:" << path;
             return true;
         }
     }
 
     // Dynamically pre-load TensorFlow dependencies for RC-Astro *XTerminator plugins.
     {
-        QString appDir = QCoreApplication::applicationDirPath();
-        QString tfFrameworkPath = appDir + "/lib/libtensorflow_framework.so.2";
-        QString tfPath = appDir + "/lib/libtensorflow.so.2";
+        QString tfLibDir = QString::fromStdString(Preferences::instance().getPclLibFolder());
+        QString tfFrameworkPath = QDir(tfLibDir).filePath("libtensorflow_framework.so.2");
+        QString tfPath = QDir(tfLibDir).filePath("libtensorflow.so.2");
 
-        if (!QFile::exists(tfPath)) {
-            tfFrameworkPath = appDir + "/../lib/libtensorflow_framework.so.2";
-            tfPath = appDir + "/../lib/libtensorflow.so.2";
+        if (tfLibDir.isEmpty() || !QFile::exists(tfPath)) {
+            QString appDir = QCoreApplication::applicationDirPath();
+            tfFrameworkPath = appDir + "/lib/libtensorflow_framework.so.2";
+            tfPath = appDir + "/lib/libtensorflow.so.2";
+
+            if (!QFile::exists(tfPath)) {
+                tfFrameworkPath = appDir + "/../lib/libtensorflow_framework.so.2";
+                tfPath = appDir + "/../lib/libtensorflow.so.2";
+            }
         }
 
         if (QFile::exists(tfPath)) {
-            qInfo() << "[PCL Bridge] Pre-loading TensorFlow framework from:" << tfFrameworkPath;
+            qDebug() << "[PCL Bridge] Pre-loading TensorFlow framework from:" << tfFrameworkPath;
             void* tfFrameHandle = dlopen(tfFrameworkPath.toUtf8().constData(), RTLD_LAZY | RTLD_GLOBAL);
             if (!tfFrameHandle) {
                 qWarning() << "[PCL Bridge] Failed to pre-load libtensorflow_framework.so.2:" << dlerror();
             }
 
-            qInfo() << "[PCL Bridge] Pre-loading TensorFlow from:" << tfPath;
+            qDebug() << "[PCL Bridge] Pre-loading TensorFlow from:" << tfPath;
             void* tfHandle = dlopen(tfPath.toUtf8().constData(), RTLD_LAZY | RTLD_GLOBAL);
             if (!tfHandle) {
                 qWarning() << "[PCL Bridge] Failed to pre-load libtensorflow.so.2:" << dlerror();
@@ -2426,7 +2485,7 @@ bool PCLBridge::loadModule(const QString& path) {
         }
     }
 
-    qInfo() << "[PCL Bridge] Attempting to dlopen:" << path;
+    qDebug() << "[PCL Bridge] Attempting to dlopen:" << path;
     void* libHandle = dlopen(path.toUtf8().constData(), RTLD_LAZY | RTLD_GLOBAL);
     if (!libHandle) {
         qWarning() << "[PCL Bridge] dlopen failed:" << dlerror();
@@ -2456,7 +2515,7 @@ bool PCLBridge::loadModule(const QString& path) {
 
     // 1. Install with FullInstall first to instantiate the MetaModule and all process/parameter meta-objects!
     if (install) {
-        qInfo() << "[PCL Bridge] Running InstallPixInsightModule (FullInstall)...";
+        qDebug() << "[PCL Bridge] Running InstallPixInsightModule (FullInstall)...";
         int32 installStatus = install(0); // InstallMode::FullInstall
         if (installStatus != 0) {
             qWarning() << "[PCL Bridge] InstallPixInsightModule (FullInstall) failed, code:" << installStatus;
@@ -2464,7 +2523,7 @@ bool PCLBridge::loadModule(const QString& path) {
             g_currentLoadingModule = nullptr;
             return false;
         }
-        qInfo() << "[PCL Bridge] Meta-objects instantiated successfully.";
+        qDebug() << "[PCL Bridge] Meta-objects instantiated successfully.";
     } else {
         qWarning() << "[PCL Bridge] Module has no installation entry point (PMINS), cannot initialize.";
         dlclose(libHandle);
@@ -2472,7 +2531,7 @@ bool PCLBridge::loadModule(const QString& path) {
         return false;
     }
 
-    // 2. Initialize the module stubs and overrides now that the meta-objects are instantiated
+    // 2. Initialize the stubs and overrides now that the meta-objects are instantiated
     if (!m_initialized) {
         initPCLStubs();
         setupOverrides();
@@ -2489,7 +2548,7 @@ bool PCLBridge::loadModule(const QString& path) {
     }
 
     // 3. Identify the module to get description metadata!
-    qInfo() << "[PCL Bridge] Running IdentifyPixInsightModule...";
+    qDebug() << "[PCL Bridge] Running IdentifyPixInsightModule...";
     status = identify(&newModule.description, 0);
     if (status != 0) {
         qWarning() << "[PCL Bridge] IdentifyPixInsightModule phase 0 failed, code:" << status;
@@ -2521,22 +2580,22 @@ bool PCLBridge::loadModule(const QString& path) {
 
     // Call the module's OnLoad routine if registered!
     if (newModule.onLoadFn) {
-        qInfo() << "[PCL Bridge] Invoking module OnLoad routine...";
+        qDebug() << "[PCL Bridge] Invoking module OnLoad routine...";
         newModule.onLoadFn();
-        qInfo() << "[PCL Bridge] Module OnLoad routine finished.";
+        qDebug() << "[PCL Bridge] Module OnLoad routine finished.";
     }
 
     // Call the class initialization and execution preferences routines for all registered processes
     for (auto& pair : g_processes) {
         if (pair.second.classInitFn) {
-            qInfo() << "[PCL Bridge] Invoking process class initialization routine for:" << pair.second.id;
+            qDebug() << "[PCL Bridge] Invoking process class initialization routine for:" << pair.second.id;
             pair.second.classInitFn(pair.first);
-            qInfo() << "[PCL Bridge] Process class initialization routine finished.";
+            qDebug() << "[PCL Bridge] Process class initialization routine finished.";
         }
         if (pair.second.executionPreferencesFn) {
-            qInfo() << "[PCL Bridge] Invoking process execution preferences routine for:" << pair.second.id;
+            qDebug() << "[PCL Bridge] Invoking process execution preferences routine for:" << pair.second.id;
             pair.second.executionPreferencesFn(pair.first);
-            qInfo() << "[PCL Bridge] Process execution preferences routine finished.";
+            qDebug() << "[PCL Bridge] Process execution preferences routine finished.";
         }
     }
 
@@ -2552,7 +2611,7 @@ void PCLBridge::unloadModule() {
         if (mod.libHandle) {
             // Call the module's OnUnload routine if registered!
             if (mod.onUnloadFn) {
-                qInfo() << "[PCL Bridge] Invoking module OnUnload routine for:" << mod.filepath;
+                qDebug() << "[PCL Bridge] Invoking module OnUnload routine for:" << mod.filepath;
                 mod.onUnloadFn();
             }
 
@@ -2611,7 +2670,7 @@ bool PCLBridge::executeProcess(const QString& processId, std::vector<ImageBuffer
         return false;
     }
 
-    qInfo() << "[PCL Bridge] Creating process instance for:" << processId;
+    qDebug() << "[PCL Bridge] Creating process instance for:" << processId;
     process_handle hProcess = info.createFn(hMeta);
     if (!hProcess) {
         qWarning() << "[PCL Bridge] Failed to instantiate process:" << processId;
@@ -2619,7 +2678,7 @@ bool PCLBridge::executeProcess(const QString& processId, std::vector<ImageBuffer
     }
 
     if (info.initFn) {
-        qInfo() << "[PCL Bridge] Initializing process instance...";
+        qDebug() << "[PCL Bridge] Initializing process instance...";
         info.initFn(hProcess);
     }
 
@@ -2644,7 +2703,7 @@ bool PCLBridge::executeProcess(const QString& processId, std::vector<ImageBuffer
     windowMock.mainView = &viewMock;
     viewMock.parentWindow = &windowMock;
 
-    qInfo() << "[PCL Bridge] Executing process on image:" << imgMock.width << "x" << imgMock.height << "with" << imgMock.numChannels << "channels";
+    qDebug() << "[PCL Bridge] Executing process on image:" << imgMock.width << "x" << imgMock.height << "with" << imgMock.numChannels << "channels";
     bool success = false;
     if (info.executeFn) {
         success = info.executeFn(&viewMock, hProcess);
@@ -2655,7 +2714,7 @@ bool PCLBridge::executeProcess(const QString& processId, std::vector<ImageBuffer
         qWarning() << "[PCL Bridge] Process has no execution routine!";
     }
 
-    qInfo() << "[PCL Bridge] Process execution finished, status:" << (success ? "Success" : "Failed");
+    qDebug() << "[PCL Bridge] Process execution finished, status:" << (success ? "Success" : "Failed");
 
     // Clean up
     if (info.destroyFn) {
@@ -2729,7 +2788,7 @@ bool PCLBridge::executeProcessInstance(const QString& processId, void* hProcess,
     windowMock.mainView = &viewMock;
     viewMock.parentWindow = &windowMock;
 
-    qInfo() << "[PCL Bridge] Executing process instance on image:" << imgMock.width << "x" << imgMock.height << "with" << imgMock.numChannels << "channels";
+    qDebug() << "[PCL Bridge] Executing process instance on image:" << imgMock.width << "x" << imgMock.height << "with" << imgMock.numChannels << "channels";
     bool success = false;
     if (info.executeFn) {
         success = info.executeFn(&viewMock, hProcess);
@@ -2740,7 +2799,7 @@ bool PCLBridge::executeProcessInstance(const QString& processId, void* hProcess,
         qWarning() << "[PCL Bridge] Process has no execution routine!";
     }
 
-    qInfo() << "[PCL Bridge] Process instance execution finished, status:" << (success ? "Success" : "Failed");
+    qDebug() << "[PCL Bridge] Process instance execution finished, status:" << (success ? "Success" : "Failed");
     g_activeImage = nullptr;
     return success;
 }
@@ -2846,15 +2905,24 @@ bool PCLBridge::launchInterface(const QString& processId, QWidget* parentWindow)
     // Apply dark theme stylesheet to match application dark mode
     hostWidget->setStyleSheet(
         "QWidget { background-color: #121212; color: #ffffff; }"
+        "QWidget:disabled { color: #555555; }"
         "QPushButton { background-color: #2a2a2a; border: 1px solid #444; border-radius: 4px; padding: 6px 12px; color: #ffffff; }"
+        "QPushButton:disabled { background-color: #1a1a1a; color: #555555; border-color: #222; }"
         "QPushButton:hover { background-color: #3a3a3a; }"
+        "QPushButton:hover:disabled { background-color: #1a1a1a; }"
         "QGroupBox { border: 1px solid #444; border-radius: 6px; margin-top: 12px; padding: 12px; font-weight: bold; }"
+        "QGroupBox:disabled { border-color: #222; color: #555555; }"
         "QGroupBox::title { subcontrol-origin: margin; left: 8px; padding: 0 3px; }"
         "QLabel { color: #dddddd; }"
+        "QLabel:disabled { color: #555555; }"
         "QComboBox { background-color: #2a2a2a; border: 1px solid #444; border-radius: 4px; padding: 4px; color: #ffffff; }"
+        "QComboBox:disabled { background-color: #1a1a1a; color: #555555; border-color: #222; }"
         "QSpinBox { background-color: #2a2a2a; border: 1px solid #444; border-radius: 4px; padding: 4px; color: #ffffff; }"
+        "QSpinBox:disabled { background-color: #1a1a1a; color: #555555; border-color: #222; }"
         "QSlider::groove:horizontal { border: 1px solid #444; height: 6px; background: #2a2a2a; border-radius: 3px; }"
+        "QSlider::groove:horizontal:disabled { border-color: #222; background: #1a1a1a; }"
         "QSlider::handle:horizontal { background: #3a8ee6; width: 14px; margin: -4px 0; border-radius: 7px; }"
+        "QSlider::handle:horizontal:disabled { background: #555555; }"
     );
 
     // 1. Call the interface's initialization callback!

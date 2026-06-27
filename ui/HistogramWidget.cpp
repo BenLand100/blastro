@@ -218,15 +218,13 @@ void HistogramWidget::paintEvent(QPaintEvent* event) {
     painter.setBrush(QBrush(QColor("#1a1a1a")));
     painter.drawRoundedRect(QRectF(0.5, 0.5, w - 1.0, h - 1.0), 4.0, 4.0);
 
-    // 2. Draw background grid (only if active)
-    if (m_active) {
-        painter.setPen(QPen(QColor("#262626"), 1, Qt::DashLine));
-        for (int i = 1; i < 10; ++i) {
-            double val = static_cast<double>(i) / 10.0;
-            double x = valueToX(val);
-            if (x >= 0 && x <= w) {
-                painter.drawLine(x, 1, x, h - 1);
-            }
+    // 2. Draw background grid
+    painter.setPen(QPen(QColor("#262626"), 1, Qt::DashLine));
+    for (int i = 1; i < 10; ++i) {
+        double val = static_cast<double>(i) / 10.0;
+        double x = valueToX(val);
+        if (x >= 0 && x <= w) {
+            painter.drawLine(x, 1, x, h - 1);
         }
     }
 
@@ -429,12 +427,11 @@ void HistogramWidget::paintEvent(QPaintEvent* event) {
 }
 
 void HistogramWidget::mousePressEvent(QMouseEvent* event) {
-    if (!m_active) {
-        QWidget::mousePressEvent(event);
-        return;
-    }
-
     if (event->button() == Qt::LeftButton) {
+        if (!m_active) {
+            QWidget::mousePressEvent(event);
+            return;
+        }
         m_dragTarget = getCloseLine(event->pos());
         if (m_dragTarget != None) {
             event->accept();
@@ -451,11 +448,6 @@ void HistogramWidget::mousePressEvent(QMouseEvent* event) {
 }
 
 void HistogramWidget::mouseReleaseEvent(QMouseEvent* event) {
-    if (!m_active) {
-        QWidget::mouseReleaseEvent(event);
-        return;
-    }
-
     if (event->button() == Qt::LeftButton) {
         m_dragTarget = None;
     } else if (event->button() == Qt::RightButton) {
@@ -466,11 +458,6 @@ void HistogramWidget::mouseReleaseEvent(QMouseEvent* event) {
 }
 
 void HistogramWidget::mouseMoveEvent(QMouseEvent* event) {
-    if (!m_active) {
-        QWidget::mouseMoveEvent(event);
-        return;
-    }
-
     if (m_isScrolling) {
         double dx = event->pos().x() - m_lastMousePos.x();
         double dv = dx / (m_zoom * width());
@@ -479,6 +466,11 @@ void HistogramWidget::mouseMoveEvent(QMouseEvent* event) {
         m_lastMousePos = event->pos();
         update();
         event->accept();
+        return;
+    }
+
+    if (!m_active) {
+        QWidget::mouseMoveEvent(event);
         return;
     }
 
@@ -525,11 +517,6 @@ void HistogramWidget::mouseMoveEvent(QMouseEvent* event) {
 }
 
 void HistogramWidget::wheelEvent(QWheelEvent* event) {
-    if (!m_active) {
-        QWidget::wheelEvent(event);
-        return;
-    }
-
     double oldZoom = m_zoom;
     double scrollDelta = event->angleDelta().y();
     
@@ -554,10 +541,9 @@ void HistogramWidget::snapToBlackToMid() {
     double actualMid = m_blackpoint + m_midpoint * (m_whitepoint - m_blackpoint);
     double diff = actualMid - m_blackpoint;
     if (diff > 1e-6) {
-        m_zoom = 0.40 / diff;
+        m_zoom = 0.45 / diff;
         m_zoom = std::max(1.0, std::min(250.0, m_zoom));
-        double centerVal = (m_blackpoint + actualMid) / 2.0;
-        m_scrollOffset = centerVal - 0.5 / m_zoom;
+        m_scrollOffset = m_blackpoint - 0.05 / m_zoom;
         m_scrollOffset = std::max(0.0, std::min(1.0 - 1.0 / m_zoom, m_scrollOffset));
     } else {
         m_zoom = 1.0;
@@ -573,10 +559,6 @@ void HistogramWidget::resetZoom() {
 }
 
 void HistogramWidget::mouseDoubleClickEvent(QMouseEvent* event) {
-    if (!m_active) {
-        QWidget::mouseDoubleClickEvent(event);
-        return;
-    }
     // Toggle between snapped zoom and default [0, 1] view
     if (m_zoom > 1.05 || m_scrollOffset > 0.01) {
         resetZoom();

@@ -137,16 +137,17 @@ void BackgroundExtractionAlgorithm::execute(WorkspaceRegistry& workspace,
     if (std::holds_alternative<GrayscaleImagePtr>(inputElem)) {
         outputElem = BackgroundExtractor::extractGrayscale(
             std::get<GrayscaleImagePtr>(inputElem),
-            order, sigmaCut, sampleFrac, huberDelta, equalize);
+            order, sigmaCut, sampleFrac, huberDelta, equalize,
+            progress, 5, 95);
     } else if (std::holds_alternative<RGBImagePtr>(inputElem)) {
         outputElem = BackgroundExtractor::extractRGB(
             std::get<RGBImagePtr>(inputElem),
-            order, sigmaCut, sampleFrac, huberDelta, equalize);
+            order, sigmaCut, sampleFrac, huberDelta, equalize,
+            progress);
     } else {
         throw std::runtime_error("Background extraction is not supported on this element type");
     }
 
-    if (progress) progress(80);
     if (workspace.contains(outputName))
         workspace.unregisterElement(outputName);
     workspace.registerElement(outputName, outputElem);

@@ -21,7 +21,9 @@
 #include "BackgroundExtractionDialog.h"
 #include "StretchingDialog.h"
 #include "PreferencesWindow.h"
+#include "UpdateManagerDialog.h"
 #include "core/TempDirectory.h"
+#include "core/Preferences.h"
 #include "WorkspaceImageWindow.h"
 #include "BatchImageWidget.h"
 #include <QFileDialog>
@@ -32,6 +34,7 @@
 #include <QFile>
 #include <QTextStream>
 #include <QDir>
+#include <QDirIterator>
 #include <QStatusBar>
 #include <QTimer>
 
@@ -123,6 +126,28 @@ MainWindow::MainWindow(QWidget* parent)
     connect(m_workspaceArea, &WorkspaceArea::elementClosed, this, [this](const QString& name) {
         m_workspace.unregisterElement(name.toStdString());
     });
+
+    // Auto-load PCL modules from the PCL module folder on startup
+    QTimer::singleShot(200, this, [this]() {
+        Preferences& prefs = Preferences::instance();
+        QString moduleFolder = QString::fromStdString(prefs.getPclModuleFolder());
+        if (!moduleFolder.isEmpty() && QDir(moduleFolder).exists()) {
+            QDirIterator it(moduleFolder, 
+#if defined(__PCL_LINUX) || defined(__linux__)
+                            QStringList() << "*.so",
+#elif defined(__APPLE__)
+                            QStringList() << "*.dylib",
+#else
+                            QStringList() << "*.dll",
+#endif
+                            QDir::Files, QDirIterator::Subdirectories);
+            while (it.hasNext()) {
+                QString fullPath = it.next();
+                loadAndShowPlugin(fullPath);
+                qDebug() << "[MainWindow] Auto-loaded module:" << it.fileName();
+            }
+        }
+    });
 }
 
 void MainWindow::createMenus() {
@@ -208,6 +233,10 @@ void MainWindow::createMenus() {
     m_loadPluginAct = new QAction("&Load PCL Module", this);
     connect(m_loadPluginAct, &QAction::triggered, this, &MainWindow::onLoadPCLModule);
     m_algoMenu->addAction(m_loadPluginAct);
+
+    m_checkForUpdatesAct = new QAction("&Download from Repo...", this);
+    connect(m_checkForUpdatesAct, &QAction::triggered, this, &MainWindow::onCheckForUpdates);
+    m_algoMenu->addAction(m_checkForUpdatesAct);
 
     // Window Menu
     m_windowMenu = menuBar()->addMenu("&Window");
@@ -643,6 +672,15 @@ void AlgorithmWorker::run() {
     }
 }
 
+void PCLProcessWorker::run() {
+    try {
+        bool ok = m_bridge->executeProcessInstance(m_processId, m_hProcess, m_buffers);
+        emit finished(ok, ok ? "" : "PCL process execution returned failure status.");
+    } catch (const std::exception& e) {
+        emit finished(false, QString::fromStdString(e.what()));
+    }
+}
+
 void MainWindow::closeEvent(QCloseEvent* event) {
     if (m_algorithmRunning) {
         QMessageBox::warning(this, "Algorithm Running",
@@ -688,6 +726,11 @@ void MainWindow::closeEvent(QCloseEvent* event) {
 }
 
 void MainWindow::executeAlgorithmSlot(const std::string& name, const std::map<std::string, std::string>& config) {
+    if (m_algorithmRunning) {
+        QMessageBox::warning(this, "Algorithm Execution", "Another process or algorithm is currently running. Please wait for it to complete.");
+        return;
+    }
+
     // Disable menu bar and inner widgets of non-log MDI subwindows to prevent concurrent modifications,
     // while keeping the main window and LogWindow responsive and interactive.
     setProcessingState(true);
@@ -874,6 +917,17 @@ void MainWindow::setProcessingState(bool processing) {
                 continue;
             }
             widget->setDisabled(processing);
+            if (auto* imgWin = qobject_cast<WorkspaceImageWindow*>(widget)) {
+                imgWin->setUpdatesSuspended(processing);
+            }
+            
+            // Lock or restore subwindow resizing
+            if (processing) {
+                subWin->setFixedSize(subWin->size());
+            } else {
+                subWin->setMinimumSize(0, 0);
+                subWin->setMaximumSize(QWIDGETSIZE_MAX, QWIDGETSIZE_MAX);
+            }
         }
     }
 }
@@ -932,11 +986,19 @@ void MainWindow::addPCLProcessToMenu(const QString& processId) {
         }
     }
 
+    // If this is the first PCL process, insert the separator above Load PCL Module
+    if (!m_pclSeparatorBelow) {
+        m_pclSeparatorBelow = new QAction(this);
+        m_pclSeparatorBelow->setSeparator(true);
+        m_algoMenu->insertAction(m_loadPluginAct, m_pclSeparatorBelow);
+    }
+
     QAction* act = new QAction(processId, this);
     connect(act, &QAction::triggered, this, [this, processId]() {
         openPCLInterface(processId);
     });
-    m_algoMenu->addAction(act);
+    
+    m_algoMenu->insertAction(m_pclSeparatorBelow, act);
 }
 
 void MainWindow::openPCLInterface(const QString& processId) {
@@ -984,8 +1046,30 @@ void MainWindow::onLoadPCLModule() {
     }
 }
 
+void MainWindow::onCheckForUpdates() {
+    UpdateManagerDialog dlg(this);
+    dlg.exec();
+}
+
+static void logImageBuffersStatistics(const QString& label, const std::vector<ImageBufferPtr>& bufs) {
+    static const char* chanNames[] = {"R","G","B","A"};
+    for (int c = 0; c < (int)bufs.size(); ++c) {
+        float sum = 0, minV = 1e9f, maxV = -1e9f;
+        const float* d = bufs[c]->data();
+        int n = bufs[c]->width() * bufs[c]->height();
+        for (int p = 0; p < n; ++p) { sum += d[p]; if(d[p]<minV)minV=d[p]; if(d[p]>maxV)maxV=d[p]; }
+        qDebug().noquote() << QString("[MainWindow] %1 Ch%2 mean=%3 min=%4 max=%5")
+            .arg(label).arg(bufs.size()>1 ? chanNames[c] : "Gray")
+            .arg(sum/n, 0, 'f', 6).arg(minV, 0, 'f', 6).arg(maxV, 0, 'f', 6);
+    }
+}
+
 bool MainWindow::executePCLProcessOnActiveImage(const QString& processId, void* hProcess) {
     if (!m_pclBridge) return false;
+    if (m_algorithmRunning) {
+        QMessageBox::warning(this, "Process Execution", "Another process or algorithm is currently running. Please wait for it to complete.");
+        return false;
+    }
 
     ImageVariant activeImg = m_workspaceArea->getActiveImage();
     QString activeName = m_workspaceArea->getActiveImageName();
@@ -1010,50 +1094,63 @@ bool MainWindow::executePCLProcessOnActiveImage(const QString& processId, void* 
         return false;
     }
 
-    // Print before-statistics for diagnostics
-    auto printStats = [](const QString& label, const std::vector<ImageBufferPtr>& bufs) {
-        static const char* chanNames[] = {"R","G","B","A"};
-        for (int c = 0; c < (int)bufs.size(); ++c) {
-            float sum = 0, minV = 1e9f, maxV = -1e9f;
-            const float* d = bufs[c]->data();
-            int n = bufs[c]->width() * bufs[c]->height();
-            for (int p = 0; p < n; ++p) { sum += d[p]; if(d[p]<minV)minV=d[p]; if(d[p]>maxV)maxV=d[p]; }
-            qDebug().noquote() << QString("[MainWindow] %1 Ch%2 mean=%3 min=%4 max=%5")
-                .arg(label).arg(bufs.size()>1 ? chanNames[c] : "Gray")
-                .arg(sum/n, 0, 'f', 6).arg(minV, 0, 'f', 6).arg(maxV, 0, 'f', 6);
-        }
-    };
-    printStats("Before", buffers);
+    logImageBuffersStatistics("Before", buffers);
 
     qDebug() << "[MainWindow] Executing PCL process" << processId << "on active image" << activeName;
     
-    showStatusMessage(QString("Running %1...").arg(processId));
-    m_progressBar->setRange(0, 0);
-    m_progressBar->show();
-    qApp->processEvents();
-
     setProcessingState(true);
-    bool ok = m_pclBridge->executeProcessInstance(processId, hProcess, buffers);
-    setProcessingState(false);
+    m_algorithmRunning = true;
 
-    m_progressBar->hide();
-    showStatusMessage("Ready");
+    // Reset and show progress bar with standard range
+    m_progressBar->setRange(0, 100);
+    m_progressBar->setValue(0);
+    m_progressBar->show();
+    showStatusMessage(QString("Running %1...").arg(processId));
 
-    if (ok) {
-        printStats("After", buffers);
-        
-        // Notify the UI that the image has been modified in-place, preserving stretch settings
-        if (auto* win = m_workspaceArea->getImageWindow(activeName)) {
-            win->notifyImageUpdated();
+    // Create background thread and worker
+    QThread* thread = new QThread(this);
+    PCLProcessWorker* worker = new PCLProcessWorker(processId, hProcess, buffers, m_pclBridge.get());
+    worker->moveToThread(thread);
+
+    // Connect progress updates
+    connect(m_pclBridge.get(), &PCLBridge::progressUpdated, m_progressBar, &QProgressBar::setValue);
+
+    // Wire up thread start and finish
+    connect(thread, &QThread::started, worker, &PCLProcessWorker::run);
+    connect(worker, &PCLProcessWorker::finished, this, [this, thread, worker, processId, activeName, buffers](bool success, const QString& errorMsg) {
+        // Stop thread event loop and wait for completion
+        thread->quit();
+        thread->wait();
+
+        // Cleanup thread and worker
+        worker->deleteLater();
+        thread->deleteLater();
+
+        // Reset UI state
+        m_progressBar->hide();
+        showStatusMessage("Ready");
+        m_algorithmRunning = false;
+
+        // Re-enable menu bar and inner widgets of all MDI subwindows
+        setProcessingState(false);
+
+        if (success) {
+            logImageBuffersStatistics("After", buffers);
+            
+            // Notify the UI that the image has been modified in-place, preserving stretch settings
+            if (auto* win = m_workspaceArea->getImageWindow(activeName)) {
+                win->notifyImageUpdated();
+            }
+            
+            showStatusMessage(QString("%1 completed successfully.").arg(processId), 5000);
+        } else {
+            showStatusMessage(QString("%1 failed.").arg(processId), 5000);
+            QMessageBox::critical(this, "Process Execution Error", QString("%1 execution failed. Check console for details. %2").arg(processId, errorMsg));
         }
-        
-        showStatusMessage(QString("%1 completed successfully.").arg(processId), 5000);
-        QMessageBox::information(this, "Process Execution", QString("%1 completed successfully.").arg(processId));
-    } else {
-        QMessageBox::critical(this, "Process Execution Error", QString("%1 execution failed. Check console for details.").arg(processId));
-    }
+    });
 
-    return ok;
+    thread->start();
+    return true;
 }
 
 

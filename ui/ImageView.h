@@ -34,6 +34,9 @@ public:
     ImageVariant currentImage() const { return m_currentImage; }
     int autoStretchLevel() const { return m_autoStretchLevel; }
     int localHistLevel() const { return m_localHistLevel; }
+
+    void setUpdatesSuspended(bool suspended);
+    bool isUpdatesSuspended() const { return m_updatesSuspended; }
     
     // Channel mode
     ChannelMode channelMode() const { return m_channelMode; }
@@ -110,6 +113,8 @@ private:
     QPoint m_lastMousePos;
     bool m_isFrameSelected;
     bool m_fitOnNextResize = false;
+    bool m_updatesSuspended = false;
+    QImage m_cachedViewportImage;
 
     // Star/Constellation Overlay state
     bool m_showStars = false;

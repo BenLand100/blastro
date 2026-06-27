@@ -16,6 +16,7 @@ add_library(blastro_ui
     StretchingDialog.cpp
     LogWindow.cpp
     PreferencesWindow.cpp
+    UpdateManagerDialog.cpp
     StatsPlotWidget.cpp
     BatchFilterDialog.cpp
 )
