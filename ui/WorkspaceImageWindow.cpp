@@ -344,8 +344,11 @@ void WorkspaceImageWindow::onExpandHistClicked() {
         // Move summon button and histogram to expanded bar
         if (headerLayout) {
             headerLayout->removeWidget(m_expandHistBtn);
+            headerLayout->setStretchFactor(m_nameBtn, 1);
+            headerLayout->setStretchFactor(m_headerHistContainer, 0);
         }
         m_headerHistContainer->layout()->removeWidget(m_histogramWidget);
+        m_headerHistContainer->hide();
         
         static_cast<QHBoxLayout*>(m_expandedHistBar->layout())->addWidget(m_expandHistBtn);
         static_cast<QHBoxLayout*>(m_expandedHistBar->layout())->addWidget(m_histogramWidget, 1);
@@ -353,6 +356,10 @@ void WorkspaceImageWindow::onExpandHistClicked() {
         
         m_histogramWidget->setFixedHeight(40);
         m_expandHistBtn->setText("▲");
+        
+        if (m_nameBtn) {
+            m_nameBtn->setMaximumWidth(width() - 250);
+        }
     } else {
         // Move back to header
         m_expandedHistBar->layout()->removeWidget(m_expandHistBtn);
@@ -366,26 +373,38 @@ void WorkspaceImageWindow::onExpandHistClicked() {
             } else {
                 headerLayout->addWidget(m_expandHistBtn);
             }
+            headerLayout->setStretchFactor(m_nameBtn, 0);
+            headerLayout->setStretchFactor(m_headerHistContainer, 1);
         }
         
         static_cast<QHBoxLayout*>(m_headerHistContainer->layout())->addWidget(m_histogramWidget);
+        m_headerHistContainer->show();
         
         m_histogramWidget->setFixedHeight(24);
         m_expandHistBtn->setText("▼");
+        
+        if (m_nameBtn) {
+            m_nameBtn->setMaximumWidth(width() / 3.0);
+        }
     }
+    updateNameLabelText();
 }
 
 void WorkspaceImageWindow::resizeEvent(QResizeEvent* event) {
     QWidget::resizeEvent(event);
     if (m_nameBtn) {
-        m_nameBtn->setMaximumWidth(width() / 3.0);
+        if (m_histExpanded) {
+            m_nameBtn->setMaximumWidth(width() - 250);
+        } else {
+            m_nameBtn->setMaximumWidth(width() / 3.0);
+        }
         updateNameLabelText();
     }
 }
 
 void WorkspaceImageWindow::updateNameLabelText() {
     if (!m_nameBtn) return;
-    int maxAllowedWidth = width() / 3.0;
+    int maxAllowedWidth = m_histExpanded ? (width() - 250) : (width() / 3.0);
     maxAllowedWidth = std::max(20, maxAllowedWidth - 10);
     
     QFontMetrics fm(m_nameBtn->font());
