@@ -545,7 +545,34 @@ void ImageView::drawBackground(QPainter* painter, const QRectF& rect) {
             if (m_displayMode == LocalHist) {
                 if (m_claheGray.empty()) {
                     m_claheGray.resize(imgW * imgH);
-                    runFastCLAHE(img->buffer()->data(), m_claheGray.data(), imgW, imgH);
+                    std::vector<float> stretched(imgW * imgH);
+                    float B = 0.0f, W = 1.0f, M = 0.5f;
+                    int totalPixels = imgW * imgH;
+                    int sampleStep = std::max(1, totalPixels / 20000);
+                    std::vector<float> samples;
+                    samples.reserve(totalPixels / sampleStep);
+                    const float* rawData = img->buffer()->data();
+                    for (int i = 0; i < totalPixels; i += sampleStep) {
+                        samples.push_back(rawData[i]);
+                    }
+                    if (!samples.empty()) {
+                        std::sort(samples.begin(), samples.end());
+                        int bpIdx = static_cast<int>(samples.size() * 0.0001);
+                        B = samples[bpIdx];
+                        W = 1.0f;
+                        if (B >= W) { B = 0.0f; W = 1.0f; }
+                        int medIdx = static_cast<int>(samples.size() * 0.5);
+                        float originalMedian = samples[medIdx];
+                        float med = (originalMedian - B) / (W - B);
+                        med = std::max(0.001f, std::min(0.999f, med));
+                        float T = 0.25f;
+                        M = (med * (T - 1.0f)) / (2.0f * med * T - T - med);
+                        M = std::max(0.001f, std::min(0.999f, M));
+                    }
+                    for (int i = 0; i < totalPixels; ++i) {
+                        stretched[i] = applyMTF(rawData[i], B, W, M);
+                    }
+                    runFastCLAHE(stretched.data(), m_claheGray.data(), imgW, imgH);
                 }
                 bufGray = m_claheGray.data();
             } else {
@@ -567,9 +594,45 @@ void ImageView::drawBackground(QPainter* painter, const QRectF& rect) {
                     m_claheR.resize(imgW * imgH);
                     m_claheG.resize(imgW * imgH);
                     m_claheB.resize(imgW * imgH);
-                    runFastCLAHE(origR, m_claheR.data(), imgW, imgH);
-                    runFastCLAHE(origG, m_claheG.data(), imgW, imgH);
-                    runFastCLAHE(origB, m_claheB.data(), imgW, imgH);
+                    
+                    std::vector<float> stretched(imgW * imgH);
+                    int totalPixels = imgW * imgH;
+                    int sampleStep = std::max(1, totalPixels / 20000);
+                    std::vector<float> samples;
+                    samples.reserve(totalPixels / sampleStep);
+                    for (int i = 0; i < totalPixels; i += sampleStep) {
+                        samples.push_back((origR[i] + origG[i] + origB[i]) / 3.0f);
+                    }
+                    float B = 0.0f, W = 1.0f, M = 0.5f;
+                    if (!samples.empty()) {
+                        std::sort(samples.begin(), samples.end());
+                        int bpIdx = static_cast<int>(samples.size() * 0.0001);
+                        B = samples[bpIdx];
+                        W = 1.0f;
+                        if (B >= W) { B = 0.0f; W = 1.0f; }
+                        int medIdx = static_cast<int>(samples.size() * 0.5);
+                        float originalMedian = samples[medIdx];
+                        float med = (originalMedian - B) / (W - B);
+                        med = std::max(0.001f, std::min(0.999f, med));
+                        float T = 0.25f;
+                        M = (med * (T - 1.0f)) / (2.0f * med * T - T - med);
+                        M = std::max(0.001f, std::min(0.999f, M));
+                    }
+                    
+                    for (int i = 0; i < totalPixels; ++i) {
+                        stretched[i] = applyMTF(origR[i], B, W, M);
+                    }
+                    runFastCLAHE(stretched.data(), m_claheR.data(), imgW, imgH);
+                    
+                    for (int i = 0; i < totalPixels; ++i) {
+                        stretched[i] = applyMTF(origG[i], B, W, M);
+                    }
+                    runFastCLAHE(stretched.data(), m_claheG.data(), imgW, imgH);
+                    
+                    for (int i = 0; i < totalPixels; ++i) {
+                        stretched[i] = applyMTF(origB[i], B, W, M);
+                    }
+                    runFastCLAHE(stretched.data(), m_claheB.data(), imgW, imgH);
                 }
                 bufR = m_claheR.data();
                 bufG = m_claheG.data();
