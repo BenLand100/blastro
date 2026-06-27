@@ -38,7 +38,6 @@ BatchFilterDialog::BatchFilterDialog(ImageBatchPtr batch, int currentFrameIdx, Q
     m_metricCombo->addItem("Star Count", "starCount");
     m_metricCombo->addItem("FWHM", "fwhm");
     m_metricCombo->addItem("SNR", "snr");
-    m_metricCombo->addItem("Quality Score", "qualityScore");
     m_metricCombo->addItem("dx Shift", "dx");
     m_metricCombo->addItem("dy Shift", "dy");
     m_metricCombo->addItem("Rotation (degrees)", "theta");
@@ -218,7 +217,6 @@ void BatchFilterDialog::applyFilter() {
         if (metric == "starCount") v = meta.starCount;
         else if (metric == "fwhm") v = meta.fwhm;
         else if (metric == "snr") v = meta.snr;
-        else if (metric == "qualityScore") v = meta.qualityScore;
         else if (metric == "dx") v = meta.dx;
         else if (metric == "dy") v = meta.dy;
         else if (metric == "theta") v = meta.theta * 180.0 / M_PI;

@@ -109,7 +109,6 @@ void RegisterAlgorithm::execute(WorkspaceRegistry& workspace,
     refMeta.starCount = refStars.size();
     refMeta.fwhm = refAvgFwhm;
     refMeta.snr = refAvgSnr;
-    refMeta.qualityScore = refStars.size(); // baseline
     refMeta.stars = refStars;
     batch->setFrameMetadata(refFrameIdx, refMeta);
 
@@ -189,7 +188,6 @@ void RegisterAlgorithm::execute(WorkspaceRegistry& workspace,
                 meta.starCount = alignRes.matchedStars;
                 meta.fwhm = avgFwhm;
                 meta.snr = avgSnr;
-                meta.qualityScore = alignRes.matchedStars / (1.0 + alignRes.rmsError);
                 meta.stars = targetStars;
                 
                 batch->setFrameMetadata(i, meta);

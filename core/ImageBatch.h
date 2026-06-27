@@ -20,7 +20,6 @@ struct FrameMetadata {
     int starCount = 0;
     double fwhm = 0.0;
     double snr = 0.0;
-    double qualityScore = 0.0;
     std::vector<Star> stars; // Stored registered stars (in-memory only)
 };
 

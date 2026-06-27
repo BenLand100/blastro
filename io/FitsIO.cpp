@@ -159,7 +159,6 @@ ImageBatchPtr FitsIO::readBatch(const std::vector<std::string>& filepaths) {
                             image.readKey("R" + idxStr + "ST", meta.starCount);
                             image.readKey("R" + idxStr + "FW", meta.fwhm);
                             image.readKey("R" + idxStr + "SN", meta.snr);
-                            image.readKey("R" + idxStr + "QL", meta.qualityScore);
                             batch->setFrameMetadata(i, meta);
                             
                             int sel = 1;
@@ -211,7 +210,6 @@ ImageBatchPtr FitsIO::readBatch(const std::vector<std::string>& filepaths) {
                 try { image.readKey("REG_ST", meta.starCount); } catch (...) {}
                 try { image.readKey("REG_FW", meta.fwhm); } catch (...) {}
                 try { image.readKey("REG_SN", meta.snr); } catch (...) {}
-                try { image.readKey("REG_QL", meta.qualityScore); } catch (...) {}
                 batch->setFrameMetadata(i, meta);
                 
                 int sel = 1;
@@ -333,7 +331,6 @@ bool FitsIO::writeBatch(const std::string& filepath, ImageBatchPtr batch) {
             phdu.addKey("R" + idxStr + "ST", meta.starCount, "Star count");
             phdu.addKey("R" + idxStr + "FW", meta.fwhm, "Average FWHM");
             phdu.addKey("R" + idxStr + "SN", meta.snr, "SNR value");
-            phdu.addKey("R" + idxStr + "QL", meta.qualityScore, "Quality score");
             phdu.addKey("R" + idxStr + "SL", static_cast<int>(selected), "Is frame selected");
         }
 

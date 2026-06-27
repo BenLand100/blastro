@@ -81,7 +81,6 @@ double StatsPlotWidget::getValForFrame(int index) const {
     if (m_metric == "starCount") return meta.starCount;
     if (m_metric == "fwhm") return meta.fwhm;
     if (m_metric == "snr") return meta.snr;
-    if (m_metric == "qualityScore") return meta.qualityScore;
     if (m_metric == "dx") return meta.dx;
     if (m_metric == "dy") return meta.dy;
     if (m_metric == "theta") return meta.theta * 180.0 / M_PI; // Degrees

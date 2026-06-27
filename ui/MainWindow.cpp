@@ -1405,14 +1405,13 @@ void MainWindow::testRegisterOnCube(const QString& cubePath, int refFrameIdx, co
             bool selected = batch->isFrameSelected(i);
             if (meta.registered) {
                 registeredCount++;
-                qDebug().noquote() << QString("[Frame %1] SUCCESS: Name=%2, dx=%3, dy=%4, theta=%5, stars=%6, quality=%7, selected=%8")
+                qDebug().noquote() << QString("[Frame %1] SUCCESS: Name=%2, dx=%3, dy=%4, theta=%5, stars=%6, selected=%7")
                     .arg(i)
                     .arg(QString::fromStdString(batch->frameName(i)))
                     .arg(meta.dx)
                     .arg(meta.dy)
                     .arg(meta.theta)
                     .arg(meta.starCount)
-                    .arg(meta.qualityScore)
                     .arg(selected ? "YES" : "NO");
             } else {
                 qDebug().noquote() << QString("[Frame %1] FAILED : Name=%2, selected=%3")

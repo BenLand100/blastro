@@ -57,7 +57,6 @@ private:
     QLabel* m_dyLabel;
     QLabel* m_thetaLabel;
     QLabel* m_starsLabel;
-    QLabel* m_qualityLabel;
     QPushButton* m_filterBtn;
 };
 

@@ -25,7 +25,6 @@ BatchImageWidget::BatchImageWidget(ImageBatchPtr batch, QWidget* parent)
       m_dyLabel(new QLabel("dy: -", this)),
       m_thetaLabel(new QLabel("θ: -", this)),
       m_starsLabel(new QLabel("Stars: -", this)),
-      m_qualityLabel(new QLabel("Quality: -", this)),
       m_filterBtn(new QPushButton("Filters", this)) {
       
     // Enable keyboard focus so arrow keys and spacebar function correctly
@@ -121,13 +120,11 @@ BatchImageWidget::BatchImageWidget(ImageBatchPtr batch, QWidget* parent)
     m_dyLabel->setStyleSheet(labelStyle);
     m_thetaLabel->setStyleSheet(labelStyle);
     m_starsLabel->setStyleSheet(labelStyle);
-    m_qualityLabel->setStyleSheet(labelStyle);
 
     bottomLayout->addWidget(m_dxLabel);
     bottomLayout->addWidget(m_dyLabel);
     bottomLayout->addWidget(m_thetaLabel);
     bottomLayout->addWidget(m_starsLabel);
-    bottomLayout->addWidget(m_qualityLabel);
 
     // Add stretch spacer
     bottomLayout->addStretch(1);
@@ -306,7 +303,6 @@ void BatchImageWidget::updateBottomBarReadout() {
             m_dyLabel->setText(QString("dy: %1").arg(meta.dy, 0, 'f', 2));
             m_thetaLabel->setText(QString("θ: %1°").arg(meta.theta * 180.0 / M_PI, 0, 'f', 3));
             m_starsLabel->setText(QString("Stars: %1").arg(meta.starCount));
-            m_qualityLabel->setText(QString("Quality: %1").arg(meta.qualityScore, 0, 'f', 1));
             
             bool starsAvailable = !meta.stars.empty();
             m_showStarsCheck->setEnabled(starsAvailable);
@@ -324,7 +320,6 @@ void BatchImageWidget::updateBottomBarReadout() {
             m_dyLabel->setText("dy: -");
             m_thetaLabel->setText("θ: -");
             m_starsLabel->setText("Stars: -");
-            m_qualityLabel->setText("Quality: -");
             
             m_showStarsCheck->blockSignals(true);
             m_showConstCheck->blockSignals(true);
