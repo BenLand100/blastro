@@ -55,4 +55,5 @@ install_manifest.txt
 # Thirdparty dependencies
 /thirdparty/PCL/
 /plugins/
+/lib/
 
