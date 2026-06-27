@@ -56,9 +56,7 @@ private:
     QButtonGroup* m_modeGroup;
     QPushButton* m_normalBtn;
     QPushButton* m_stretchBtn;
-    QPushButton* m_autoLBtn;
-    QPushButton* m_autoMBtn;
-    QPushButton* m_autoHBtn;
+    QPushButton* m_autoBtn;
     QPushButton* m_localHistBtn;
     QPushButton* m_expandHistBtn;
     QPushButton* m_nameBtn;

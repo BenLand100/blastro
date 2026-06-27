@@ -16,9 +16,7 @@ WorkspaceImageWindow::WorkspaceImageWindow(const QString& name, const WorkspaceE
       m_modeGroup(new QButtonGroup(this)),
       m_normalBtn(new QPushButton("Normal", this)),
       m_stretchBtn(new QPushButton("Manual", this)),
-      m_autoLBtn(new QPushButton("L", this)),
-      m_autoMBtn(new QPushButton("M", this)),
-      m_autoHBtn(new QPushButton("H", this)),
+      m_autoBtn(new QPushButton("Auto", this)),
       m_localHistBtn(new QPushButton("Hist", this)),
       m_expandHistBtn(new QPushButton("📊 ▼", this)),
       m_headerHistContainer(new QWidget(this)),
@@ -78,49 +76,34 @@ WorkspaceImageWindow::WorkspaceImageWindow(const QString& name, const WorkspaceE
         "QPushButton:hover { background-color: #444; color: #fff; }"
         "QPushButton:checked { background-color: #007acc; color: #fff; border-color: #007acc; }"
         "QPushButton#normal { border-top-left-radius: 4px; border-bottom-left-radius: 4px; border-right: none; }"
-        "QPushButton#autoL { border-radius: 0px; border-right: none; padding: 4px 0px; }"
-        "QPushButton#autoM { border-radius: 0px; border-right: none; padding: 4px 0px; }"
-        "QPushButton#autoH { border-radius: 0px; border-right: none; padding: 4px 0px; }"
+        "QPushButton#auto { border-radius: 0px; border-right: none; }"
         "QPushButton#stretch { border-radius: 0px; border-right: none; }"
         "QPushButton#localHist { border-top-right-radius: 4px; border-bottom-right-radius: 4px; }";
 
     m_normalBtn->setObjectName("normal");
     m_normalBtn->setCheckable(true);
     m_normalBtn->setChecked(true);
-    m_autoLBtn->setObjectName("autoL");
-    m_autoLBtn->setCheckable(true);
-    m_autoLBtn->setFixedWidth(24);
-    m_autoMBtn->setObjectName("autoM");
-    m_autoMBtn->setCheckable(true);
-    m_autoMBtn->setFixedWidth(24);
-    m_autoHBtn->setObjectName("autoH");
-    m_autoHBtn->setCheckable(true);
-    m_autoHBtn->setFixedWidth(24);
+    m_autoBtn->setObjectName("auto");
+    m_autoBtn->setCheckable(true);
     m_stretchBtn->setObjectName("stretch");
     m_stretchBtn->setCheckable(true);
     m_localHistBtn->setObjectName("localHist");
     m_localHistBtn->setCheckable(true);
 
     m_normalBtn->setStyleSheet(segmentedStyle);
-    m_autoLBtn->setStyleSheet(segmentedStyle);
-    m_autoMBtn->setStyleSheet(segmentedStyle);
-    m_autoHBtn->setStyleSheet(segmentedStyle);
+    m_autoBtn->setStyleSheet(segmentedStyle);
     m_stretchBtn->setStyleSheet(segmentedStyle);
     m_localHistBtn->setStyleSheet(segmentedStyle);
 
-    // Order: [Normal] [L] [M] [H] [Manual] [Hist]
+    // Order: [Normal] [Auto] [Manual] [Hist]
     m_modeGroup->addButton(m_normalBtn, 0);
-    m_modeGroup->addButton(m_autoLBtn, 2); // Level 0
-    m_modeGroup->addButton(m_autoMBtn, 4); // Level 1
-    m_modeGroup->addButton(m_autoHBtn, 5); // Level 2
+    m_modeGroup->addButton(m_autoBtn, 2);
     m_modeGroup->addButton(m_stretchBtn, 1);
     m_modeGroup->addButton(m_localHistBtn, 3);
     m_modeGroup->setExclusive(true);
 
     headerLayout->addWidget(m_normalBtn);
-    headerLayout->addWidget(m_autoLBtn);
-    headerLayout->addWidget(m_autoMBtn);
-    headerLayout->addWidget(m_autoHBtn);
+    headerLayout->addWidget(m_autoBtn);
     headerLayout->addWidget(m_stretchBtn);
     headerLayout->addWidget(m_localHistBtn);
 
@@ -265,29 +248,30 @@ void WorkspaceImageWindow::onModeButtonClicked(int id) {
     if (id == 0) { // Normal
         m_imageView->setDisplayMode(ImageView::Normal);
         m_histogramWidget->setActive(false);
+        m_autoBtn->setText("Auto");
         updateHistogram();
     } else if (id == 1) { // Stretch (Manual)
         m_imageView->setDisplayMode(ImageView::Stretch);
         m_histogramWidget->setActive(true);
+        m_autoBtn->setText("Auto");
         updateHistogram(); // Refresh histogram display
-    } else if (id == 2) { // Auto L (level 0)
-        m_imageView->setAutoStretchLevel(0);
+    } else if (id == 2) { // Auto
+        m_imageView->setDisplayMode(ImageView::Autostretch);
         m_histogramWidget->setActive(true);
-        updateHistogram();
-        m_histogramWidget->snapToBlackToMid();
-    } else if (id == 4) { // Auto M (level 1)
-        m_imageView->setAutoStretchLevel(1);
-        m_histogramWidget->setActive(true);
-        updateHistogram();
-        m_histogramWidget->snapToBlackToMid();
-    } else if (id == 5) { // Auto H (level 2)
-        m_imageView->setAutoStretchLevel(2);
-        m_histogramWidget->setActive(true);
+        int lvl = m_imageView->autoStretchLevel();
+        if (lvl == 0) {
+            m_autoBtn->setText("Auto L");
+        } else if (lvl == 1) {
+            m_autoBtn->setText("Auto M");
+        } else {
+            m_autoBtn->setText("Auto H");
+        }
         updateHistogram();
         m_histogramWidget->snapToBlackToMid();
     } else if (id == 3) { // Hist (Local Hist)
         m_imageView->setDisplayMode(ImageView::LocalHist);
         m_histogramWidget->setActive(false);
+        m_autoBtn->setText("Auto");
         updateHistogram();
     }
 }
@@ -297,7 +281,7 @@ void WorkspaceImageWindow::onStretchParamsChangedInWidget(double b, double w, do
     m_imageView->setStretchParams(b, w, m);
     m_imageView->blockSignals(false);
 
-    if (m_modeGroup->checkedId() == 0 || m_modeGroup->checkedId() == 2 || m_modeGroup->checkedId() == 3 || m_modeGroup->checkedId() == 4 || m_modeGroup->checkedId() == 5) {
+    if (m_modeGroup->checkedId() == 0 || m_modeGroup->checkedId() == 2 || m_modeGroup->checkedId() == 3) {
         m_modeGroup->button(1)->setChecked(true); // Switch checked button to Stretch
     }
 }
@@ -308,24 +292,28 @@ void WorkspaceImageWindow::onStretchParamsChangedInView(double b, double w, doub
     m_histogramWidget->blockSignals(false);
 
     if (m_imageView->displayMode() == ImageView::Autostretch) {
+        m_autoBtn->setChecked(true);
         m_histogramWidget->setActive(true);
         int lvl = m_imageView->autoStretchLevel();
         if (lvl == 0) {
-            m_autoLBtn->setChecked(true);
+            m_autoBtn->setText("Auto L");
         } else if (lvl == 1) {
-            m_autoMBtn->setChecked(true);
+            m_autoBtn->setText("Auto M");
         } else {
-            m_autoHBtn->setChecked(true);
+            m_autoBtn->setText("Auto H");
         }
     } else if (m_imageView->displayMode() == ImageView::Stretch) {
         m_stretchBtn->setChecked(true);
         m_histogramWidget->setActive(true);
+        m_autoBtn->setText("Auto");
     } else if (m_imageView->displayMode() == ImageView::LocalHist) {
         m_localHistBtn->setChecked(true);
         m_histogramWidget->setActive(false);
+        m_autoBtn->setText("Auto");
     } else {
         m_normalBtn->setChecked(true);
         m_histogramWidget->setActive(false);
+        m_autoBtn->setText("Auto");
     }
 }
 
@@ -346,20 +334,35 @@ void WorkspaceImageWindow::updateHistogram() {
 
 void WorkspaceImageWindow::onExpandHistClicked() {
     m_histExpanded = !m_histExpanded;
+    QHBoxLayout* headerLayout = qobject_cast<QHBoxLayout*>(m_headerBar->layout());
     if (m_histExpanded) {
-        // Move to expanded bar
+        // Move summon button and histogram to expanded bar
+        if (headerLayout) {
+            headerLayout->removeWidget(m_expandHistBtn);
+        }
         m_headerHistContainer->layout()->removeWidget(m_histogramWidget);
         m_headerHistContainer->hide();
         
-        static_cast<QHBoxLayout*>(m_expandedHistBar->layout())->addWidget(m_histogramWidget);
+        static_cast<QHBoxLayout*>(m_expandedHistBar->layout())->addWidget(m_expandHistBtn);
+        static_cast<QHBoxLayout*>(m_expandedHistBar->layout())->addWidget(m_histogramWidget, 1);
         m_expandedHistBar->show();
         
         m_histogramWidget->setFixedHeight(40);
         m_expandHistBtn->setText("📊 ▲");
     } else {
         // Move back to header
+        m_expandedHistBar->layout()->removeWidget(m_expandHistBtn);
         m_expandedHistBar->layout()->removeWidget(m_histogramWidget);
         m_expandedHistBar->hide();
+        
+        if (headerLayout) {
+            int idx = headerLayout->indexOf(m_headerHistContainer);
+            if (idx >= 0) {
+                headerLayout->insertWidget(idx, m_expandHistBtn);
+            } else {
+                headerLayout->addWidget(m_expandHistBtn);
+            }
+        }
         
         static_cast<QHBoxLayout*>(m_headerHistContainer->layout())->addWidget(m_histogramWidget);
         m_headerHistContainer->show();
