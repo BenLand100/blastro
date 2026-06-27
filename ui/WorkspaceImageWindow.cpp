@@ -346,7 +346,6 @@ void WorkspaceImageWindow::onExpandHistClicked() {
             headerLayout->removeWidget(m_expandHistBtn);
         }
         m_headerHistContainer->layout()->removeWidget(m_histogramWidget);
-        m_headerHistContainer->hide();
         
         static_cast<QHBoxLayout*>(m_expandedHistBar->layout())->addWidget(m_expandHistBtn);
         static_cast<QHBoxLayout*>(m_expandedHistBar->layout())->addWidget(m_histogramWidget, 1);
@@ -370,7 +369,6 @@ void WorkspaceImageWindow::onExpandHistClicked() {
         }
         
         static_cast<QHBoxLayout*>(m_headerHistContainer->layout())->addWidget(m_histogramWidget);
-        m_headerHistContainer->show();
         
         m_histogramWidget->setFixedHeight(24);
         m_expandHistBtn->setText("▼");
