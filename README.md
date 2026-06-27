@@ -1,8 +1,6 @@
 # BLastro 🌌
 
-<p align="center">
-  <img src="ui/icons/bl_spacey_icon.png" width="200" alt="BLastro Logo">
-</p>
+![BLastro Logo](ui/icons/bl_spacey_icon.png)
 
 **BLastro** is an astronomical image processing toolkit. It provides the necessary features for processing both OSC (One Shot Color) and Mono images from raw data to a final result. 
 
