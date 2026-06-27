@@ -111,7 +111,7 @@ MainWindow::MainWindow(QWidget* parent)
         " |____/|_____\\__,_||___/\\__|_|  \\___/ \n";
     logWindow->appendRawText(welcomeArt, "#00bcd4");
     logWindow->appendRawText(" Welcome to BLastro - Astronomical Image Processing Platform\n"
-                             " Version 1.0.0 (Native C++ Port)\n"
+                             " Version 0.1.0\n"
                              "----------------------------------------------------------------\n", "#a0a0a0");
 
     // Position log window near the bottom right by default
