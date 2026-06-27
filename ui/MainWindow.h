@@ -52,6 +52,7 @@ public:
     QMdiSubWindow* createPCLPluginSubWindow(QWidget* widget, const QString& processId, const QString& title);
     bool executePCLProcessOnActiveImage(const QString& processId, void* hProcess);
     void testProcessOnImage(const QString& pluginPath, const QString& imagePath);
+    void testRegisterOnCube(const QString& cubePath, int refFrameIdx = 0, const QString& detectionMethod = "centroid");
     bool loadImageDirectly(const QString& filepath, const QString& refName);
 
 protected:

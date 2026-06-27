@@ -205,6 +205,12 @@ void WorkspaceImageWindow::updateName(const QString& newName) {
 }
 
 void WorkspaceImageWindow::notifyImageUpdated() {
+    if (std::holds_alternative<ImageBatchPtr>(m_element)) {
+        auto* bw = qobject_cast<BatchImageWidget*>(m_viewportWidget);
+        if (bw) {
+            bw->notifyBatchUpdated();
+        }
+    }
     if (m_imageView) {
         if (m_imageView->displayMode() == ImageView::Autostretch) {
             m_imageView->runAutostretch();

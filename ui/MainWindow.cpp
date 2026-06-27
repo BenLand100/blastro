@@ -11,6 +11,7 @@
 #include "algorithms/AlignAlgorithm.h"
 #include "algorithms/BackgroundExtractionAlgorithm.h"
 #include "algorithms/GhsAlgorithmWrapper.h"
+#include "algorithms/StarFinder.h"
 #include "PixelMathDialog.h"
 #include "StackingDialog.h"
 #include "CalibrationDialog.h"
@@ -741,14 +742,26 @@ void MainWindow::executeAlgorithmSlot(const std::string& name, const std::map<st
 
         if (success) {
             try {
-                std::string outName = config.at("output_name");
-                WorkspaceElement outElem = m_workspace.getElement(outName);
+                if (config.count("input_name")) {
+                    QString qInputName = QString::fromStdString(config.at("input_name"));
+                    WorkspaceImageWindow* win = m_workspaceArea->getImageWindow(qInputName);
+                    if (win) {
+                        win->notifyImageUpdated();
+                    }
+                }
 
-                QString qOutName = QString::fromStdString(outName);
-                m_workspaceArea->removeElementView(qOutName);
-                m_workspaceArea->addElementView(qOutName, outElem);
+                if (config.count("output_name")) {
+                    std::string outName = config.at("output_name");
+                    WorkspaceElement outElem = m_workspace.getElement(outName);
 
-                showStatusMessage(QString("Successfully completed %1: %2").arg(QString::fromStdString(name)).arg(qOutName), 5000);
+                    QString qOutName = QString::fromStdString(outName);
+                    m_workspaceArea->removeElementView(qOutName);
+                    m_workspaceArea->addElementView(qOutName, outElem);
+
+                    showStatusMessage(QString("Successfully completed %1: %2").arg(QString::fromStdString(name)).arg(qOutName), 5000);
+                } else {
+                    showStatusMessage(QString("Successfully completed %1").arg(QString::fromStdString(name)), 5000);
+                }
                 
                 // Refresh dialogs
                 for (auto* dlg : findChildren<AlgorithmDialog*>()) {
@@ -1316,6 +1329,209 @@ void MainWindow::onOpenPreferences() {
     QMdiSubWindow* sub = m_workspaceArea->addSubWindow(dlg);
     sub->setAttribute(Qt::WA_DeleteOnClose);
     sub->show();
+}
+
+void MainWindow::testRegisterOnCube(const QString& cubePath, int refFrameIdx, const QString& detectionMethod) {
+    qDebug() << "[MainWindow] Entering testRegisterOnCube. Loading cube:" << cubePath;
+
+    QFileInfo info(cubePath);
+    if (!info.exists()) {
+        qCritical() << "[MainWindow] FITS cube file does not exist:" << cubePath;
+        QCoreApplication::exit(1);
+        return;
+    }
+
+    ImageBatchPtr batch;
+    try {
+        FitsIO reader;
+        batch = reader.readBatch({cubePath.toStdString()});
+    } catch (const std::exception& e) {
+        qCritical() << "[MainWindow] Failed to load FITS cube as batch:" << e.what();
+        QCoreApplication::exit(1);
+        return;
+    }
+
+    qDebug() << "[MainWindow] FITS cube loaded successfully as a batch of" << batch->count() << "frames.";
+    
+    // Analyze baseline star quality in reference frame
+    ImageVariant refFrame = batch->getImage(refFrameIdx);
+    if (std::holds_alternative<GrayscaleImagePtr>(refFrame)) {
+        auto gray = std::get<GrayscaleImagePtr>(refFrame);
+        std::vector<Star> refStars = StarFinder::findStars(gray, 100, 5.0, false, 10, 1.5, 0.90);
+        qDebug() << "[MainWindow] Reference Frame baseline stars found:" << refStars.size();
+        double sumFwhm = 0.0;
+        double sumEcc = 0.0;
+        int count = 0;
+        for (const auto& s : refStars) {
+            sumFwhm += s.fwhm;
+            sumEcc += s.eccentricity;
+            count++;
+        }
+        if (count > 0) {
+            qDebug() << "[MainWindow] Reference Frame baseline Avg FWHM:" << (sumFwhm / count) << "pixels";
+            qDebug() << "[MainWindow] Reference Frame baseline Avg Eccentricity:" << (sumEcc / count);
+        }
+    }
+
+    // Register in the workspace
+    addImageToWorkspace("LightBatch", batch);
+
+    // Build configuration map for RegisterAlgorithm
+    std::map<std::string, std::string> config = {
+        {"input_name", "LightBatch"},
+        {"ref_frame_index", std::to_string(refFrameIdx)},
+        {"detection_method", detectionMethod.toStdString()},
+        {"snr_min", "5.0"},          // standard SNR threshold
+        {"min_fwhm", "1.5"},
+        {"max_stars", "300"},        // plenty of stars for real images
+        {"max_eccentricity", "0.90"},
+        {"match_tolerance", "3.0"}
+    };
+
+    qDebug() << "[MainWindow] Running RegisterAlgorithm on LightBatch...";
+    try {
+        RegisterAlgorithm reg;
+        reg.execute(m_workspace, config, [](int pct) {
+            qDebug() << "[MainWindow] Registration progress:" << pct << "%";
+        });
+        
+        qDebug() << "[MainWindow] Registration completed!";
+        
+        // Print a detailed summary of each frame's registration metadata
+        int total = batch->count();
+        int registeredCount = 0;
+        for (int i = 0; i < total; ++i) {
+            FrameMetadata meta = batch->frameMetadata(i);
+            bool selected = batch->isFrameSelected(i);
+            if (meta.registered) {
+                registeredCount++;
+                qDebug().noquote() << QString("[Frame %1] SUCCESS: Name=%2, dx=%3, dy=%4, theta=%5, stars=%6, quality=%7, selected=%8")
+                    .arg(i)
+                    .arg(QString::fromStdString(batch->frameName(i)))
+                    .arg(meta.dx)
+                    .arg(meta.dy)
+                    .arg(meta.theta)
+                    .arg(meta.starCount)
+                    .arg(meta.qualityScore)
+                    .arg(selected ? "YES" : "NO");
+            } else {
+                qDebug().noquote() << QString("[Frame %1] FAILED : Name=%2, selected=%3")
+                    .arg(i)
+                    .arg(QString::fromStdString(batch->frameName(i)))
+                    .arg(selected ? "YES" : "NO");
+            }
+        }
+        qDebug() << "[MainWindow] Summary:" << registeredCount << "/" << total << "frames successfully registered.";
+        
+        if (registeredCount == 0) {
+            qCritical() << "[MainWindow] No frames registered successfully! Aborting alignment.";
+            QCoreApplication::exit(1);
+            return;
+        }
+
+        // Align the registered frames
+        qDebug() << "[MainWindow] Running AlignAlgorithm...";
+        AlignAlgorithm align;
+        align.execute(m_workspace, {
+            {"input_name", "LightBatch"},
+            {"output_name", "AlignedBatch"},
+            {"drizzle_scale", "1.0"},
+            {"threads", "-1"},
+            {"evict_cache", "true"}
+        });
+
+        qDebug() << "[MainWindow] Running StackingAlgorithm...";
+        StackingAlgorithm stack;
+        stack.execute(m_workspace, {
+            {"input_name", "AlignedBatch"},
+            {"output_name", "StackedMaster"},
+            {"method", "average"},
+            {"rejection", "none"},
+            {"sigma_low", "3.0"},
+            {"sigma_high", "3.0"},
+            {"quantile_low", "0.2"},
+            {"quantile_high", "0.2"},
+            {"stacking_mode", "ram"},
+            {"threads", "-1"}
+        });
+
+        // Save the stacked result to ./stacked_real_output.fits
+        WorkspaceElement stackedElem = m_workspace.getElement("StackedMaster");
+        ImageVariant stackedImg;
+        if (std::holds_alternative<GrayscaleImagePtr>(stackedElem)) {
+            stackedImg = std::get<GrayscaleImagePtr>(stackedElem);
+        } else if (std::holds_alternative<RGBImagePtr>(stackedElem)) {
+            stackedImg = std::get<RGBImagePtr>(stackedElem);
+        }
+        
+        QString outPath = "./stacked_real_output.fits";
+        qDebug() << "[MainWindow] Saving stacked master to:" << outPath;
+        FitsIO writer;
+        if (writer.writeImage(outPath.toStdString(), stackedImg)) {
+            qDebug() << "[MainWindow] Saved stacked master successfully to" << outPath;
+
+            // Save the registered batch to test metadata saving and loading
+            QString batchOutPath = "./registered_real_batch.fits";
+            qDebug() << "[MainWindow] Saving registered batch to:" << batchOutPath;
+            if (writer.writeBatch(batchOutPath.toStdString(), batch)) {
+                qDebug() << "[MainWindow] Saved registered batch successfully to" << batchOutPath;
+                
+                // Read it back to verify persistence!
+                try {
+                    FitsIO reader;
+                    ImageBatchPtr readBackBatch = reader.readBatch({batchOutPath.toStdString()});
+                    qDebug() << "[MainWindow] Verified: Read back registered batch with" << readBackBatch->count() << "frames.";
+                    int regCount = 0;
+                    for (int i = 0; i < readBackBatch->count(); ++i) {
+                        if (readBackBatch->frameMetadata(i).registered) regCount++;
+                    }
+                    qDebug() << "[MainWindow] Verified:" << regCount << "out of" << readBackBatch->count() << "frames have active registration metadata in file.";
+                } catch (const std::exception& e) {
+                    qCritical() << "[MainWindow] Failed to read back and verify registered batch:" << e.what();
+                }
+            } else {
+                qWarning() << "[MainWindow] Failed to save registered batch.";
+            }
+            
+            // Analyze the stars in the stacked master to evaluate quality
+            qDebug() << "[MainWindow] Running StarFinder on stacked master...";
+            if (std::holds_alternative<GrayscaleImagePtr>(stackedImg)) {
+                auto gray = std::get<GrayscaleImagePtr>(stackedImg);
+                std::vector<Star> stars = StarFinder::findStars(gray, 100, 5.0, false, 10, 1.5, 0.90);
+                qDebug() << "[MainWindow] Found" << stars.size() << "stars in stacked master.";
+                
+                double sumFwhm = 0.0;
+                double sumEcc = 0.0;
+                int count = 0;
+                for (size_t i = 0; i < stars.size(); ++i) {
+                    if (i < 20) {
+                        qDebug().noquote() << QString("  Star %1: x=%2, y=%3, peak=%4, fwhm=%5, eccentricity=%6")
+                            .arg(i+1)
+                            .arg(stars[i].x)
+                            .arg(stars[i].y)
+                            .arg(stars[i].peak)
+                            .arg(stars[i].fwhm)
+                            .arg(stars[i].eccentricity);
+                    }
+                    sumFwhm += stars[i].fwhm;
+                    sumEcc += stars[i].eccentricity;
+                    count++;
+                }
+                if (count > 0) {
+                    qDebug() << "[MainWindow] Average FWHM:" << (sumFwhm / count) << "pixels";
+                    qDebug() << "[MainWindow] Average Eccentricity:" << (sumEcc / count);
+                }
+            }
+            
+            QCoreApplication::exit(0);
+        } else {
+            qCritical() << "[MainWindow] Failed to save stacked master.";
+            QCoreApplication::exit(1);
+        }
+    } catch (const std::exception& e) {
+        qCritical() << "[MainWindow] Exception during pipeline execution:" << e.what();
+        QCoreApplication::exit(1);
+    }
 }
 
 } // namespace blastro

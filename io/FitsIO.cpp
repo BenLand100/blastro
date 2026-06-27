@@ -124,11 +124,10 @@ ImageBatchPtr FitsIO::readBatch(const std::vector<std::string>& filepaths) {
                         CCfits::PHDU& imageInner = pInfileInner->pHDU();
                         
                         std::valarray<float> plane;
-                        long planeSize = width * height;
-                        // Read only the specific plane (index starts at 1 for pixel coordinates in FITS)
-                        long firstPixel = index * planeSize + 1;
-                        long lastPixel = (index + 1) * planeSize;
-                        imageInner.read(plane, firstPixel, lastPixel);
+                        std::vector<long> fp = { 1, 1, index + 1 };
+                        std::vector<long> lp = { width, height, index + 1 };
+                        std::vector<long> stride = { 1, 1, 1 };
+                        imageInner.read(plane, fp, lp, stride);
 
                         auto grayImg = std::make_shared<GrayscaleImage>(width, height);
                         auto buffer = grayImg->buffer();
@@ -143,7 +142,37 @@ ImageBatchPtr FitsIO::readBatch(const std::vector<std::string>& filepaths) {
                         throw std::runtime_error(std::string("CCfits Error in batch loader: ") + ex.message());
                     }
                 };
-                return std::make_shared<ImageBatch>(depth, loader, names, filepaths);
+                auto batch = std::make_shared<ImageBatch>(depth, loader, names, filepaths);
+                
+                // Read registration metadata from primary HDU header if present
+                for (int i = 0; i < depth; ++i) {
+                    std::string idxStr = std::to_string(i + 1);
+                    try {
+                        int reg = 0;
+                        image.readKey("R" + idxStr + "REG", reg);
+                        if (reg) {
+                            FrameMetadata meta;
+                            meta.registered = true;
+                            image.readKey("R" + idxStr + "DX", meta.dx);
+                            image.readKey("R" + idxStr + "DY", meta.dy);
+                            image.readKey("R" + idxStr + "TH", meta.theta);
+                            image.readKey("R" + idxStr + "ST", meta.starCount);
+                            image.readKey("R" + idxStr + "FW", meta.fwhm);
+                            image.readKey("R" + idxStr + "SN", meta.snr);
+                            image.readKey("R" + idxStr + "QL", meta.qualityScore);
+                            batch->setFrameMetadata(i, meta);
+                            
+                            int sel = 1;
+                            try {
+                                image.readKey("R" + idxStr + "SL", sel);
+                            } catch (...) {}
+                            batch->setFrameSelected(i, sel != 0);
+                        }
+                    } catch (...) {
+                        // Keyword not found, skip
+                    }
+                }
+                return batch;
             }
         } catch (...) {
             // Fall back to treating it as a single 2D FITS file batch
@@ -160,7 +189,38 @@ ImageBatchPtr FitsIO::readBatch(const std::vector<std::string>& filepaths) {
         FitsIO reader;
         return reader.readImage(filepaths[index]);
     };
-    return std::make_shared<ImageBatch>(filepaths.size(), loader, names, filepaths);
+    auto batch = std::make_shared<ImageBatch>(filepaths.size(), loader, names, filepaths);
+    
+    // Read registration metadata from each individual file header if present
+    for (size_t i = 0; i < filepaths.size(); ++i) {
+        try {
+            std::unique_ptr<CCfits::FITS> pInfile(new CCfits::FITS(filepaths[i], CCfits::Read, true));
+            CCfits::PHDU& image = pInfile->pHDU();
+            int reg = 0;
+            try {
+                image.readKey("REG_REG", reg);
+            } catch (...) {
+                try { image.readKey("REG", reg); } catch (...) {}
+            }
+            if (reg) {
+                FrameMetadata meta;
+                meta.registered = true;
+                try { image.readKey("REG_DX", meta.dx); } catch (...) {}
+                try { image.readKey("REG_DY", meta.dy); } catch (...) {}
+                try { image.readKey("REG_TH", meta.theta); } catch (...) {}
+                try { image.readKey("REG_ST", meta.starCount); } catch (...) {}
+                try { image.readKey("REG_FW", meta.fwhm); } catch (...) {}
+                try { image.readKey("REG_SN", meta.snr); } catch (...) {}
+                try { image.readKey("REG_QL", meta.qualityScore); } catch (...) {}
+                batch->setFrameMetadata(i, meta);
+                
+                int sel = 1;
+                try { image.readKey("REG_SEL", sel); } catch (...) {}
+                batch->setFrameSelected(i, sel != 0);
+            }
+        } catch (...) {}
+    }
+    return batch;
 }
 
 bool FitsIO::writeImage(const std::string& filepath, const ImageVariant& image) {
@@ -259,6 +319,23 @@ bool FitsIO::writeBatch(const std::string& filepath, ImageBatchPtr batch) {
 
         std::unique_ptr<CCfits::FITS> pOutfile(new CCfits::FITS(writePath, FLOAT_IMG, numAxes, naxes.data()));
         CCfits::PHDU& phdu = pOutfile->pHDU();
+
+        // Write registration metadata to the primary HDU header
+        for (int i = 0; i < count; ++i) {
+            FrameMetadata meta = batch->frameMetadata(i);
+            bool selected = batch->isFrameSelected(i);
+            std::string idxStr = std::to_string(i + 1);
+            
+            phdu.addKey("R" + idxStr + "REG", static_cast<int>(meta.registered), "Is registered");
+            phdu.addKey("R" + idxStr + "DX", meta.dx, "dx offset");
+            phdu.addKey("R" + idxStr + "DY", meta.dy, "dy offset");
+            phdu.addKey("R" + idxStr + "TH", meta.theta, "theta offset");
+            phdu.addKey("R" + idxStr + "ST", meta.starCount, "Star count");
+            phdu.addKey("R" + idxStr + "FW", meta.fwhm, "Average FWHM");
+            phdu.addKey("R" + idxStr + "SN", meta.snr, "SNR value");
+            phdu.addKey("R" + idxStr + "QL", meta.qualityScore, "Quality score");
+            phdu.addKey("R" + idxStr + "SL", static_cast<int>(selected), "Is frame selected");
+        }
 
         long planeSize = width * height;
         std::valarray<float> arrayData(planeSize * count);

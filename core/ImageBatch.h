@@ -1,6 +1,7 @@
 #pragma once
 #include "GrayscaleImage.h"
 #include "RGBImage.h"
+#include "algorithms/StarFinder.h"
 #include <vector>
 #include <variant>
 #include <functional>
@@ -20,6 +21,7 @@ struct FrameMetadata {
     double fwhm = 0.0;
     double snr = 0.0;
     double qualityScore = 0.0;
+    std::vector<Star> stars; // Stored registered stars (in-memory only)
 };
 
 class ImageBatch {

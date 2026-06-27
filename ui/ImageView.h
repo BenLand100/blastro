@@ -2,6 +2,7 @@
 #include "core/GrayscaleImage.h"
 #include "core/RGBImage.h"
 #include "core/ImageBatch.h"
+#include "algorithms/StarFinder.h"
 #include <QGraphicsView>
 #include <QGraphicsScene>
 #include <QGraphicsPixmapItem>
@@ -43,6 +44,11 @@ public:
 
     void setFrameSelectedStatus(bool selected);
 
+    // Star/Constellation Visualization
+    void setShowStars(bool show);
+    void setShowConstellations(bool show);
+    void setStars(const std::vector<Star>& stars);
+
 signals:
     void stretchParamsChanged(double b, double w, double m);
     void mousePosChanged(int x, int y, bool isRGB, const std::vector<float>& values);
@@ -53,6 +59,7 @@ protected:
     void mouseReleaseEvent(QMouseEvent* event) override;
     void mouseMoveEvent(QMouseEvent* event) override;
     void drawBackground(QPainter* painter, const QRectF& rect) override;
+    void drawForeground(QPainter* painter, const QRectF& rect) override;
     void keyPressEvent(QKeyEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
 
@@ -77,6 +84,11 @@ private:
     QPoint m_lastMousePos;
     bool m_isFrameSelected;
     bool m_fitOnNextResize = false;
+
+    // Star/Constellation Overlay state
+    bool m_showStars = false;
+    bool m_showConstellations = false;
+    std::vector<Star> m_stars;
 };
 
 } // namespace blastro

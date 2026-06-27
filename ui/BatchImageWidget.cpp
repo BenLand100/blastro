@@ -1,4 +1,6 @@
 #include "BatchImageWidget.h"
+#include "BatchFilterDialog.h"
+#include "algorithms/StarFinder.h"
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QColor>
@@ -14,8 +16,17 @@ BatchImageWidget::BatchImageWidget(ImageBatchPtr batch, QWidget* parent)
       m_spinBox(new QSpinBox(this)),
       m_prevBtn(new QPushButton("<", this)),
       m_nextBtn(new QPushButton(">", this)),
-      m_checkBox(new QCheckBox(this)), // Checkbox with no text caption
-      m_infoLabel(new QLabel(this)) {
+      m_checkBox(new QCheckBox(this)),
+      m_infoLabel(new QLabel(this)),
+      m_bottomBar(new QWidget(this)),
+      m_showStarsCheck(new QCheckBox("Stars", this)),
+      m_showConstCheck(new QCheckBox("Constellations", this)),
+      m_dxLabel(new QLabel("dx: -", this)),
+      m_dyLabel(new QLabel("dy: -", this)),
+      m_thetaLabel(new QLabel("θ: -", this)),
+      m_starsLabel(new QLabel("Stars: -", this)),
+      m_qualityLabel(new QLabel("Quality: -", this)),
+      m_filterBtn(new QPushButton("Apply Filters", this)) {
       
     // Enable keyboard focus so arrow keys and spacebar function correctly
     setFocusPolicy(Qt::StrongFocus);
@@ -27,7 +38,7 @@ BatchImageWidget::BatchImageWidget(ImageBatchPtr batch, QWidget* parent)
     // Add image view
     mainLayout->addWidget(m_imageView, 1);
     
-    // Setup controls layout
+    // Setup controls layout (Navigation bar)
     QWidget* controlsWidget = new QWidget(this);
     controlsWidget->setStyleSheet("background-color: #2a2a2a; color: #ffffff; border-top: 1px solid #333;");
     QHBoxLayout* controlsLayout = new QHBoxLayout(controlsWidget);
@@ -49,7 +60,6 @@ BatchImageWidget::BatchImageWidget(ImageBatchPtr batch, QWidget* parent)
     m_spinBox->setValue(1);
     m_spinBox->setButtonSymbols(QAbstractSpinBox::NoButtons);
     m_spinBox->setAlignment(Qt::AlignCenter);
-    // Explicitly set height to 20px to match buttons
     m_spinBox->setStyleSheet(
         "QSpinBox { background-color: #3a3a3a; color: #fff; border: 1px solid #555; padding: 0px 2px; width: 35px; "
         "font-weight: bold; font-family: monospace; font-size: 11px; "
@@ -83,8 +93,53 @@ BatchImageWidget::BatchImageWidget(ImageBatchPtr batch, QWidget* parent)
     
     controlsLayout->addWidget(m_checkBox);
     
+    mainLayout->addWidget(m_bottomBar);
     mainLayout->addWidget(controlsWidget);
-    
+
+    // Setup Bottom Registration Bar
+    m_bottomBar->setStyleSheet("background-color: #202020; color: #aaa; border-top: 1px solid #333; font-family: monospace; font-size: 11px;");
+    QHBoxLayout* bottomLayout = new QHBoxLayout(m_bottomBar);
+    bottomLayout->setContentsMargins(10, 4, 10, 4);
+    bottomLayout->setSpacing(12);
+
+    // Decoration toggles
+    m_showStarsCheck->setStyleSheet("QCheckBox { color: #aaa; font-weight: bold; }");
+    m_showConstCheck->setStyleSheet("QCheckBox { color: #aaa; font-weight: bold; }");
+    bottomLayout->addWidget(m_showStarsCheck);
+    bottomLayout->addWidget(m_showConstCheck);
+
+    // Separator line
+    QFrame* sep1 = new QFrame(this);
+    sep1->setFrameShape(QFrame::VLine);
+    sep1->setFrameShadow(QFrame::Sunken);
+    sep1->setStyleSheet("color: #444;");
+    bottomLayout->addWidget(sep1);
+
+    // Parameter readouts
+    QString labelStyle = "font-weight: bold; min-width: 60px;";
+    m_dxLabel->setStyleSheet(labelStyle);
+    m_dyLabel->setStyleSheet(labelStyle);
+    m_thetaLabel->setStyleSheet(labelStyle);
+    m_starsLabel->setStyleSheet(labelStyle);
+    m_qualityLabel->setStyleSheet(labelStyle);
+
+    bottomLayout->addWidget(m_dxLabel);
+    bottomLayout->addWidget(m_dyLabel);
+    bottomLayout->addWidget(m_thetaLabel);
+    bottomLayout->addWidget(m_starsLabel);
+    bottomLayout->addWidget(m_qualityLabel);
+
+    // Add stretch spacer
+    bottomLayout->addStretch(1);
+
+    // Filter button
+    m_filterBtn->setStyleSheet(
+        "QPushButton { background-color: #007acc; color: #fff; border: 1px solid #005a9e; padding: 2px 10px; font-weight: bold; border-radius: 3px; font-size: 11px; height: 20px; }"
+        "QPushButton:hover { background-color: #008be5; }"
+        "QPushButton:pressed { background-color: #005a9e; }"
+    );
+    bottomLayout->addWidget(m_filterBtn);
+
     // Connect controls
     connect(m_comboBox, qOverload<int>(&QComboBox::currentIndexChanged), this, &BatchImageWidget::onIndexChanged);
     
@@ -108,6 +163,26 @@ BatchImageWidget::BatchImageWidget(ImageBatchPtr batch, QWidget* parent)
         m_batch->setFrameSelected(m_currentIndex, checked);
         m_imageView->setFrameSelectedStatus(checked);
         updateComboBoxItems();
+    });
+
+    // Connect decoration checkboxes
+    connect(m_showStarsCheck, &QCheckBox::toggled, this, &BatchImageWidget::updateStarOverlay);
+    connect(m_showConstCheck, &QCheckBox::toggled, this, &BatchImageWidget::updateStarOverlay);
+
+    // Filter button logic
+    connect(m_filterBtn, &QPushButton::clicked, this, [this]() {
+        BatchFilterDialog* dlg = new BatchFilterDialog(m_batch, m_currentIndex, this);
+        connect(dlg, &BatchFilterDialog::selectionChanged, this, [this]() {
+            // Update checkbox state for the currently displayed frame
+            m_checkBox->blockSignals(true);
+            m_checkBox->setChecked(m_batch->isFrameSelected(m_currentIndex));
+            m_checkBox->blockSignals(false);
+
+            m_imageView->setFrameSelectedStatus(m_batch->isFrameSelected(m_currentIndex));
+            updateComboBoxItems();
+        });
+        dlg->exec();
+        dlg->deleteLater();
     });
     
     // Initialize with the first image
@@ -143,6 +218,8 @@ void BatchImageWidget::onIndexChanged(int index) {
     try {
         ImageVariant img = m_batch->getImage(m_currentIndex);
         m_imageView->setImage(img, true);
+        updateBottomBarReadout();
+        updateStarOverlay();
         emit frameChanged(index);
     } catch (const std::exception& e) {
         m_infoLabel->setText(QString("Error loading frame %1: %2").arg(index + 1).arg(e.what()));
@@ -208,6 +285,80 @@ void BatchImageWidget::updateComboBoxItems() {
     }
     m_comboBox->setCurrentIndex(m_currentIndex);
     m_comboBox->blockSignals(false);
+}
+
+void BatchImageWidget::updateBottomBarReadout() {
+    if (!m_bottomBar) return;
+
+    bool hasReg = false;
+    for (int i = 0; i < m_batch->count(); ++i) {
+        if (m_batch->frameMetadata(i).registered) {
+            hasReg = true;
+            break;
+        }
+    }
+    m_bottomBar->setVisible(hasReg);
+
+    if (hasReg && m_currentIndex >= 0 && m_currentIndex < m_batch->count()) {
+        FrameMetadata meta = m_batch->frameMetadata(m_currentIndex);
+        if (meta.registered) {
+            m_dxLabel->setText(QString("dx: %1").arg(meta.dx, 0, 'f', 2));
+            m_dyLabel->setText(QString("dy: %1").arg(meta.dy, 0, 'f', 2));
+            m_thetaLabel->setText(QString("θ: %1°").arg(meta.theta * 180.0 / M_PI, 0, 'f', 3));
+            m_starsLabel->setText(QString("Stars: %1").arg(meta.starCount));
+            m_qualityLabel->setText(QString("Quality: %1").arg(meta.qualityScore, 0, 'f', 1));
+            
+            bool starsAvailable = !meta.stars.empty();
+            m_showStarsCheck->setEnabled(starsAvailable);
+            m_showConstCheck->setEnabled(starsAvailable);
+            if (!starsAvailable) {
+                m_showStarsCheck->blockSignals(true);
+                m_showConstCheck->blockSignals(true);
+                m_showStarsCheck->setChecked(false);
+                m_showConstCheck->setChecked(false);
+                m_showStarsCheck->blockSignals(false);
+                m_showConstCheck->blockSignals(false);
+            }
+        } else {
+            m_dxLabel->setText("dx: -");
+            m_dyLabel->setText("dy: -");
+            m_thetaLabel->setText("θ: -");
+            m_starsLabel->setText("Stars: -");
+            m_qualityLabel->setText("Quality: -");
+            
+            m_showStarsCheck->blockSignals(true);
+            m_showConstCheck->blockSignals(true);
+            m_showStarsCheck->setChecked(false);
+            m_showConstCheck->setChecked(false);
+            m_showStarsCheck->blockSignals(false);
+            m_showConstCheck->blockSignals(false);
+            m_showStarsCheck->setEnabled(false);
+            m_showConstCheck->setEnabled(false);
+        }
+    }
+}
+
+void BatchImageWidget::updateStarOverlay() {
+    if (!m_imageView) return;
+
+    bool showStars = m_showStarsCheck->isChecked();
+    bool showConst = m_showConstCheck->isChecked();
+
+    m_imageView->setShowStars(showStars);
+    m_imageView->setShowConstellations(showConst);
+
+    if ((showStars || showConst) && m_batch && m_currentIndex >= 0 && m_currentIndex < m_batch->count()) {
+        FrameMetadata meta = m_batch->frameMetadata(m_currentIndex);
+        m_imageView->setStars(meta.stars);
+    } else {
+        m_imageView->setStars({});
+    }
+}
+
+void BatchImageWidget::notifyBatchUpdated() {
+    updateComboBoxItems();
+    updateBottomBarReadout();
+    onIndexChanged(m_currentIndex);
 }
 
 } // namespace blastro

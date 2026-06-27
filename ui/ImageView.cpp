@@ -522,6 +522,77 @@ void ImageView::setFrameSelectedStatus(bool selected) {
     }
 }
 
+void ImageView::setShowStars(bool show) {
+    if (m_showStars != show) {
+        m_showStars = show;
+        viewport()->update();
+    }
+}
+
+void ImageView::setShowConstellations(bool show) {
+    if (m_showConstellations != show) {
+        m_showConstellations = show;
+        viewport()->update();
+    }
+}
+
+void ImageView::setStars(const std::vector<Star>& stars) {
+    m_stars = stars;
+    viewport()->update();
+}
+
+void ImageView::drawForeground(QPainter* painter, const QRectF& rect) {
+    Q_UNUSED(rect);
+    
+    // Draw star circles
+    if (m_showStars && !m_stars.empty()) {
+        painter->save();
+        QPen pen(Qt::green);
+        pen.setWidth(1);
+        pen.setCosmetic(true); // Keep thickness independent of zoom!
+        painter->setPen(pen);
+        painter->setBrush(Qt::NoBrush);
+
+        for (const auto& star : m_stars) {
+            painter->drawEllipse(QPointF(star.x, star.y), 6.0, 6.0);
+            painter->drawLine(QPointF(star.x - 2, star.y), QPointF(star.x + 2, star.y));
+            painter->drawLine(QPointF(star.x, star.y - 2), QPointF(star.x, star.y + 2));
+        }
+        painter->restore();
+    }
+
+    // Draw constellation lines
+    if (m_showConstellations && !m_stars.empty()) {
+        painter->save();
+        QPen pen(QColor(0, 191, 255, 120)); // Semi-transparent DeepSkyBlue
+        pen.setWidth(1);
+        pen.setCosmetic(true);
+        painter->setPen(pen);
+
+        int numStars = m_stars.size();
+        int kNeighbors = 3;
+        for (int i = 0; i < numStars; ++i) {
+            std::vector<std::pair<double, int>> dists;
+            for (int j = 0; j < numStars; ++j) {
+                if (i == j) continue;
+                double dx = m_stars[i].x - m_stars[j].x;
+                double dy = m_stars[i].y - m_stars[j].y;
+                dists.push_back({dx*dx + dy*dy, j});
+            }
+            std::sort(dists.begin(), dists.end());
+            int limit = std::min(kNeighbors, (int)dists.size());
+            for (int k = 0; k < limit; ++k) {
+                int neighborIdx = dists[k].second;
+                if (i < neighborIdx) {
+                    painter->drawLine(QPointF(m_stars[i].x, m_stars[i].y), 
+                                     QPointF(m_stars[neighborIdx].x, m_stars[neighborIdx].y));
+                }
+            }
+        }
+        painter->restore();
+    }
+}
+
 void ImageView::keyPressEvent(QKeyEvent* event) {
     if (event->key() == Qt::Key_Left || event->key() == Qt::Key_Right || event->key() == Qt::Key_Space) {
         // Ignore these key events so they bubble up to the parent widget (BatchImageWidget)

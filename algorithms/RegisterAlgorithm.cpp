@@ -89,6 +89,17 @@ void RegisterAlgorithm::execute(WorkspaceRegistry& workspace,
     Logger::success("Register", QString("Reference frame index %1 registered successfully with %2 stars.")
                     .arg(refFrameIdx).arg(refStars.size()));
 
+    // Compute average FWHM and SNR from reference stars
+    double refSumFwhm = 0.0;
+    double refSumSnr = 0.0;
+    for (const auto& star : refStars) {
+        refSumFwhm += star.fwhm;
+        double bg = std::max(1e-6, star.background);
+        refSumSnr += star.peak / bg;
+    }
+    double refAvgFwhm = refStars.empty() ? 0.0 : (refSumFwhm / refStars.size());
+    double refAvgSnr = refStars.empty() ? 0.0 : (refSumSnr / refStars.size());
+
     // Save reference frame metadata
     FrameMetadata refMeta;
     refMeta.registered = true;
@@ -96,7 +107,10 @@ void RegisterAlgorithm::execute(WorkspaceRegistry& workspace,
     refMeta.dy = 0.0;
     refMeta.theta = 0.0;
     refMeta.starCount = refStars.size();
+    refMeta.fwhm = refAvgFwhm;
+    refMeta.snr = refAvgSnr;
     refMeta.qualityScore = refStars.size(); // baseline
+    refMeta.stars = refStars;
     batch->setFrameMetadata(refFrameIdx, refMeta);
 
     // 2. Loop through all other selected frames and register them against the reference frame
@@ -156,13 +170,27 @@ void RegisterAlgorithm::execute(WorkspaceRegistry& workspace,
             auto alignRes = ConstellationMatcher::match(refStars, targetStars, 7, matchTolerance);
             
             if (alignRes.success) {
+                // Compute average FWHM and SNR from target stars
+                double sumFwhm = 0.0;
+                double sumSnr = 0.0;
+                for (const auto& star : targetStars) {
+                    sumFwhm += star.fwhm;
+                    double bg = std::max(1e-6, star.background);
+                    sumSnr += star.peak / bg;
+                }
+                double avgFwhm = targetStars.empty() ? 0.0 : (sumFwhm / targetStars.size());
+                double avgSnr = targetStars.empty() ? 0.0 : (sumSnr / targetStars.size());
+
                 FrameMetadata meta;
                 meta.registered = true;
                 meta.dx = alignRes.dx;
                 meta.dy = alignRes.dy;
                 meta.theta = alignRes.theta;
                 meta.starCount = alignRes.matchedStars;
+                meta.fwhm = avgFwhm;
+                meta.snr = avgSnr;
                 meta.qualityScore = alignRes.matchedStars / (1.0 + alignRes.rmsError);
+                meta.stars = targetStars;
                 
                 batch->setFrameMetadata(i, meta);
                 

@@ -108,7 +108,7 @@ AlignmentResult ConstellationMatcher::match(const std::vector<Star>& refStars,
         std::vector<bool> inliers(pairs.size(), true);
         int numInliers = pairs.size();
 
-        for (int iter = 0; iter < 10; ++iter) {
+        for (int iter = 0; iter < 15; ++iter) {
             if (numInliers < 3) break;
 
             double mrx = 0, mry = 0, mtx = 0, mty = 0;
@@ -132,15 +132,19 @@ AlignmentResult ConstellationMatcher::match(const std::vector<Star>& refStars,
             dx = mrx - (mtx*c - mty*s);
             dy = mry - (mty*c + mtx*s);
 
+            double iterThresh = matchTolerance;
+            if (iter >= 3) iterThresh = std::min(iterThresh, 1.5);
+            if (iter >= 6) iterThresh = std::min(iterThresh, 0.8);
+            
             int nextN = 0;
             std::vector<bool> next(pairs.size(), false);
             for (size_t i = 0; i < pairs.size(); ++i) {
                 double tx = pairs[i].target.x, ty = pairs[i].target.y;
                 double res = std::hypot(pairs[i].ref.x - (tx*c - ty*s + dx),
                                        pairs[i].ref.y - (ty*c + tx*s + dy));
-                if (res < 2.0) { next[i] = true; nextN++; }
+                if (res < iterThresh) { next[i] = true; nextN++; }
             }
-            if (next == inliers) break;
+            if (next == inliers && iter >= 6) break;
             inliers = next; numInliers = nextN;
         }
 

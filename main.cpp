@@ -59,6 +59,30 @@ int main(int argc, char* argv[]) {
         return app.exec();
     }
 
+    if (argc > 2 && (std::strcmp(argv[1], "--test-register") == 0)) {
+        QApplication app(argc, argv);
+        QString cubePath = argv[2];
+        int refIdx = (argc > 3) ? std::atoi(argv[3]) : 0;
+        QString method = (argc > 4) ? argv[4] : "centroid";
+        qDebug() << "Test registration execution: cube =" << cubePath << "refIdx =" << refIdx << "method =" << method;
+        
+        auto* w = new blastro::MainWindow();
+        w->show();
+        
+        // Failsafe timeout after 180 seconds (3 minutes) to ensure process exits even if hung
+        QTimer::singleShot(180000, []() {
+            qCritical() << "[main] Failsafe timeout triggered! Force exiting...";
+            std::_Exit(1);
+        });
+
+        QTimer::singleShot(100, [w, cubePath, refIdx, method]() {
+            w->testRegisterOnCube(cubePath, refIdx, method);
+        });
+        
+        int ret = app.exec();
+        std::_Exit(ret);
+    }
+
     if (argc > 2 && (std::strcmp(argv[1], "--test-load") == 0 || std::strcmp(argv[1], "--load-plugin") == 0)) {
         QApplication app(argc, argv);
         QString path = argv[2];
