@@ -131,8 +131,10 @@ static void runFastCLAHE(const float* src, float* dst, int width, int height, in
     int tileSizeY = height / gridY;
     if (tileSizeX <= 0 || tileSizeY <= 0) return;
 
-    // 1. Compute histograms for each tile
+    // 1. Compute histograms for each tile in parallel
     std::vector<std::vector<int>> histograms(gridX * gridY, std::vector<int>(numBins, 0));
+    
+    #pragma omp parallel for collapse(2)
     for (int ty = 0; ty < gridY; ++ty) {
         for (int tx = 0; tx < gridX; ++tx) {
             int tileIdx = ty * gridX + tx;
@@ -179,25 +181,46 @@ static void runFastCLAHE(const float* src, float* dst, int width, int height, in
         }
     }
 
-    // 2. Interpolate for each pixel
+    // Precompute tx0, tx1, tx_weight for all x
+    std::vector<int> tx0_arr(width);
+    std::vector<int> tx1_arr(width);
+    std::vector<float> tx_weight_arr(width);
+    for (int x = 0; x < width; ++x) {
+        float fx = static_cast<float>(x) / tileSizeX - 0.5f;
+        int tx = std::max(0, std::min(gridX - 1, static_cast<int>(std::floor(fx))));
+        tx0_arr[x] = tx;
+        tx1_arr[x] = std::min(gridX - 1, tx + 1);
+        tx_weight_arr[x] = fx - tx;
+    }
+
+    // Precompute tile sizes
+    std::vector<int> tilePixelsList(gridX * gridY);
+    for (int ty = 0; ty < gridY; ++ty) {
+        for (int tx = 0; tx < gridX; ++tx) {
+            int xStart = tx * tileSizeX;
+            int yStart = ty * tileSizeY;
+            int xEnd = (tx == gridX - 1) ? width : xStart + tileSizeX;
+            int yEnd = (ty == gridY - 1) ? height : yStart + tileSizeY;
+            tilePixelsList[ty * gridX + tx] = (xEnd - xStart) * (yEnd - yStart);
+        }
+    }
+
+    // 2. Interpolate for each pixel in parallel (row-wise)
+    #pragma omp parallel for schedule(static)
     for (int y = 0; y < height; ++y) {
         float fy = static_cast<float>(y) / tileSizeY - 0.5f;
         int ty = std::max(0, std::min(gridY - 1, static_cast<int>(std::floor(fy))));
         float ty_weight = fy - ty;
+        int ty0 = ty;
+        int ty1 = std::min(gridY - 1, ty + 1);
 
         for (int x = 0; x < width; ++x) {
-            float fx = static_cast<float>(x) / tileSizeX - 0.5f;
-            int tx = std::max(0, std::min(gridX - 1, static_cast<int>(std::floor(fx))));
-            float tx_weight = fx - tx;
+            float tx_weight = tx_weight_arr[x];
+            int tx0 = tx0_arr[x];
+            int tx1 = tx1_arr[x];
 
             float val = src[y * width + x];
             int bin = std::max(0, std::min(numBins - 1, static_cast<int>(val * (numBins - 1))));
-
-            // Get neighboring tiles
-            int tx0 = tx;
-            int tx1 = std::min(gridX - 1, tx + 1);
-            int ty0 = ty;
-            int ty1 = std::min(gridY - 1, ty + 1);
 
             float cdf00 = histograms[ty0 * gridX + tx0][bin];
             float cdf10 = histograms[ty0 * gridX + tx1][bin];
@@ -208,8 +231,7 @@ static void runFastCLAHE(const float* src, float* dst, int width, int height, in
             float cdf = (1.0f - ty_weight) * ((1.0f - tx_weight) * cdf00 + tx_weight * cdf10) +
                         ty_weight * ((1.0f - tx_weight) * cdf01 + tx_weight * cdf11);
 
-            // Scale to [0, 1] based on total pixels of neighboring tiles
-            int numPix00 = (tx0 == gridX - 1 ? width - tx0 * tileSizeX : tileSizeX) * (ty0 == gridY - 1 ? height - ty0 * tileSizeY : tileSizeY);
+            int numPix00 = tilePixelsList[ty0 * gridX + tx0];
             float outVal = cdf / numPix00;
             dst[y * width + x] = std::max(0.0f, std::min(1.0f, outVal));
         }
@@ -588,6 +610,7 @@ void ImageView::drawBackground(QPainter* painter, const QRectF& rect) {
                         M = (med * (T - 1.0f)) / (2.0f * med * T - T - med);
                         M = std::max(0.001f, std::min(0.999f, M));
                     }
+                    #pragma omp parallel for
                     for (int i = 0; i < totalPixels; ++i) {
                         stretched[i] = applyMTF(rawData[i], B, W, M);
                     }
@@ -645,16 +668,19 @@ void ImageView::drawBackground(QPainter* painter, const QRectF& rect) {
                     if (m_localHistLevel == 1) clip = 3.0f;
                     else if (m_localHistLevel == 2) clip = 5.0f;
                     
+                    #pragma omp parallel for
                     for (int i = 0; i < totalPixels; ++i) {
                         stretched[i] = applyMTF(origR[i], B, W, M);
                     }
                     runFastCLAHE(stretched.data(), m_claheR.data(), imgW, imgH, 8, 8, clip);
                     
+                    #pragma omp parallel for
                     for (int i = 0; i < totalPixels; ++i) {
                         stretched[i] = applyMTF(origG[i], B, W, M);
                     }
                     runFastCLAHE(stretched.data(), m_claheG.data(), imgW, imgH, 8, 8, clip);
                     
+                    #pragma omp parallel for
                     for (int i = 0; i < totalPixels; ++i) {
                         stretched[i] = applyMTF(origB[i], B, W, M);
                     }
