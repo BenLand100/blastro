@@ -71,10 +71,15 @@ void ImageView::setImage(const ImageVariant& image, bool preserveStretch) {
 }
 
 void ImageView::setDisplayMode(DisplayMode mode) {
-    m_displayMode = mode;
-    if (m_displayMode == Autostretch) {
+    if (mode == Autostretch) {
+        if (m_displayMode == Autostretch) {
+            m_autoStretchLevel = (m_autoStretchLevel + 1) % 3;
+        } else {
+            m_autoStretchLevel = 0; // Start with the lowest intensity
+        }
         runAutostretch();
     } else {
+        m_displayMode = mode;
         updateLUT(); // Precompute LUT for the new mode
         updateView();
     }
