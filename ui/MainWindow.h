@@ -133,6 +133,17 @@ private slots:
     void ensurePCLBridge();
     void setProcessingState(bool processing);
 
+    // Image operations
+    void onUndo();
+    void onRedo();
+    void onFlipVertical();
+    void onMirrorHorizontal();
+    void onRotate90CW();
+    void onRotate90CCW();
+    void onRotate180();
+    void onCrop();
+    void updateImageMenuState();
+
 private:
     void createMenus();
     void addImageToWorkspace(const QString& name, const WorkspaceElement& element);
@@ -143,6 +154,7 @@ private:
     QLabel* m_statusReadout = nullptr;
     QLabel* m_statusLabel = nullptr;
     ImageView* m_connectedImageView = nullptr;
+    WorkspaceImageWindow* m_connectedImageWindow = nullptr;
     QProgressBar* m_progressBar = nullptr;
     void showStatusMessage(const QString& message, int timeout = 0);
     bool m_algorithmRunning = false;
@@ -155,10 +167,19 @@ private:
 
     // Menus
     QMenu* m_fileMenu;
+    QMenu* m_imageMenu;
     QMenu* m_algoMenu;
     QMenu* m_windowMenu;
 
     // Actions
+    QAction* m_undoAct;
+    QAction* m_redoAct;
+    QAction* m_flipVertAct;
+    QAction* m_mirrorHorizAct;
+    QAction* m_rotate90CWAct;
+    QAction* m_rotate90CCWAct;
+    QAction* m_rotate180Act;
+    QAction* m_cropAct;
     QAction* m_openAct;
     QAction* m_openBatchAct;
     QAction* m_addToBatchAct;

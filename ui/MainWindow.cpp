@@ -44,6 +44,7 @@
 #include "core/Preferences.h"
 #include "WorkspaceImageWindow.h"
 #include "BatchImageWidget.h"
+#include "algorithms/ImageOperations.h"
 #include <QFileDialog>
 #include <QInputDialog>
 #include <QMessageBox>
@@ -209,6 +210,59 @@ void MainWindow::createMenus() {
     m_exitAct = new QAction("E&xit", this);
     connect(m_exitAct, &QAction::triggered, qApp, &QApplication::closeAllWindows);
     m_fileMenu->addAction(m_exitAct);
+
+    m_imageMenu = menuBar()->addMenu("&Image");
+    
+    m_undoAct = new QAction("&Undo", this);
+    m_undoAct->setShortcut(QKeySequence::Undo);
+    connect(m_undoAct, &QAction::triggered, this, &MainWindow::onUndo);
+    m_imageMenu->addAction(m_undoAct);
+
+    m_redoAct = new QAction("&Redo", this);
+    m_redoAct->setShortcut(QKeySequence::Redo);
+    connect(m_redoAct, &QAction::triggered, this, &MainWindow::onRedo);
+    m_imageMenu->addAction(m_redoAct);
+
+    m_imageMenu->addSeparator();
+
+    m_flipVertAct = new QAction("Flip &Vertical", this);
+    connect(m_flipVertAct, &QAction::triggered, this, &MainWindow::onFlipVertical);
+    m_imageMenu->addAction(m_flipVertAct);
+
+    m_mirrorHorizAct = new QAction("Mirror &Horizontal", this);
+    connect(m_mirrorHorizAct, &QAction::triggered, this, &MainWindow::onMirrorHorizontal);
+    m_imageMenu->addAction(m_mirrorHorizAct);
+
+    m_imageMenu->addSeparator();
+
+    m_rotate90CWAct = new QAction("Rotate 90° &CW", this);
+    connect(m_rotate90CWAct, &QAction::triggered, this, &MainWindow::onRotate90CW);
+    m_imageMenu->addAction(m_rotate90CWAct);
+
+    m_rotate90CCWAct = new QAction("Rotate 90° C&CW", this);
+    connect(m_rotate90CCWAct, &QAction::triggered, this, &MainWindow::onRotate90CCW);
+    m_imageMenu->addAction(m_rotate90CCWAct);
+
+    m_rotate180Act = new QAction("Rotate &180°", this);
+    connect(m_rotate180Act, &QAction::triggered, this, &MainWindow::onRotate180);
+    m_imageMenu->addAction(m_rotate180Act);
+
+    m_imageMenu->addSeparator();
+
+    m_cropAct = new QAction("&Crop", this);
+    m_cropAct->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_K));
+    connect(m_cropAct, &QAction::triggered, this, &MainWindow::onCrop);
+    m_imageMenu->addAction(m_cropAct);
+
+    // Disable all by default
+    m_undoAct->setEnabled(false);
+    m_redoAct->setEnabled(false);
+    m_flipVertAct->setEnabled(false);
+    m_mirrorHorizAct->setEnabled(false);
+    m_rotate90CWAct->setEnabled(false);
+    m_rotate90CCWAct->setEnabled(false);
+    m_rotate180Act->setEnabled(false);
+    m_cropAct->setEnabled(false);
 
     m_algoMenu = menuBar()->addMenu("&Algorithms");
     
@@ -853,6 +907,10 @@ void MainWindow::onSubWindowActivated(QMdiSubWindow* window) {
         disconnect(m_connectedImageView, &ImageView::mousePosChanged, this, &MainWindow::updateStatusReadout);
         m_connectedImageView = nullptr;
     }
+    if (m_connectedImageWindow) {
+        disconnect(m_connectedImageWindow, &WorkspaceImageWindow::undoRedoStateChanged, this, &MainWindow::updateImageMenuState);
+        m_connectedImageWindow = nullptr;
+    }
 
     bool hasActiveImage = false;
     bool hasActiveBatch = false;
@@ -865,6 +923,9 @@ void MainWindow::onSubWindowActivated(QMdiSubWindow* window) {
         // Get the widget inside the subwindow
         QWidget* widget = window->widget();
         if (auto* wsWindow = qobject_cast<WorkspaceImageWindow*>(widget)) {
+            m_connectedImageWindow = wsWindow;
+            connect(wsWindow, &WorkspaceImageWindow::undoRedoStateChanged, this, &MainWindow::updateImageMenuState);
+
             m_connectedImageView = wsWindow->imageView();
             if (m_connectedImageView) {
                 connect(m_connectedImageView, &ImageView::mousePosChanged, this, &MainWindow::updateStatusReadout);
@@ -879,10 +940,13 @@ void MainWindow::onSubWindowActivated(QMdiSubWindow* window) {
             }
         }
     }
-
-    m_saveAct->setEnabled(hasActiveImage);
-    m_addToBatchAct->setEnabled(hasActiveImage);
+    
+    // update save menu enable, etc.
+    m_saveAct->setEnabled(hasActiveImage && !hasActiveBatch);
+    m_addToBatchAct->setEnabled(hasActiveImage && !hasActiveBatch);
     m_saveBatchAct->setEnabled(hasActiveBatch);
+
+    updateImageMenuState();
 }
 
 void MainWindow::updateStatusReadout(int x, int y, bool isRGB, const std::vector<float>& values) {
@@ -1669,6 +1733,207 @@ void MainWindow::testRegisterOnCube(const QString& cubePath, int refFrameIdx, co
     } catch (const std::exception& e) {
         qCritical() << "[MainWindow] Exception during pipeline execution:" << e.what();
         QCoreApplication::exit(1);
+    }
+}
+
+void MainWindow::onUndo() {
+    QMdiSubWindow* activeSub = m_workspaceArea->activeSubWindow();
+    if (!activeSub) return;
+    if (auto* wsWindow = qobject_cast<WorkspaceImageWindow*>(activeSub->widget())) {
+        if (wsWindow->canUndo()) {
+            wsWindow->undo();
+            QString activeName = wsWindow->windowTitle();
+            m_workspace.registerElement(activeName.toStdString(), wsWindow->element());
+            for (auto* dlg : findChildren<AlgorithmDialog*>()) {
+                dlg->refreshWorkspaceElements();
+            }
+            updateImageMenuState();
+        }
+    }
+}
+
+void MainWindow::onRedo() {
+    QMdiSubWindow* activeSub = m_workspaceArea->activeSubWindow();
+    if (!activeSub) return;
+    if (auto* wsWindow = qobject_cast<WorkspaceImageWindow*>(activeSub->widget())) {
+        if (wsWindow->canRedo()) {
+            wsWindow->redo();
+            QString activeName = wsWindow->windowTitle();
+            m_workspace.registerElement(activeName.toStdString(), wsWindow->element());
+            for (auto* dlg : findChildren<AlgorithmDialog*>()) {
+                dlg->refreshWorkspaceElements();
+            }
+            updateImageMenuState();
+        }
+    }
+}
+
+void MainWindow::onFlipVertical() {
+    QMdiSubWindow* activeSub = m_workspaceArea->activeSubWindow();
+    if (!activeSub) return;
+    if (auto* wsWindow = qobject_cast<WorkspaceImageWindow*>(activeSub->widget())) {
+        WorkspaceElement elem = wsWindow->element();
+        if (std::holds_alternative<GrayscaleImagePtr>(elem) || std::holds_alternative<RGBImagePtr>(elem)) {
+            wsWindow->saveUndoState();
+            ImageVariant activeImg = wsWindow->currentImage();
+            ImageOperations::flipVertical(activeImg);
+            wsWindow->notifyImageUpdated();
+            updateImageMenuState();
+        }
+    }
+}
+
+void MainWindow::onMirrorHorizontal() {
+    QMdiSubWindow* activeSub = m_workspaceArea->activeSubWindow();
+    if (!activeSub) return;
+    if (auto* wsWindow = qobject_cast<WorkspaceImageWindow*>(activeSub->widget())) {
+        WorkspaceElement elem = wsWindow->element();
+        if (std::holds_alternative<GrayscaleImagePtr>(elem) || std::holds_alternative<RGBImagePtr>(elem)) {
+            wsWindow->saveUndoState();
+            ImageVariant activeImg = wsWindow->currentImage();
+            ImageOperations::mirrorHorizontal(activeImg);
+            wsWindow->notifyImageUpdated();
+            updateImageMenuState();
+        }
+    }
+}
+
+void MainWindow::onRotate180() {
+    QMdiSubWindow* activeSub = m_workspaceArea->activeSubWindow();
+    if (!activeSub) return;
+    if (auto* wsWindow = qobject_cast<WorkspaceImageWindow*>(activeSub->widget())) {
+        WorkspaceElement elem = wsWindow->element();
+        if (std::holds_alternative<GrayscaleImagePtr>(elem) || std::holds_alternative<RGBImagePtr>(elem)) {
+            wsWindow->saveUndoState();
+            ImageVariant activeImg = wsWindow->currentImage();
+            ImageOperations::rotate180(activeImg);
+            wsWindow->notifyImageUpdated();
+            updateImageMenuState();
+        }
+    }
+}
+
+void MainWindow::onRotate90CW() {
+    QMdiSubWindow* activeSub = m_workspaceArea->activeSubWindow();
+    if (!activeSub) return;
+    if (auto* wsWindow = qobject_cast<WorkspaceImageWindow*>(activeSub->widget())) {
+        WorkspaceElement elem = wsWindow->element();
+        if (std::holds_alternative<GrayscaleImagePtr>(elem) || std::holds_alternative<RGBImagePtr>(elem)) {
+            wsWindow->saveUndoState();
+            ImageVariant activeImg = wsWindow->currentImage();
+            ImageVariant rotated = ImageOperations::rotate90CW(activeImg);
+            WorkspaceElement elemRotated;
+            if (std::holds_alternative<GrayscaleImagePtr>(rotated)) {
+                elemRotated = std::get<GrayscaleImagePtr>(rotated);
+            } else {
+                elemRotated = std::get<RGBImagePtr>(rotated);
+            }
+            wsWindow->setElement(elemRotated);
+            QString activeName = wsWindow->windowTitle();
+            m_workspace.registerElement(activeName.toStdString(), elemRotated);
+            for (auto* dlg : findChildren<AlgorithmDialog*>()) {
+                dlg->refreshWorkspaceElements();
+            }
+            updateImageMenuState();
+        }
+    }
+}
+
+void MainWindow::onRotate90CCW() {
+    QMdiSubWindow* activeSub = m_workspaceArea->activeSubWindow();
+    if (!activeSub) return;
+    if (auto* wsWindow = qobject_cast<WorkspaceImageWindow*>(activeSub->widget())) {
+        WorkspaceElement elem = wsWindow->element();
+        if (std::holds_alternative<GrayscaleImagePtr>(elem) || std::holds_alternative<RGBImagePtr>(elem)) {
+            wsWindow->saveUndoState();
+            ImageVariant activeImg = wsWindow->currentImage();
+            ImageVariant rotated = ImageOperations::rotate90CCW(activeImg);
+            WorkspaceElement elemRotated;
+            if (std::holds_alternative<GrayscaleImagePtr>(rotated)) {
+                elemRotated = std::get<GrayscaleImagePtr>(rotated);
+            } else {
+                elemRotated = std::get<RGBImagePtr>(rotated);
+            }
+            wsWindow->setElement(elemRotated);
+            QString activeName = wsWindow->windowTitle();
+            m_workspace.registerElement(activeName.toStdString(), elemRotated);
+            for (auto* dlg : findChildren<AlgorithmDialog*>()) {
+                dlg->refreshWorkspaceElements();
+            }
+            updateImageMenuState();
+        }
+    }
+}
+
+void MainWindow::onCrop() {
+    QMdiSubWindow* activeSub = m_workspaceArea->activeSubWindow();
+    if (!activeSub) return;
+    if (auto* wsWindow = qobject_cast<WorkspaceImageWindow*>(activeSub->widget())) {
+        WorkspaceElement elem = wsWindow->element();
+        if (std::holds_alternative<GrayscaleImagePtr>(elem) || std::holds_alternative<RGBImagePtr>(elem)) {
+            ImageView* iv = wsWindow->imageView();
+            if (iv && iv->hasSelection()) {
+                QRect rect = iv->selectionRect();
+                wsWindow->saveUndoState();
+                ImageVariant activeImg = wsWindow->currentImage();
+                ImageVariant cropped = ImageOperations::crop(activeImg, rect);
+                WorkspaceElement elemCropped;
+                if (std::holds_alternative<GrayscaleImagePtr>(cropped)) {
+                    elemCropped = std::get<GrayscaleImagePtr>(cropped);
+                } else {
+                    elemCropped = std::get<RGBImagePtr>(cropped);
+                }
+                wsWindow->setElement(elemCropped);
+                QString activeName = wsWindow->windowTitle();
+                m_workspace.registerElement(activeName.toStdString(), elemCropped);
+                iv->clearSelection();
+                for (auto* dlg : findChildren<AlgorithmDialog*>()) {
+                    dlg->refreshWorkspaceElements();
+                }
+                updateImageMenuState();
+            }
+        }
+    }
+}
+
+void MainWindow::updateImageMenuState() {
+    QMdiSubWindow* activeSub = m_workspaceArea->activeSubWindow();
+    if (!activeSub) {
+        m_undoAct->setEnabled(false);
+        m_redoAct->setEnabled(false);
+        m_flipVertAct->setEnabled(false);
+        m_mirrorHorizAct->setEnabled(false);
+        m_rotate90CWAct->setEnabled(false);
+        m_rotate90CCWAct->setEnabled(false);
+        m_rotate180Act->setEnabled(false);
+        m_cropAct->setEnabled(false);
+        return;
+    }
+
+    if (auto* wsWindow = qobject_cast<WorkspaceImageWindow*>(activeSub->widget())) {
+        WorkspaceElement elem = wsWindow->element();
+        bool isSingleImage = std::holds_alternative<GrayscaleImagePtr>(elem) || std::holds_alternative<RGBImagePtr>(elem);
+        
+        m_undoAct->setEnabled(isSingleImage && wsWindow->canUndo());
+        m_redoAct->setEnabled(isSingleImage && wsWindow->canRedo());
+        
+        m_flipVertAct->setEnabled(isSingleImage);
+        m_mirrorHorizAct->setEnabled(isSingleImage);
+        m_rotate90CWAct->setEnabled(isSingleImage);
+        m_rotate90CCWAct->setEnabled(isSingleImage);
+        m_rotate180Act->setEnabled(isSingleImage);
+        
+        ImageView* iv = wsWindow->imageView();
+        m_cropAct->setEnabled(isSingleImage && iv && iv->hasSelection());
+    } else {
+        m_undoAct->setEnabled(false);
+        m_redoAct->setEnabled(false);
+        m_flipVertAct->setEnabled(false);
+        m_mirrorHorizAct->setEnabled(false);
+        m_rotate90CWAct->setEnabled(false);
+        m_rotate90CCWAct->setEnabled(false);
+        m_rotate180Act->setEnabled(false);
+        m_cropAct->setEnabled(false);
     }
 }
 

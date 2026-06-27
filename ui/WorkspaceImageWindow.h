@@ -43,6 +43,16 @@ public:
     void notifyImageUpdated();
     void setUpdatesSuspended(bool suspended);
 
+    void setElement(const WorkspaceElement& element);
+
+    // Undo/Redo support
+    void undo();
+    void redo();
+    bool canUndo() const { return !m_undoStack.empty(); }
+    bool canRedo() const { return !m_redoStack.empty(); }
+    void saveUndoState();
+    void clearUndoRedo();
+
     // Live Preview Support
     void setPreviewImage(const ImageVariant& previewImage);
     void restoreOriginalImage();
@@ -50,6 +60,7 @@ public:
 
 signals:
     void renameRequested(const QString& oldName, const QString& newName);
+    void undoRedoStateChanged();
 
 private slots:
     void onModeButtonClicked(int id);
@@ -93,6 +104,13 @@ private:
     QPushButton* m_rgbChanBtn;
 
     HistogramWidget* m_histogramWidget;
+
+    struct UndoState {
+        ImageVariant image;
+    };
+    std::vector<UndoState> m_undoStack;
+    std::vector<UndoState> m_redoStack;
+    const size_t m_maxUndoDepth = 10;
 
 protected:
     void resizeEvent(QResizeEvent* event) override;

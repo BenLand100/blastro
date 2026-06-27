@@ -81,6 +81,10 @@ public:
 
     void setFrameSelectedStatus(bool selected);
 
+    QRect selectionRect() const { return m_selectionRect; }
+    bool hasSelection() const { return m_hasSelection; }
+    void clearSelection();
+
     // Star/Constellation Visualization
     void setShowStars(bool show);
     void setShowConstellations(bool show);
@@ -89,6 +93,7 @@ public:
 signals:
     void stretchParamsChanged(double b, double w, double m);
     void mousePosChanged(int x, int y, bool isRGB, const std::vector<float>& values);
+    void selectionChanged();
 
 protected:
     void wheelEvent(QWheelEvent* event) override;
@@ -105,10 +110,32 @@ private:
     void updateLUT();
     float applyMTF(float v, float B, float W, float M);
     void clearCLAHE();
+    QSize currentImageSize() const;
+
+    enum ResizeHandle {
+        HandleNone,
+        HandleTopLeft,
+        HandleTopRight,
+        HandleBottomLeft,
+        HandleBottomRight,
+        HandleLeft,
+        HandleRight,
+        HandleTop,
+        HandleBottom
+    };
+    ResizeHandle getResizeHandleAt(const QPointF& scenePos) const;
+    void updateResizeCursor(ResizeHandle handle);
 
     QGraphicsScene* m_scene;
     ImageVariant m_currentImage;
     double m_zoomFactor;
+
+    bool m_hasSelection = false;
+    bool m_isSelecting = false;
+    bool m_isResizing = false;
+    QPoint m_selectionStart;
+    QRect m_selectionRect;
+    ResizeHandle m_activeHandle = HandleNone;
 
     // Stretching state
     DisplayMode m_displayMode;

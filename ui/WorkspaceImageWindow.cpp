@@ -18,6 +18,7 @@
 
 #include "WorkspaceImageWindow.h"
 #include "BatchImageWidget.h"
+#include "algorithms/ImageOperations.h"
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QInputDialog>
@@ -62,6 +63,10 @@ WorkspaceImageWindow::WorkspaceImageWindow(const QString& name, const WorkspaceE
         m_imageView = bw->imageView();
         m_viewportWidget = bw;
         connect(bw, &BatchImageWidget::frameChanged, this, &WorkspaceImageWindow::onFrameChanged);
+    }
+
+    if (m_imageView) {
+        connect(m_imageView, &ImageView::selectionChanged, this, &WorkspaceImageWindow::undoRedoStateChanged);
     }
 
     // 2. Setup layouts
@@ -550,6 +555,77 @@ void WorkspaceImageWindow::commitPreviewImage(const ImageVariant& finalImage) {
         m_originalImageForPreview = ImageVariant();
         notifyImageUpdated();
     }
+}
+
+void WorkspaceImageWindow::setElement(const WorkspaceElement& element) {
+    m_element = element;
+    if (auto iv = qobject_cast<ImageView*>(m_viewportWidget)) {
+        if (std::holds_alternative<GrayscaleImagePtr>(element)) {
+            iv->setImage(std::get<GrayscaleImagePtr>(element));
+        } else if (std::holds_alternative<RGBImagePtr>(element)) {
+            iv->setImage(std::get<RGBImagePtr>(element));
+        }
+    }
+    notifyImageUpdated();
+}
+
+void WorkspaceImageWindow::saveUndoState() {
+    UndoState state;
+    state.image = ImageOperations::cloneImageVariant(currentImage());
+    m_undoStack.push_back(state);
+    if (m_undoStack.size() > m_maxUndoDepth) {
+        m_undoStack.erase(m_undoStack.begin());
+    }
+    m_redoStack.clear();
+    emit undoRedoStateChanged();
+}
+
+void WorkspaceImageWindow::clearUndoRedo() {
+    m_undoStack.clear();
+    m_redoStack.clear();
+    emit undoRedoStateChanged();
+}
+
+void WorkspaceImageWindow::undo() {
+    if (m_undoStack.empty()) return;
+
+    UndoState redoState;
+    redoState.image = ImageOperations::cloneImageVariant(currentImage());
+    m_redoStack.push_back(redoState);
+
+    UndoState undoState = m_undoStack.back();
+    m_undoStack.pop_back();
+
+    WorkspaceElement elem;
+    if (std::holds_alternative<GrayscaleImagePtr>(undoState.image)) {
+        elem = std::get<GrayscaleImagePtr>(undoState.image);
+    } else {
+        elem = std::get<RGBImagePtr>(undoState.image);
+    }
+
+    setElement(elem);
+    emit undoRedoStateChanged();
+}
+
+void WorkspaceImageWindow::redo() {
+    if (m_redoStack.empty()) return;
+
+    UndoState undoState;
+    undoState.image = ImageOperations::cloneImageVariant(currentImage());
+    m_undoStack.push_back(undoState);
+
+    UndoState redoState = m_redoStack.back();
+    m_redoStack.pop_back();
+
+    WorkspaceElement elem;
+    if (std::holds_alternative<GrayscaleImagePtr>(redoState.image)) {
+        elem = std::get<GrayscaleImagePtr>(redoState.image);
+    } else {
+        elem = std::get<RGBImagePtr>(redoState.image);
+    }
+
+    setElement(elem);
+    emit undoRedoStateChanged();
 }
 
 } // namespace blastro

@@ -58,6 +58,9 @@ ImageView::ImageView(QWidget* parent)
 void ImageView::setImage(const ImageVariant& image, bool preserveStretch) {
     clearCLAHE();
     m_currentImage = image;
+    m_hasSelection = false;
+    m_selectionRect = QRect();
+    emit selectionChanged();
     
     // Set scene rect to the image dimensions
     int w = 0, h = 0;
@@ -497,6 +500,28 @@ void ImageView::wheelEvent(QWheelEvent* event) {
 }
 
 void ImageView::mousePressEvent(QMouseEvent* event) {
+    if (event->button() == Qt::LeftButton && (event->modifiers() & Qt::ShiftModifier)) {
+        QPointF scenePos = mapToScene(event->pos());
+        ResizeHandle handle = getResizeHandleAt(scenePos);
+        if (handle != HandleNone) {
+            m_isResizing = true;
+            m_activeHandle = handle;
+            event->accept();
+        } else {
+            m_isSelecting = true;
+            QSize imgSz = currentImageSize();
+            int sx = std::clamp(static_cast<int>(scenePos.x()), 0, imgSz.width());
+            int sy = std::clamp(static_cast<int>(scenePos.y()), 0, imgSz.height());
+            m_selectionStart = QPoint(sx, sy);
+            m_selectionRect = QRect(m_selectionStart, QSize(0, 0));
+            m_hasSelection = true;
+            emit selectionChanged();
+            viewport()->update();
+            event->accept();
+        }
+        return;
+    }
+
     if (event->button() == Qt::LeftButton || event->button() == Qt::MiddleButton) {
         m_isPanning = true;
         m_lastMousePos = event->pos();
@@ -508,6 +533,26 @@ void ImageView::mousePressEvent(QMouseEvent* event) {
 }
 
 void ImageView::mouseReleaseEvent(QMouseEvent* event) {
+    if (m_isSelecting) {
+        m_isSelecting = false;
+        if (m_selectionRect.width() < 4 || m_selectionRect.height() < 4) {
+            m_hasSelection = false;
+            m_selectionRect = QRect();
+        }
+        emit selectionChanged();
+        viewport()->update();
+        event->accept();
+        return;
+    }
+    if (m_isResizing) {
+        m_isResizing = false;
+        m_activeHandle = HandleNone;
+        emit selectionChanged();
+        viewport()->update();
+        event->accept();
+        return;
+    }
+
     if (event->button() == Qt::LeftButton || event->button() == Qt::MiddleButton) {
         m_isPanning = false;
         setCursor(Qt::ArrowCursor);
@@ -523,6 +568,68 @@ void ImageView::mouseMoveEvent(QMouseEvent* event) {
         QGraphicsView::mouseMoveEvent(event);
         return;
     }
+
+    QPointF scenePos = mapToScene(event->pos());
+
+    if (m_isSelecting) {
+        QSize imgSz = currentImageSize();
+        int cx = std::clamp(static_cast<int>(scenePos.x()), 0, imgSz.width());
+        int cy = std::clamp(static_cast<int>(scenePos.y()), 0, imgSz.height());
+        m_selectionRect = QRect(m_selectionStart, QPoint(cx, cy)).normalized();
+        viewport()->update();
+        event->accept();
+        return;
+    }
+
+    if (m_isResizing) {
+        QSize imgSz = currentImageSize();
+        int cx = std::clamp(static_cast<int>(scenePos.x()), 0, imgSz.width());
+        int cy = std::clamp(static_cast<int>(scenePos.y()), 0, imgSz.height());
+
+        int left = m_selectionRect.left();
+        int right = m_selectionRect.right();
+        int top = m_selectionRect.top();
+        int bottom = m_selectionRect.bottom();
+
+        switch (m_activeHandle) {
+            case HandleTopLeft:
+                left = cx;
+                top = cy;
+                break;
+            case HandleTopRight:
+                right = cx;
+                top = cy;
+                break;
+            case HandleBottomLeft:
+                left = cx;
+                bottom = cy;
+                break;
+            case HandleBottomRight:
+                right = cx;
+                bottom = cy;
+                break;
+            case HandleLeft:
+                left = cx;
+                break;
+            case HandleRight:
+                right = cx;
+                break;
+            case HandleTop:
+                top = cy;
+                break;
+            case HandleBottom:
+                bottom = cy;
+                break;
+            default:
+                break;
+        }
+
+        m_selectionRect = QRect(QPoint(left, top), QPoint(right, bottom)).normalized();
+        viewport()->update();
+        event->accept();
+        return;
+    }
+
     if (m_isPanning) {
         QPoint delta = event->pos() - m_lastMousePos;
         m_lastMousePos = event->pos();
@@ -531,6 +638,12 @@ void ImageView::mouseMoveEvent(QMouseEvent* event) {
         verticalScrollBar()->setValue(verticalScrollBar()->value() - delta.y());
         event->accept();
     } else {
+        if (event->modifiers() & Qt::ShiftModifier) {
+            ResizeHandle handle = getResizeHandleAt(scenePos);
+            updateResizeCursor(handle);
+        } else {
+            setCursor(Qt::ArrowCursor);
+        }
         QGraphicsView::mouseMoveEvent(event);
     }
 
@@ -893,6 +1006,40 @@ void ImageView::setStars(const std::vector<Star>& stars) {
 
 void ImageView::drawForeground(QPainter* painter, const QRectF& rect) {
     Q_UNUSED(rect);
+
+    // Draw selection overlay
+    if (m_hasSelection && !m_selectionRect.isEmpty()) {
+        painter->save();
+        
+        // 1. Draw dashed border (cosmetic pen so it doesn't zoom)
+        QPen pen(Qt::blue);
+        pen.setWidth(1);
+        pen.setCosmetic(true);
+        pen.setStyle(Qt::DashLine);
+        painter->setPen(pen);
+        painter->setBrush(Qt::NoBrush);
+        painter->drawRect(m_selectionRect);
+
+        QPen pen2(Qt::white);
+        pen2.setWidth(1);
+        pen2.setCosmetic(true);
+        pen2.setStyle(Qt::DotLine);
+        painter->setPen(pen2);
+        painter->drawRect(m_selectionRect);
+
+        // 2. Draw dark stencil overlay outside selection
+        QSize sz = currentImageSize();
+        QRectF imageRect(0, 0, sz.width(), sz.height());
+        QPainterPath path;
+        path.addRect(imageRect);
+        path.addRect(m_selectionRect);
+        path.setFillRule(Qt::OddEvenFill);
+        painter->setBrush(QColor(0, 0, 0, 100)); // ~40% opacity black
+        painter->setPen(Qt::NoPen);
+        painter->drawPath(path);
+
+        painter->restore();
+    }
     
     // Draw star circles
     if (m_showStars && !m_stars.empty()) {
@@ -944,12 +1091,99 @@ void ImageView::drawForeground(QPainter* painter, const QRectF& rect) {
 }
 
 void ImageView::keyPressEvent(QKeyEvent* event) {
+    if (event->key() == Qt::Key_Escape) {
+        if (m_hasSelection) {
+            clearSelection();
+            event->accept();
+            return;
+        }
+    }
     if (event->key() == Qt::Key_Left || event->key() == Qt::Key_Right || event->key() == Qt::Key_Space) {
         // Ignore these key events so they bubble up to the parent widget (BatchImageWidget)
         event->ignore();
         return;
     }
     QGraphicsView::keyPressEvent(event);
+}
+
+void ImageView::clearSelection() {
+    if (m_hasSelection) {
+        m_hasSelection = false;
+        m_selectionRect = QRect();
+        emit selectionChanged();
+        viewport()->update();
+    }
+}
+
+QSize ImageView::currentImageSize() const {
+    if (std::holds_alternative<GrayscaleImagePtr>(m_currentImage)) {
+        auto img = std::get<GrayscaleImagePtr>(m_currentImage);
+        if (img) return QSize(img->width(), img->height());
+    } else if (std::holds_alternative<RGBImagePtr>(m_currentImage)) {
+        auto img = std::get<RGBImagePtr>(m_currentImage);
+        if (img) return QSize(img->width(), img->height());
+    }
+    return QSize(0, 0);
+}
+
+ImageView::ResizeHandle ImageView::getResizeHandleAt(const QPointF& scenePos) const {
+    if (!m_hasSelection || m_selectionRect.isEmpty()) return HandleNone;
+
+    double tol = 8.0 / transform().m11(); // 8 screen pixels tolerance
+
+    double x = scenePos.x();
+    double y = scenePos.y();
+
+    double left = m_selectionRect.left();
+    double right = m_selectionRect.right();
+    double top = m_selectionRect.top();
+    double bottom = m_selectionRect.bottom();
+
+    // Check corners first
+    bool nearLeft = std::abs(x - left) <= tol;
+    bool nearRight = std::abs(x - right) <= tol;
+    bool nearTop = std::abs(y - top) <= tol;
+    bool nearBottom = std::abs(y - bottom) <= tol;
+
+    if (nearLeft && nearTop) return HandleTopLeft;
+    if (nearRight && nearTop) return HandleTopRight;
+    if (nearLeft && nearBottom) return HandleBottomLeft;
+    if (nearRight && nearBottom) return HandleBottomRight;
+
+    // Check edges next
+    bool withinX = x >= (left - tol) && x <= (right + tol);
+    bool withinY = y >= (top - tol) && y <= (bottom + tol);
+
+    if (nearLeft && withinY) return HandleLeft;
+    if (nearRight && withinY) return HandleRight;
+    if (nearTop && withinX) return HandleTop;
+    if (nearBottom && withinX) return HandleBottom;
+
+    return HandleNone;
+}
+
+void ImageView::updateResizeCursor(ResizeHandle handle) {
+    switch (handle) {
+        case HandleTopLeft:
+        case HandleBottomRight:
+            setCursor(Qt::SizeFDiagCursor);
+            break;
+        case HandleTopRight:
+        case HandleBottomLeft:
+            setCursor(Qt::SizeBDiagCursor);
+            break;
+        case HandleLeft:
+        case HandleRight:
+            setCursor(Qt::SizeHorCursor);
+            break;
+        case HandleTop:
+        case HandleBottom:
+            setCursor(Qt::SizeVerCursor);
+            break;
+        default:
+            setCursor(Qt::ArrowCursor);
+            break;
+    }
 }
 
 } // namespace blastro
