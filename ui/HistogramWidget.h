@@ -19,6 +19,9 @@ public:
     
     void setDrawCurve(bool draw);
     
+    void snapToBlackToMid();
+    void resetZoom();
+    
     bool isActive() const { return m_active; }
     void setActive(bool active);
 
@@ -32,6 +35,7 @@ protected:
     void mousePressEvent(QMouseEvent* event) override;
     void mouseReleaseEvent(QMouseEvent* event) override;
     void mouseMoveEvent(QMouseEvent* event) override;
+    void mouseDoubleClickEvent(QMouseEvent* event) override;
     void wheelEvent(QWheelEvent* event) override;
 
 private:

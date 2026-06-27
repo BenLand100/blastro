@@ -213,22 +213,20 @@ void HistogramWidget::paintEvent(QPaintEvent* event) {
     int w = width();
     int h = height();
 
-    if (!m_active) {
-        return;
-    }
-
     // 1. Draw rounded background and border manually
     painter.setPen(QPen(QColor("#333333"), 1));
     painter.setBrush(QBrush(QColor("#1a1a1a")));
     painter.drawRoundedRect(QRectF(0.5, 0.5, w - 1.0, h - 1.0), 4.0, 4.0);
 
-    // 2. Draw background grid
-    painter.setPen(QPen(QColor("#262626"), 1, Qt::DashLine));
-    for (int i = 1; i < 10; ++i) {
-        double val = static_cast<double>(i) / 10.0;
-        double x = valueToX(val);
-        if (x >= 0 && x <= w) {
-            painter.drawLine(x, 1, x, h - 1);
+    // 2. Draw background grid (only if active)
+    if (m_active) {
+        painter.setPen(QPen(QColor("#262626"), 1, Qt::DashLine));
+        for (int i = 1; i < 10; ++i) {
+            double val = static_cast<double>(i) / 10.0;
+            double x = valueToX(val);
+            if (x >= 0 && x <= w) {
+                painter.drawLine(x, 1, x, h - 1);
+            }
         }
     }
 
@@ -314,6 +312,10 @@ void HistogramWidget::paintEvent(QPaintEvent* event) {
             }
             painter.drawPath(outlinePath);
         }
+    }
+
+    if (!m_active) {
+        return;
     }
 
     // 4. Draw stretch curves & lines
@@ -545,6 +547,42 @@ void HistogramWidget::wheelEvent(QWheelEvent* event) {
     m_scrollOffset = std::max(0.0, std::min(1.0 - 1.0 / m_zoom, m_scrollOffset));
     
     update();
+    event->accept();
+}
+
+void HistogramWidget::snapToBlackToMid() {
+    double actualMid = m_blackpoint + m_midpoint * (m_whitepoint - m_blackpoint);
+    double diff = actualMid - m_blackpoint;
+    if (diff > 1e-6) {
+        m_zoom = 0.40 / diff;
+        m_zoom = std::max(1.0, std::min(250.0, m_zoom));
+        double centerVal = (m_blackpoint + actualMid) / 2.0;
+        m_scrollOffset = centerVal - 0.5 / m_zoom;
+        m_scrollOffset = std::max(0.0, std::min(1.0 - 1.0 / m_zoom, m_scrollOffset));
+    } else {
+        m_zoom = 1.0;
+        m_scrollOffset = 0.0;
+    }
+    update();
+}
+
+void HistogramWidget::resetZoom() {
+    m_zoom = 1.0;
+    m_scrollOffset = 0.0;
+    update();
+}
+
+void HistogramWidget::mouseDoubleClickEvent(QMouseEvent* event) {
+    if (!m_active) {
+        QWidget::mouseDoubleClickEvent(event);
+        return;
+    }
+    // Toggle between snapped zoom and default [0, 1] view
+    if (m_zoom > 1.05 || m_scrollOffset > 0.01) {
+        resetZoom();
+    } else {
+        snapToBlackToMid();
+    }
     event->accept();
 }
 

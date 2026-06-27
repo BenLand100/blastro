@@ -15,9 +15,14 @@ WorkspaceImageWindow::WorkspaceImageWindow(const QString& name, const WorkspaceE
       m_headerBar(new QWidget(this)),
       m_modeGroup(new QButtonGroup(this)),
       m_normalBtn(new QPushButton("Normal", this)),
-      m_stretchBtn(new QPushButton("Stretch", this)),
-      m_autoBtn(new QPushButton("Auto", this)),
-      m_localHistBtn(new QPushButton("Local Hist", this)),
+      m_stretchBtn(new QPushButton("Manual", this)),
+      m_autoLBtn(new QPushButton("L", this)),
+      m_autoMBtn(new QPushButton("M", this)),
+      m_autoHBtn(new QPushButton("H", this)),
+      m_localHistBtn(new QPushButton("Hist", this)),
+      m_expandHistBtn(new QPushButton("📊 ▼", this)),
+      m_headerHistContainer(new QWidget(this)),
+      m_expandedHistBar(new QWidget(this)),
       m_channelGroup(new QButtonGroup(this)),
       m_rChanBtn(new QPushButton("R", this)),
       m_gChanBtn(new QPushButton("G", this)),
@@ -54,57 +59,94 @@ WorkspaceImageWindow::WorkspaceImageWindow(const QString& name, const WorkspaceE
     headerLayout->setContentsMargins(10, 4, 10, 4);
     headerLayout->setSpacing(0);
 
+    // Expanded Histogram bar layout
+    m_expandedHistBar->setStyleSheet("background-color: #1e1e1e; border-bottom: 1px solid #333;");
+    m_expandedHistBar->hide();
+    QHBoxLayout* expandedLayout = new QHBoxLayout(m_expandedHistBar);
+    expandedLayout->setContentsMargins(10, 4, 10, 4);
+    expandedLayout->setSpacing(0);
+
+    // Header Histogram container layout
+    QHBoxLayout* containerLayout = new QHBoxLayout(m_headerHistContainer);
+    containerLayout->setContentsMargins(0, 0, 0, 0);
+    containerLayout->setSpacing(0);
+    containerLayout->addWidget(m_histogramWidget);
+
     // Segmented button styling for dark theme
     QString segmentedStyle = 
         "QPushButton { background-color: #333; color: #aaa; border: 1px solid #555; padding: 4px 12px; font-size: 11px; font-weight: bold; }"
         "QPushButton:hover { background-color: #444; color: #fff; }"
         "QPushButton:checked { background-color: #007acc; color: #fff; border-color: #007acc; }"
         "QPushButton#normal { border-top-left-radius: 4px; border-bottom-left-radius: 4px; border-right: none; }"
+        "QPushButton#autoL { border-radius: 0px; border-right: none; padding: 4px 0px; }"
+        "QPushButton#autoM { border-radius: 0px; border-right: none; padding: 4px 0px; }"
+        "QPushButton#autoH { border-radius: 0px; border-right: none; padding: 4px 0px; }"
         "QPushButton#stretch { border-radius: 0px; border-right: none; }"
-        "QPushButton#auto { border-radius: 0px; border-right: none; }"
         "QPushButton#localHist { border-top-right-radius: 4px; border-bottom-right-radius: 4px; }";
 
     m_normalBtn->setObjectName("normal");
     m_normalBtn->setCheckable(true);
     m_normalBtn->setChecked(true);
+    m_autoLBtn->setObjectName("autoL");
+    m_autoLBtn->setCheckable(true);
+    m_autoLBtn->setFixedWidth(24);
+    m_autoMBtn->setObjectName("autoM");
+    m_autoMBtn->setCheckable(true);
+    m_autoMBtn->setFixedWidth(24);
+    m_autoHBtn->setObjectName("autoH");
+    m_autoHBtn->setCheckable(true);
+    m_autoHBtn->setFixedWidth(24);
     m_stretchBtn->setObjectName("stretch");
     m_stretchBtn->setCheckable(true);
-    m_autoBtn->setObjectName("auto");
-    m_autoBtn->setCheckable(true);
     m_localHistBtn->setObjectName("localHist");
     m_localHistBtn->setCheckable(true);
 
     m_normalBtn->setStyleSheet(segmentedStyle);
+    m_autoLBtn->setStyleSheet(segmentedStyle);
+    m_autoMBtn->setStyleSheet(segmentedStyle);
+    m_autoHBtn->setStyleSheet(segmentedStyle);
     m_stretchBtn->setStyleSheet(segmentedStyle);
-    m_autoBtn->setStyleSheet(segmentedStyle);
     m_localHistBtn->setStyleSheet(segmentedStyle);
 
+    // Order: [Normal] [L] [M] [H] [Manual] [Hist]
     m_modeGroup->addButton(m_normalBtn, 0);
+    m_modeGroup->addButton(m_autoLBtn, 2); // Level 0
+    m_modeGroup->addButton(m_autoMBtn, 4); // Level 1
+    m_modeGroup->addButton(m_autoHBtn, 5); // Level 2
     m_modeGroup->addButton(m_stretchBtn, 1);
-    m_modeGroup->addButton(m_autoBtn, 2);
     m_modeGroup->addButton(m_localHistBtn, 3);
     m_modeGroup->setExclusive(true);
 
     headerLayout->addWidget(m_normalBtn);
+    headerLayout->addWidget(m_autoLBtn);
+    headerLayout->addWidget(m_autoMBtn);
+    headerLayout->addWidget(m_autoHBtn);
     headerLayout->addWidget(m_stretchBtn);
-    headerLayout->addWidget(m_autoBtn);
     headerLayout->addWidget(m_localHistBtn);
 
-    // Place the HistogramWidget directly in the header, stretching horizontally.
-    // It is kept visible always to act as a layout-stable empty spacer in Normal mode.
+    // Setup Summon/Expand Button
+    m_expandHistBtn->setObjectName("expandHist");
+    m_expandHistBtn->setStyleSheet(
+        "QPushButton { background: transparent; border: none; color: #888; font-weight: bold; font-size: 11px; padding: 4px 6px; }"
+        "QPushButton:hover { color: #fff; }"
+    );
+    connect(m_expandHistBtn, &QPushButton::clicked, this, &WorkspaceImageWindow::onExpandHistClicked);
+
+    // Place the HistogramWidget directly in the container, stretching horizontally.
     m_histogramWidget->setActive(false);
     m_histogramWidget->setVisible(true);
-    m_histogramWidget->setContentsMargins(10, 0, 10, 0);
+    m_histogramWidget->setContentsMargins(0, 0, 0, 0);
     m_histogramWidget->setFixedHeight(24);
     m_histogramWidget->setDrawCurve(false);
     
-    // Add some spacing before the histogram
+    // Add spacing and the collapsible widgets to the header
     headerLayout->addSpacing(15);
-    headerLayout->addWidget(m_histogramWidget, 1); // Stretch factor 1
+    headerLayout->addWidget(m_expandHistBtn);
+    headerLayout->addWidget(m_headerHistContainer, 1); // Container gets stretch factor 1
     headerLayout->addSpacing(15);
 
     // Clickable button for name readout (renaming)
-    m_nameBtn = new QPushButton(name, m_headerBar);
+    m_nameBtn = new QPushButton("", m_headerBar);
     m_nameBtn->setStyleSheet(
         "QPushButton { background: transparent; border: none; color: #888; font-weight: bold; font-family: monospace; font-size: 11px; text-align: right; padding: 0px; }"
         "QPushButton:hover { color: #007acc; text-decoration: underline; }"
@@ -186,6 +228,7 @@ WorkspaceImageWindow::WorkspaceImageWindow(const QString& name, const WorkspaceE
     });
 
     mainLayout->addWidget(m_headerBar);
+    mainLayout->addWidget(m_expandedHistBar);
 
     // Add viewport
     mainLayout->addWidget(m_viewportWidget, 1);
@@ -199,6 +242,7 @@ WorkspaceImageWindow::WorkspaceImageWindow(const QString& name, const WorkspaceE
 
     // Initialize histogram
     updateHistogram();
+    updateNameLabelText();
 }
 
 ImageVariant WorkspaceImageWindow::currentImage() const {
@@ -221,17 +265,30 @@ void WorkspaceImageWindow::onModeButtonClicked(int id) {
     if (id == 0) { // Normal
         m_imageView->setDisplayMode(ImageView::Normal);
         m_histogramWidget->setActive(false);
-    } else if (id == 1) { // Stretch
+        updateHistogram();
+    } else if (id == 1) { // Stretch (Manual)
         m_imageView->setDisplayMode(ImageView::Stretch);
         m_histogramWidget->setActive(true);
         updateHistogram(); // Refresh histogram display
-    } else if (id == 2) { // Auto
-        m_imageView->setDisplayMode(ImageView::Autostretch);
+    } else if (id == 2) { // Auto L (level 0)
+        m_imageView->setAutoStretchLevel(0);
         m_histogramWidget->setActive(true);
         updateHistogram();
-    } else if (id == 3) { // Local Hist
+        m_histogramWidget->snapToBlackToMid();
+    } else if (id == 4) { // Auto M (level 1)
+        m_imageView->setAutoStretchLevel(1);
+        m_histogramWidget->setActive(true);
+        updateHistogram();
+        m_histogramWidget->snapToBlackToMid();
+    } else if (id == 5) { // Auto H (level 2)
+        m_imageView->setAutoStretchLevel(2);
+        m_histogramWidget->setActive(true);
+        updateHistogram();
+        m_histogramWidget->snapToBlackToMid();
+    } else if (id == 3) { // Hist (Local Hist)
         m_imageView->setDisplayMode(ImageView::LocalHist);
         m_histogramWidget->setActive(false);
+        updateHistogram();
     }
 }
 
@@ -240,7 +297,7 @@ void WorkspaceImageWindow::onStretchParamsChangedInWidget(double b, double w, do
     m_imageView->setStretchParams(b, w, m);
     m_imageView->blockSignals(false);
 
-    if (m_modeGroup->checkedId() == 0 || m_modeGroup->checkedId() == 2 || m_modeGroup->checkedId() == 3) {
+    if (m_modeGroup->checkedId() == 0 || m_modeGroup->checkedId() == 2 || m_modeGroup->checkedId() == 3 || m_modeGroup->checkedId() == 4 || m_modeGroup->checkedId() == 5) {
         m_modeGroup->button(1)->setChecked(true); // Switch checked button to Stretch
     }
 }
@@ -251,8 +308,15 @@ void WorkspaceImageWindow::onStretchParamsChangedInView(double b, double w, doub
     m_histogramWidget->blockSignals(false);
 
     if (m_imageView->displayMode() == ImageView::Autostretch) {
-        m_autoBtn->setChecked(true);
         m_histogramWidget->setActive(true);
+        int lvl = m_imageView->autoStretchLevel();
+        if (lvl == 0) {
+            m_autoLBtn->setChecked(true);
+        } else if (lvl == 1) {
+            m_autoMBtn->setChecked(true);
+        } else {
+            m_autoHBtn->setChecked(true);
+        }
     } else if (m_imageView->displayMode() == ImageView::Stretch) {
         m_stretchBtn->setChecked(true);
         m_histogramWidget->setActive(true);
@@ -271,13 +335,60 @@ void WorkspaceImageWindow::onFrameChanged(int index) {
 }
 
 void WorkspaceImageWindow::updateHistogram() {
+    // Query histogram with 16-bit (65536 bins) resolution for high-detail zooming
+    m_histogramWidget->setHistogram(m_imageView->getHistogram(65536));
     if (m_histogramWidget->isActive()) {
-        // Query histogram with 16-bit (65536 bins) resolution for high-detail zooming
-        m_histogramWidget->setHistogram(m_imageView->getHistogram(65536));
         m_histogramWidget->setStretchParams(m_imageView->blackpoint(), 
                                             m_imageView->whitepoint(), 
                                             m_imageView->midpoint());
     }
+}
+
+void WorkspaceImageWindow::onExpandHistClicked() {
+    m_histExpanded = !m_histExpanded;
+    if (m_histExpanded) {
+        // Move to expanded bar
+        m_headerHistContainer->layout()->removeWidget(m_histogramWidget);
+        m_headerHistContainer->hide();
+        
+        static_cast<QHBoxLayout*>(m_expandedHistBar->layout())->addWidget(m_histogramWidget);
+        m_expandedHistBar->show();
+        
+        m_histogramWidget->setFixedHeight(40);
+        m_expandHistBtn->setText("📊 ▲");
+    } else {
+        // Move back to header
+        m_expandedHistBar->layout()->removeWidget(m_histogramWidget);
+        m_expandedHistBar->hide();
+        
+        static_cast<QHBoxLayout*>(m_headerHistContainer->layout())->addWidget(m_histogramWidget);
+        m_headerHistContainer->show();
+        
+        m_histogramWidget->setFixedHeight(24);
+        m_expandHistBtn->setText("📊 ▼");
+    }
+}
+
+void WorkspaceImageWindow::resizeEvent(QResizeEvent* event) {
+    QWidget::resizeEvent(event);
+    if (m_nameBtn) {
+        m_nameBtn->setMaximumWidth(width() * 0.25);
+        updateNameLabelText();
+    }
+}
+
+void WorkspaceImageWindow::updateNameLabelText() {
+    if (!m_nameBtn) return;
+    int availableWidth = m_nameBtn->width();
+    if (availableWidth <= 0) {
+        availableWidth = width() * 0.25;
+    }
+    availableWidth = std::max(20, availableWidth - 10);
+    
+    QFontMetrics fm(m_nameBtn->font());
+    QString elided = fm.elidedText(m_name, Qt::ElideMiddle, availableWidth);
+    m_nameBtn->setText(elided);
+    m_nameBtn->setToolTip(m_name);
 }
 
 void WorkspaceImageWindow::onRenameClicked() {
@@ -292,9 +403,7 @@ void WorkspaceImageWindow::onRenameClicked() {
 
 void WorkspaceImageWindow::updateName(const QString& newName) {
     m_name = newName;
-    if (m_nameBtn) {
-        m_nameBtn->setText(newName);
-    }
+    updateNameLabelText();
 }
 
 void WorkspaceImageWindow::notifyImageUpdated() {

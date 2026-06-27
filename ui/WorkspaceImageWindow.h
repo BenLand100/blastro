@@ -56,9 +56,17 @@ private:
     QButtonGroup* m_modeGroup;
     QPushButton* m_normalBtn;
     QPushButton* m_stretchBtn;
-    QPushButton* m_autoBtn;
+    QPushButton* m_autoLBtn;
+    QPushButton* m_autoMBtn;
+    QPushButton* m_autoHBtn;
     QPushButton* m_localHistBtn;
+    QPushButton* m_expandHistBtn;
     QPushButton* m_nameBtn;
+
+    // Collapsible Histogram layout elements
+    QWidget* m_headerHistContainer;
+    QWidget* m_expandedHistBar;
+    bool m_histExpanded = false;
 
     // Channel selection buttons for RGB Images
     QButtonGroup* m_channelGroup;
@@ -68,6 +76,13 @@ private:
     QPushButton* m_rgbChanBtn;
 
     HistogramWidget* m_histogramWidget;
+
+protected:
+    void resizeEvent(QResizeEvent* event) override;
+
+private:
+    void onExpandHistClicked();
+    void updateNameLabelText();
 };
 
 } // namespace blastro

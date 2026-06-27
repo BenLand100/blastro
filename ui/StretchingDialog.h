@@ -33,6 +33,7 @@ private slots:
     void onGhsParamsChanged(double sp, double d);
     void onGhsProtectionsChanged(double shadowProtect, double highlightProtect);
     void onCopyLiveStretch();
+    void onAutoClicked();
     void onParameterChanged();
     void updatePreview();
 
@@ -65,6 +66,7 @@ private:
     // General controls
     QCheckBox* m_previewChk;
     QPushButton* m_copyStretchesBtn;
+    QPushButton* m_autoBtn;
     QTimer* m_previewTimer;
 
     // Internal values

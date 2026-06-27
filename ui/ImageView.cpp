@@ -71,18 +71,19 @@ void ImageView::setImage(const ImageVariant& image, bool preserveStretch) {
 }
 
 void ImageView::setDisplayMode(DisplayMode mode) {
-    if (mode == Autostretch) {
-        if (m_displayMode == Autostretch) {
-            m_autoStretchLevel = (m_autoStretchLevel + 1) % 3;
-        } else {
-            m_autoStretchLevel = 0; // Start with the lowest intensity
-        }
+    m_displayMode = mode;
+    if (m_displayMode == Autostretch) {
         runAutostretch();
     } else {
-        m_displayMode = mode;
         updateLUT(); // Precompute LUT for the new mode
         updateView();
     }
+}
+
+void ImageView::setAutoStretchLevel(int level) {
+    m_autoStretchLevel = std::max(0, std::min(2, level));
+    m_displayMode = Autostretch;
+    runAutostretch();
 }
 
 void ImageView::setChannelMode(ChannelMode mode) {
