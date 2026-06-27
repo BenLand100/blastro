@@ -26,7 +26,7 @@ BatchImageWidget::BatchImageWidget(ImageBatchPtr batch, QWidget* parent)
       m_thetaLabel(new QLabel("θ: -", this)),
       m_starsLabel(new QLabel("Stars: -", this)),
       m_qualityLabel(new QLabel("Quality: -", this)),
-      m_filterBtn(new QPushButton("Apply Filters", this)) {
+      m_filterBtn(new QPushButton("Filters", this)) {
       
     // Enable keyboard focus so arrow keys and spacebar function correctly
     setFocusPolicy(Qt::StrongFocus);

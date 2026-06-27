@@ -28,7 +28,7 @@ QMdiSubWindow* WorkspaceArea::addElementView(const QString& name, const Workspac
     QMdiSubWindow* sub = addSubWindow(viewWidget);
     sub->setWindowTitle(name);
     sub->setAttribute(Qt::WA_DeleteOnClose);
-    sub->resize(600, 450);
+    sub->resize(800, 600);
     
     // Calculate cascading position: offset in x and y sequentially, then offset in x and repeat
     int startX = 15;
