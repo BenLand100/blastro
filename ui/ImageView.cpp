@@ -78,6 +78,15 @@ void ImageView::setDisplayMode(DisplayMode mode) {
             m_autoStretchLevel = 0; // Start with the lowest intensity
         }
         runAutostretch();
+    } else if (mode == LocalHist) {
+        if (m_displayMode == LocalHist) {
+            m_localHistLevel = (m_localHistLevel + 1) % 3;
+            clearCLAHE(); // Recompute cache for new clipLimitVal
+        } else {
+            m_localHistLevel = 0; // Start with lowest intensity
+        }
+        m_displayMode = LocalHist;
+        updateView();
     } else {
         m_displayMode = mode;
         updateLUT(); // Precompute LUT for the new mode
@@ -89,6 +98,16 @@ void ImageView::setAutoStretchLevel(int level) {
     m_autoStretchLevel = std::max(0, std::min(2, level));
     m_displayMode = Autostretch;
     runAutostretch();
+}
+
+void ImageView::setLocalHistLevel(int level) {
+    int newLvl = std::max(0, std::min(2, level));
+    if (m_localHistLevel != newLvl || m_displayMode != LocalHist) {
+        m_localHistLevel = newLvl;
+        clearCLAHE();
+        m_displayMode = LocalHist;
+        updateView();
+    }
 }
 
 void ImageView::setChannelMode(ChannelMode mode) {
@@ -572,7 +591,10 @@ void ImageView::drawBackground(QPainter* painter, const QRectF& rect) {
                     for (int i = 0; i < totalPixels; ++i) {
                         stretched[i] = applyMTF(rawData[i], B, W, M);
                     }
-                    runFastCLAHE(stretched.data(), m_claheGray.data(), imgW, imgH);
+                    float clip = 10.0f;
+                    if (m_localHistLevel == 1) clip = 20.0f;
+                    else if (m_localHistLevel == 2) clip = 30.0f;
+                    runFastCLAHE(stretched.data(), m_claheGray.data(), imgW, imgH, 8, 8, clip);
                 }
                 bufGray = m_claheGray.data();
             } else {
@@ -619,20 +641,24 @@ void ImageView::drawBackground(QPainter* painter, const QRectF& rect) {
                         M = std::max(0.001f, std::min(0.999f, M));
                     }
                     
+                    float clip = 10.0f;
+                    if (m_localHistLevel == 1) clip = 20.0f;
+                    else if (m_localHistLevel == 2) clip = 30.0f;
+                    
                     for (int i = 0; i < totalPixels; ++i) {
                         stretched[i] = applyMTF(origR[i], B, W, M);
                     }
-                    runFastCLAHE(stretched.data(), m_claheR.data(), imgW, imgH);
+                    runFastCLAHE(stretched.data(), m_claheR.data(), imgW, imgH, 8, 8, clip);
                     
                     for (int i = 0; i < totalPixels; ++i) {
                         stretched[i] = applyMTF(origG[i], B, W, M);
                     }
-                    runFastCLAHE(stretched.data(), m_claheG.data(), imgW, imgH);
+                    runFastCLAHE(stretched.data(), m_claheG.data(), imgW, imgH, 8, 8, clip);
                     
                     for (int i = 0; i < totalPixels; ++i) {
                         stretched[i] = applyMTF(origB[i], B, W, M);
                     }
-                    runFastCLAHE(stretched.data(), m_claheB.data(), imgW, imgH);
+                    runFastCLAHE(stretched.data(), m_claheB.data(), imgW, imgH, 8, 8, clip);
                 }
                 bufR = m_claheR.data();
                 bufG = m_claheG.data();

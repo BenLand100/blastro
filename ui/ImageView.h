@@ -33,6 +33,7 @@ public:
     void setImage(const ImageVariant& image, bool preserveStretch = false);
     ImageVariant currentImage() const { return m_currentImage; }
     int autoStretchLevel() const { return m_autoStretchLevel; }
+    int localHistLevel() const { return m_localHistLevel; }
     
     // Channel mode
     ChannelMode channelMode() const { return m_channelMode; }
@@ -42,6 +43,7 @@ public:
     DisplayMode displayMode() const { return m_displayMode; }
     void setDisplayMode(DisplayMode mode);
     void setAutoStretchLevel(int level);
+    void setLocalHistLevel(int level);
     
     double blackpoint() const { return m_blackpoint; }
     double whitepoint() const { return m_whitepoint; }
@@ -91,6 +93,7 @@ private:
     DisplayMode m_displayMode;
     ChannelMode m_channelMode = RGB_ALL;
     int m_autoStretchLevel = 0;
+    int m_localHistLevel = 0;
     double m_blackpoint;
     double m_whitepoint;
     double m_midpoint;

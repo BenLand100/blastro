@@ -95,10 +95,14 @@ WorkspaceImageWindow::WorkspaceImageWindow(const QString& name, const WorkspaceE
     m_stretchBtn->setStyleSheet(segmentedStyle);
     m_localHistBtn->setStyleSheet(segmentedStyle);
 
-    // Ensure m_autoBtn has a fixed minimum width to contain "Auto H" without shifting layout
+    // Ensure buttons have fixed minimum widths to contain "Auto H" and "Hist H" without shifting layout
     QFontMetrics autoFm(m_autoBtn->font());
     int minW = autoFm.horizontalAdvance("Auto H") + 24;
     m_autoBtn->setMinimumWidth(minW);
+    
+    QFontMetrics histFm(m_localHistBtn->font());
+    int histMinW = histFm.horizontalAdvance("Hist H") + 24;
+    m_localHistBtn->setMinimumWidth(histMinW);
 
     // Order: [Normal] [Auto] [Manual] [Hist]
     m_modeGroup->addButton(m_normalBtn, 0);
@@ -254,15 +258,18 @@ void WorkspaceImageWindow::onModeButtonClicked(int id) {
         m_imageView->setDisplayMode(ImageView::Normal);
         m_histogramWidget->setActive(false);
         m_autoBtn->setText("Auto");
+        m_localHistBtn->setText("Hist");
         updateHistogram();
     } else if (id == 1) { // Stretch (Manual)
         m_imageView->setDisplayMode(ImageView::Stretch);
         m_histogramWidget->setActive(true);
         m_autoBtn->setText("Auto");
+        m_localHistBtn->setText("Hist");
         updateHistogram(); // Refresh histogram display
     } else if (id == 2) { // Auto
         m_imageView->setDisplayMode(ImageView::Autostretch);
         m_histogramWidget->setActive(true);
+        m_localHistBtn->setText("Hist");
         int lvl = m_imageView->autoStretchLevel();
         if (lvl == 0) {
             m_autoBtn->setText("Auto L");
@@ -277,6 +284,14 @@ void WorkspaceImageWindow::onModeButtonClicked(int id) {
         m_imageView->setDisplayMode(ImageView::LocalHist);
         m_histogramWidget->setActive(false);
         m_autoBtn->setText("Auto");
+        int lvl = m_imageView->localHistLevel();
+        if (lvl == 0) {
+            m_localHistBtn->setText("Hist L");
+        } else if (lvl == 1) {
+            m_localHistBtn->setText("Hist M");
+        } else {
+            m_localHistBtn->setText("Hist H");
+        }
         updateHistogram();
     }
 }
@@ -299,6 +314,7 @@ void WorkspaceImageWindow::onStretchParamsChangedInView(double b, double w, doub
     if (m_imageView->displayMode() == ImageView::Autostretch) {
         m_autoBtn->setChecked(true);
         m_histogramWidget->setActive(true);
+        m_localHistBtn->setText("Hist");
         int lvl = m_imageView->autoStretchLevel();
         if (lvl == 0) {
             m_autoBtn->setText("Auto L");
@@ -311,14 +327,24 @@ void WorkspaceImageWindow::onStretchParamsChangedInView(double b, double w, doub
         m_stretchBtn->setChecked(true);
         m_histogramWidget->setActive(true);
         m_autoBtn->setText("Auto");
+        m_localHistBtn->setText("Hist");
     } else if (m_imageView->displayMode() == ImageView::LocalHist) {
         m_localHistBtn->setChecked(true);
         m_histogramWidget->setActive(false);
         m_autoBtn->setText("Auto");
+        int lvl = m_imageView->localHistLevel();
+        if (lvl == 0) {
+            m_localHistBtn->setText("Hist L");
+        } else if (lvl == 1) {
+            m_localHistBtn->setText("Hist M");
+        } else {
+            m_localHistBtn->setText("Hist H");
+        }
     } else {
         m_normalBtn->setChecked(true);
         m_histogramWidget->setActive(false);
         m_autoBtn->setText("Auto");
+        m_localHistBtn->setText("Hist");
     }
 }
 
