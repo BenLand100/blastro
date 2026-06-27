@@ -95,6 +95,11 @@ WorkspaceImageWindow::WorkspaceImageWindow(const QString& name, const WorkspaceE
     m_stretchBtn->setStyleSheet(segmentedStyle);
     m_localHistBtn->setStyleSheet(segmentedStyle);
 
+    // Ensure m_autoBtn has a fixed minimum width to contain "Auto H" without shifting layout
+    QFontMetrics autoFm(m_autoBtn->font());
+    int minW = autoFm.horizontalAdvance("Auto H") + 24;
+    m_autoBtn->setMinimumWidth(minW);
+
     // Order: [Normal] [Auto] [Manual] [Hist]
     m_modeGroup->addButton(m_normalBtn, 0);
     m_modeGroup->addButton(m_autoBtn, 2);
@@ -382,14 +387,11 @@ void WorkspaceImageWindow::resizeEvent(QResizeEvent* event) {
 
 void WorkspaceImageWindow::updateNameLabelText() {
     if (!m_nameBtn) return;
-    int availableWidth = m_nameBtn->width();
-    if (availableWidth <= 0) {
-        availableWidth = width() / 3.0;
-    }
-    availableWidth = std::max(20, availableWidth - 10);
+    int maxAllowedWidth = width() / 3.0;
+    maxAllowedWidth = std::max(20, maxAllowedWidth - 10);
     
     QFontMetrics fm(m_nameBtn->font());
-    QString elided = fm.elidedText(m_name, Qt::ElideMiddle, availableWidth);
+    QString elided = fm.elidedText(m_name, Qt::ElideMiddle, maxAllowedWidth);
     m_nameBtn->setText(elided);
     m_nameBtn->setToolTip(m_name);
 }
