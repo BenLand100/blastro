@@ -6,7 +6,11 @@
 #include "core/ImageBatch.h"
 #include <stdexcept>
 #include <iostream>
-#include <QDebug>
+#include "core/Logger.h"
+#include <omp.h>
+#include <QElapsedTimer>
+#include <atomic>
+#include "core/Preferences.h"
 
 namespace blastro {
 
@@ -29,14 +33,9 @@ void RegisterAlgorithm::execute(WorkspaceRegistry& workspace,
     std::string detectionMethod = config.at("detection_method");
     double snrMin = std::stod(config.at("snr_min"));
     double minFwhm = std::stod(config.at("min_fwhm"));
-
-    qInfo() << "[Register] Starting execution. Target batch:" << QString::fromStdString(inputName) << ", reference frame index:" << refFrameIdx << ", detection method:" << QString::fromStdString(detectionMethod) << ", min SNR:" << snrMin << ", min FWHM:" << minFwhm;
-
-    // Advanced parameters
     int maxStars = std::stoi(config.at("max_stars"));
     double maxEccentricity = std::stod(config.at("max_eccentricity"));
     double matchTolerance = std::stod(config.at("match_tolerance"));
-    // Note: simplex parameters are used in StarFinder if fitting
     bool fastFit = (detectionMethod == "centroid");
 
     WorkspaceElement inputElem = workspace.getElement(inputName);
@@ -46,6 +45,25 @@ void RegisterAlgorithm::execute(WorkspaceRegistry& workspace,
 
     auto batch = std::get<ImageBatchPtr>(inputElem);
     int count = batch->count();
+
+    int threads = config.count("threads") ? std::stoi(config.at("threads")) : -1;
+    if (threads <= 0) {
+        threads = Preferences::instance().getThreadCount();
+    }
+    if (threads > 0) {
+        omp_set_num_threads(threads);
+    }
+
+    Logger::header("Register", QString("Starting execution. Target batch: %1, reference frame index: %2, detection method: %3, min SNR: %4, min FWHM: %5, threads: %6")
+                   .arg(QString::fromStdString(inputName))
+                   .arg(refFrameIdx)
+                   .arg(QString::fromStdString(detectionMethod))
+                   .arg(snrMin)
+                   .arg(minFwhm)
+                   .arg(threads));
+
+    QElapsedTimer totalTimer;
+    totalTimer.start();
 
     if (refFrameIdx < 0 || refFrameIdx >= count) {
         throw std::out_of_range("Reference frame index is out of bounds");
@@ -68,7 +86,8 @@ void RegisterAlgorithm::execute(WorkspaceRegistry& workspace,
                                  std::to_string(refStars.size()) + " stars (need at least 3)");
     }
 
-    qInfo() << "[Register] Reference frame index" << refFrameIdx << "registered successfully with" << refStars.size() << "stars.";
+    Logger::success("Register", QString("Reference frame index %1 registered successfully with %2 stars.")
+                    .arg(refFrameIdx).arg(refStars.size()));
 
     // Save reference frame metadata
     FrameMetadata refMeta;
@@ -81,32 +100,55 @@ void RegisterAlgorithm::execute(WorkspaceRegistry& workspace,
     batch->setFrameMetadata(refFrameIdx, refMeta);
 
     // 2. Loop through all other selected frames and register them against the reference frame
-    for (int i = 0; i < count; ++i) {
-        if (progress) {
-            progress(static_cast<int>(5.0 + 95.0 * i / count));
-        }
+    std::atomic<int> processedFrames(0);
 
+    #pragma omp parallel for
+    for (int i = 0; i < count; ++i) {
         // Reference frame is already registered (0 offset)
         if (i == refFrameIdx) {
+            if (progress) {
+                int localProcessed = ++processedFrames;
+                progress(static_cast<int>(5.0 + 95.0 * localProcessed / count));
+            }
             continue;
         }
 
         // Skip unselected frames
         if (!batch->isFrameSelected(i)) {
+            if (progress) {
+                int localProcessed = ++processedFrames;
+                progress(static_cast<int>(5.0 + 95.0 * localProcessed / count));
+            }
             continue;
         }
 
         try {
+            QElapsedTimer frameTimer;
+            frameTimer.start();
+
             ImageVariant targetFrame = batch->getImage(i);
             auto targetChannel = getRegistrationChannel(targetFrame);
-            if (!targetChannel) continue;
+            if (!targetChannel) {
+                batch->clearCache(i);
+                if (progress) {
+                    int localProcessed = ++processedFrames;
+                    progress(static_cast<int>(5.0 + 95.0 * localProcessed / count));
+                }
+                continue;
+            }
 
             // Detect stars in target frame
             std::vector<Star> targetStars = StarFinder::findStars(targetChannel, maxStars, snrMin, fastFit, 10, minFwhm, maxEccentricity);
-            qInfo() << "[Register] Frame" << i << "detected" << targetStars.size() << "stars";
+            
             if (targetStars.size() < 3) {
-                qWarning() << "[Register] Frame" << i << "failed: only" << targetStars.size() << "stars detected. Frame auto-deselected.";
+                Logger::warning("Register", QString("Frame %1 failed: only %2 stars detected. Frame auto-deselected.")
+                                .arg(i).arg(targetStars.size()));
                 batch->setFrameSelected(i, false); // auto-deselect failed frames
+                batch->clearCache(i);
+                if (progress) {
+                    int localProcessed = ++processedFrames;
+                    progress(static_cast<int>(5.0 + 95.0 * localProcessed / count));
+                }
                 continue;
             }
 
@@ -124,19 +166,34 @@ void RegisterAlgorithm::execute(WorkspaceRegistry& workspace,
                 
                 batch->setFrameMetadata(i, meta);
                 
-                qInfo() << "[Register] Registered frame" << i << "(" << QString::fromStdString(batch->frameName(i)) << ") -> dx=" << alignRes.dx << ", dy=" << alignRes.dy << ", theta=" << alignRes.theta << "(matched" << alignRes.matchedStars << "stars, RMS=" << alignRes.rmsError << ")";
+                Logger::info("Register", QString("Registered frame %1/%2 (%3) -> dx=%4, dy=%5, theta=%6 (matched %7 stars, RMS=%8, took %9 ms)")
+                             .arg(i + 1).arg(count)
+                             .arg(QString::fromStdString(batch->frameName(i)))
+                             .arg(alignRes.dx).arg(alignRes.dy).arg(alignRes.theta)
+                             .arg(alignRes.matchedStars).arg(alignRes.rmsError).arg(frameTimer.elapsed()));
             } else {
-                qWarning() << "[Register] Constellation matching failed for frame" << i << ". Frame auto-deselected.";
+                Logger::warning("Register", QString("Constellation matching failed for frame %1. Frame auto-deselected.")
+                                .arg(i));
                 batch->setFrameSelected(i, false); // auto-deselect failed frames
             }
         } catch (const std::exception& e) {
-            qWarning() << "[Register] Exception registering frame" << i << ":" << e.what() << ". Frame auto-deselected.";
+            Logger::warning("Register", QString("Exception registering frame %1: %2. Frame auto-deselected.")
+                            .arg(i).arg(e.what()));
             batch->setFrameSelected(i, false);
+        }
+
+        // Evict frame from RAM to keep memory usage flat
+        batch->clearCache(i);
+
+        if (progress) {
+            int localProcessed = ++processedFrames;
+            progress(static_cast<int>(5.0 + 95.0 * localProcessed / count));
         }
     }
 
     if (progress) progress(100);
-    qInfo() << "[Register] Star Registration completed.";
+    Logger::success("Register", QString("Star Registration completed in %1 ms (avg %2 ms per frame).")
+                    .arg(totalTimer.elapsed()).arg(totalTimer.elapsed() / (count > 0 ? count : 1)));
 }
 
 } // namespace blastro

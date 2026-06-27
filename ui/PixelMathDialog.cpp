@@ -122,7 +122,7 @@ PixelMathDialog::PixelMathDialog(WorkspaceRegistry& workspace, QWidget* parent)
     });
 
     connect(runBtn, &QPushButton::clicked, this, &PixelMathDialog::onRunClicked);
-    connect(closeBtn, &QPushButton::clicked, this, &QWidget::close);
+    connect(closeBtn, &QPushButton::clicked, this, &AlgorithmDialog::onClose);
 }
 
 void PixelMathDialog::onUseSingleExpressionChanged(bool checked) {

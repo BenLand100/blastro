@@ -26,9 +26,9 @@ private slots:
 private:
     QComboBox* m_targetInputCombo;
     QLineEdit* m_outputName;
+    QString m_outputPattern;
     QComboBox* m_methodCombo;
     QComboBox* m_rejectionCombo;
-    QComboBox* m_modeCombo = nullptr;
     QDoubleSpinBox* m_lowClipSpin;
     QDoubleSpinBox* m_highClipSpin;
     QLabel* m_clipLabel = nullptr;

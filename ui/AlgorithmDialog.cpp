@@ -1,4 +1,5 @@
 #include "AlgorithmDialog.h"
+#include <QMdiSubWindow>
 
 namespace blastro {
 
@@ -39,6 +40,18 @@ AlgorithmDialog::AlgorithmDialog(WorkspaceRegistry& workspace, QWidget* parent)
         "QGroupBox::title { subcontrol-origin: margin; left: 10px; }"
         "QGroupBox:disabled { color: #4a4a4a; border-color: #2c2c2c; }"
     );
+}
+
+void AlgorithmDialog::onClose() {
+    QWidget* p = parentWidget();
+    while (p) {
+        if (auto sub = qobject_cast<QMdiSubWindow*>(p)) {
+            sub->close();
+            return;
+        }
+        p = p->parentWidget();
+    }
+    close();
 }
 
 } // namespace blastro

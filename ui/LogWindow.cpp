@@ -1,4 +1,5 @@
 #include "LogWindow.h"
+#include "core/Logger.h"
 #include <QVBoxLayout>
 #include <QDateTime>
 #include <QScrollBar>
@@ -32,9 +33,22 @@ LogWindow::LogWindow(QWidget* parent)
     setLayout(layout);
 
     registerInstance(this);
+
+    Logger::registerCallback([](Logger::Level level, const QString& channel, const QString& message) {
+        QString levelStr;
+        switch (level) {
+            case Logger::Level::Info:    levelStr = "info"; break;
+            case Logger::Level::Success: levelStr = "success"; break;
+            case Logger::Level::Warning: levelStr = "warning"; break;
+            case Logger::Level::Error:   levelStr = "error"; break;
+            case Logger::Level::Header:  levelStr = "header"; break;
+        }
+        LogWindow::appendRichMessage(channel, message, levelStr);
+    });
 }
 
 LogWindow::~LogWindow() {
+    Logger::registerCallback(nullptr);
     unregisterInstance(this);
 }
 
@@ -106,6 +120,77 @@ void LogWindow::handleMessage(int type, const QString& msg) {
                                .arg(color)
                                .arg(prefix)
                                .arg(msg.toHtmlEscaped());
+
+    m_textEdit->appendHtml(formattedMsg);
+
+    if (autoScroll) {
+        bar->setValue(bar->maximum());
+    }
+}
+
+void LogWindow::appendRichMessage(const QString& channel, const QString& message, const QString& levelStr) {
+    QMutexLocker locker(&s_mutex);
+    if (s_instance) {
+        QMetaObject::invokeMethod(s_instance, "handleRichMessage",
+                                  Qt::QueuedConnection,
+                                  Q_ARG(QString, channel),
+                                  Q_ARG(QString, message),
+                                  Q_ARG(QString, levelStr));
+    }
+}
+
+void LogWindow::handleRichMessage(const QString& channel, const QString& message, const QString& levelStr) {
+    QString timeStr = QDateTime::currentDateTime().toString("hh:mm:ss.zzz");
+    QString channelColor = "#00bcd4"; // cyan
+    QString msgColor = "#e0e0e0";     // light gray
+    QString msgWeight = "normal";
+    
+    if (levelStr == "success") {
+        channelColor = "#4caf50";    // soft green
+        msgColor = "#a3e2a5";        // light green
+        msgWeight = "bold";
+    } else if (levelStr == "warning") {
+        channelColor = "#ffb300";    // soft yellow
+        msgColor = "#ffe082";        // light yellow
+    } else if (levelStr == "error") {
+        channelColor = "#f44336";    // soft red
+        msgColor = "#ffcdd2";        // light red
+        msgWeight = "bold";
+    } else if (levelStr == "header") {
+        channelColor = "#e040fb";    // soft magenta
+        msgColor = "#f3e5f5";        // light magenta
+        msgWeight = "bold";
+    }
+
+    // Check if scrollbar is at the bottom before appending
+    QScrollBar* bar = m_textEdit->verticalScrollBar();
+    bool autoScroll = (bar->value() == bar->maximum());
+
+    // Format message with HTML for coloring and layout
+    QString formattedMsg;
+    if (levelStr == "header") {
+        formattedMsg = QString("<div style=\"margin-top: 8px; margin-bottom: 4px;\">"
+                               "<span style=\"color:#666666;\">[%1]</span> "
+                               "<span style=\"color:%2; font-weight:bold;\">[%3]</span> "
+                               "<span style=\"color:%4; font-weight:%5;\">%6</span>"
+                               "</div>")
+                           .arg(timeStr)
+                           .arg(channelColor)
+                           .arg(channel)
+                           .arg(msgColor)
+                           .arg(msgWeight)
+                           .arg(message.toHtmlEscaped());
+    } else {
+        formattedMsg = QString("<span style=\"color:#666666;\">[%1]</span> "
+                               "<span style=\"color:%2; font-weight:bold;\">[%3]</span> "
+                               "<span style=\"color:%4; font-weight:%5;\">%6</span>")
+                           .arg(timeStr)
+                           .arg(channelColor)
+                           .arg(channel)
+                           .arg(msgColor)
+                           .arg(msgWeight)
+                           .arg(message.toHtmlEscaped());
+    }
 
     m_textEdit->appendHtml(formattedMsg);
 

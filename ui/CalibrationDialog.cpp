@@ -9,7 +9,7 @@ namespace blastro {
 CalibrationDialog::CalibrationDialog(WorkspaceRegistry& workspace, QWidget* parent)
     : AlgorithmDialog(workspace, parent) {
     
-    setWindowTitle("Calibration Configuration");
+    setWindowTitle("Image Calibration");
     resize(360, 240);
 
 
@@ -18,25 +18,42 @@ CalibrationDialog::CalibrationDialog(WorkspaceRegistry& workspace, QWidget* pare
     mainLayout->setContentsMargins(15, 15, 15, 15);
     mainLayout->setSpacing(12);
 
+    m_outputPattern = "{input}_calibrated";
+
     QFormLayout* formLayout = new QFormLayout();
     formLayout->setLabelAlignment(Qt::AlignRight | Qt::AlignVCenter);
-    formLayout->setFormAlignment(Qt::AlignLeft | Qt::AlignTop);
     formLayout->setSpacing(8);
 
     // 1. Target Input ComboBox (Images or Batches)
     m_targetInputCombo = new QComboBox(this);
+    m_targetInputCombo->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     
     // 2. Output Name LineEdit
     m_outputName = new QLineEdit(this);
-    m_outputName->setText("calibrated_result");
+    m_outputName->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     
     // Calibration comboboxes
     m_biasCombo = new QComboBox(this);
+    m_biasCombo->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     m_darkCombo = new QComboBox(this);
+    m_darkCombo->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     m_flatCombo = new QComboBox(this);
+    m_flatCombo->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     
     refreshWorkspaceElements();
     
+    connect(m_targetInputCombo, &QComboBox::currentTextChanged, this, [this](const QString& text) {
+        if (!text.isEmpty()) {
+            QString name = m_outputPattern;
+            name.replace("{input}", text);
+            m_outputName->setText(name);
+        }
+    });
+
+    connect(m_outputName, &QLineEdit::textEdited, this, [this](const QString& text) {
+        m_outputPattern = text;
+    });
+
     formLayout->addRow("Target Input:", m_targetInputCombo);
     formLayout->addRow("Output Name:", m_outputName);
     formLayout->addRow("Bias Image (Optional):", m_biasCombo);
@@ -50,7 +67,7 @@ CalibrationDialog::CalibrationDialog(WorkspaceRegistry& workspace, QWidget* pare
     btnLayout->addStretch(1);
     
     QPushButton* closeBtn = new QPushButton("Close", this);
-    connect(closeBtn, &QPushButton::clicked, this, &QWidget::close);
+    connect(closeBtn, &QPushButton::clicked, this, &AlgorithmDialog::onClose);
     btnLayout->addWidget(closeBtn);
 
     QPushButton* runBtn = new QPushButton("Run", this);

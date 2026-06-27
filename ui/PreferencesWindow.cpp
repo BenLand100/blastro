@@ -1,6 +1,7 @@
 #include "PreferencesWindow.h"
 #include "core/Preferences.h"
 #include <QVBoxLayout>
+#include <QMdiSubWindow>
 #include <QFormLayout>
 #include <QHBoxLayout>
 #include <QGroupBox>
@@ -16,12 +17,13 @@ PreferencesWindow::PreferencesWindow(QWidget* parent)
     : QWidget(parent) {
     
     setWindowTitle("BLastro Preferences");
-    resize(500, 380);
+    resize(500, 480);
 
     setStyleSheet(
         "QWidget { background-color: #202020; color: #ffffff; }"
         "QLabel { background-color: transparent; color: #aaaaaa; font-size: 11px; }"
         "QLineEdit { background-color: #3a3a3a; color: #ffffff; border: 1px solid #555555; padding: 3px 6px; border-radius: 3px; font-size: 11px; }"
+        "QSpinBox { background-color: #3a3a3a; color: #ffffff; border: 1px solid #555555; padding: 3px 6px; border-radius: 3px; font-size: 11px; }"
         "QCheckBox { background-color: transparent; color: #ffffff; font-size: 11px; }"
         "QPushButton { background-color: #3a3a3a; color: #ffffff; border: 1px solid #555555; padding: 4px 10px; border-radius: 3px; font-size: 11px; font-weight: bold; }"
         "QPushButton:hover { background-color: #4a4a4a; }"
@@ -94,12 +96,38 @@ PreferencesWindow::PreferencesWindow(QWidget* parent)
 
     mainLayout->addWidget(pathsGroup);
 
+    // Group 3: System Resource Settings
+    QGroupBox* sysGroup = new QGroupBox("System Resource Settings", this);
+    QFormLayout* sysForm = new QFormLayout(sysGroup);
+    sysForm->setSpacing(8);
+
+    m_threadSpin = new QSpinBox(this);
+    m_threadSpin->setRange(1, 64);
+    sysForm->addRow("Maximum CPU Cores / Threads:", m_threadSpin);
+
+    m_ramSpin = new QSpinBox(this);
+    m_ramSpin->setRange(1, 512);
+    m_ramSpin->setSuffix(" GB");
+    sysForm->addRow("Maximum RAM Limit:", m_ramSpin);
+
+    mainLayout->addWidget(sysGroup);
+
     // Bottom buttons
     QHBoxLayout* btnLayout = new QHBoxLayout();
     btnLayout->addStretch(1);
 
     QPushButton* closeBtn = new QPushButton("Close", this);
-    connect(closeBtn, &QPushButton::clicked, this, &QWidget::close);
+    connect(closeBtn, &QPushButton::clicked, this, [this]() {
+        QObject* current = this;
+        while (current) {
+            if (auto sub = qobject_cast<QMdiSubWindow*>(current)) {
+                sub->close();
+                return;
+            }
+            current = current->parent();
+        }
+        close();
+    });
     btnLayout->addWidget(closeBtn);
 
     QPushButton* saveBtn = new QPushButton("Save", this);
@@ -117,6 +145,8 @@ PreferencesWindow::PreferencesWindow(QWidget* parent)
     m_tensorflowChk->setChecked(prefs.getPclLoadTensorflow());
     m_tempEdit->setText(QString::fromStdString(prefs.getTemporaryFolder()));
     m_intermediateEdit->setText(QString::fromStdString(prefs.getIntermediateFolder()));
+    m_threadSpin->setValue(prefs.getThreadCount());
+    m_ramSpin->setValue(prefs.getMaxRamUsage());
 }
 
 void PreferencesWindow::onBrowseModule() {
@@ -162,6 +192,8 @@ void PreferencesWindow::onSaveClicked() {
     prefs.setPclLoadTensorflow(m_tensorflowChk->isChecked());
     prefs.setTemporaryFolder(m_tempEdit->text().trimmed().toStdString());
     prefs.setIntermediateFolder(m_intermediateEdit->text().trimmed().toStdString());
+    prefs.setThreadCount(m_threadSpin->value());
+    prefs.setMaxRamUsage(m_ramSpin->value());
     prefs.save();
 
     // Find main window status bar to show a message
@@ -177,6 +209,15 @@ void PreferencesWindow::onSaveClicked() {
     }
 
     QMessageBox::information(this, "Preferences Saved", "BLastro preferences have been saved successfully.");
+    
+    QObject* current = this;
+    while (current) {
+        if (auto sub = qobject_cast<QMdiSubWindow*>(current)) {
+            sub->close();
+            return;
+        }
+        current = current->parent();
+    }
     close();
 }
 

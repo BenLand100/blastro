@@ -30,9 +30,29 @@ QMdiSubWindow* WorkspaceArea::addElementView(const QString& name, const Workspac
     sub->setAttribute(Qt::WA_DeleteOnClose);
     sub->resize(600, 450);
     
-    // Connect window destroyed signal to clean up our local map
+    // Calculate cascading position: offset in x and y sequentially, then offset in x and repeat
+    int startX = 15;
+    int startY = 15;
+    int stepX = 25;
+    int stepY = 25;
+    int colOffset = 150;
+    int maxSteps = 6;
+    int maxCols = 4;
+
+    int x = startX + (m_cascadeColumn * colOffset) + (m_cascadeIndex * stepX);
+    int y = startY + (m_cascadeIndex * stepY);
+    sub->move(x, y);
+
+    m_cascadeIndex++;
+    if (m_cascadeIndex >= maxSteps) {
+        m_cascadeIndex = 0;
+        m_cascadeColumn = (m_cascadeColumn + 1) % maxCols;
+    }
+    
+    // Connect window destroyed signal to clean up our local map and notify
     connect(sub, &QObject::destroyed, this, [this, name]() {
         m_subWindows.remove(name);
+        emit elementClosed(name);
     });
 
     m_subWindows[name] = sub;
@@ -44,6 +64,7 @@ void WorkspaceArea::removeElementView(const QString& name) {
     if (m_subWindows.contains(name)) {
         QMdiSubWindow* sub = m_subWindows[name];
         m_subWindows.remove(name);
+        disconnect(sub, &QObject::destroyed, this, nullptr);
         sub->close();
     }
 }
@@ -59,6 +80,7 @@ void WorkspaceArea::renameElementView(const QString& oldName, const QString& new
         disconnect(sub, &QObject::destroyed, this, nullptr);
         connect(sub, &QObject::destroyed, this, [this, newName]() {
             m_subWindows.remove(newName);
+            emit elementClosed(newName);
         });
 
         if (auto* win = qobject_cast<WorkspaceImageWindow*>(sub->widget())) {

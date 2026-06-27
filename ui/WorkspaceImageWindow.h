@@ -16,6 +16,7 @@ public:
     ~WorkspaceImageWindow() override = default;
 
     ImageVariant currentImage() const;
+    ImageVariant originalImage() const;
     ImageView* imageView() const { return m_imageView; }
     WorkspaceElement element() const { return m_element; }
     QWidget* viewportWidget() const { return m_viewportWidget; }

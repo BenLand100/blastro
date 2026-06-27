@@ -1,4 +1,5 @@
 #include "BackgroundExtractionDialog.h"
+#include "core/Preferences.h"
 #include "algorithms/BackgroundExtractor.h"
 #include "WorkspaceArea.h"
 #include <QVBoxLayout>
@@ -127,7 +128,7 @@ BackgroundExtractionDialog::BackgroundExtractionDialog(WorkspaceRegistry& worksp
     btnLayout->addStretch(1);
     
     QPushButton* closeBtn = new QPushButton("Close", this);
-    connect(closeBtn, &QPushButton::clicked, this, &QWidget::close);
+    connect(closeBtn, &QPushButton::clicked, this, &AlgorithmDialog::onClose);
     btnLayout->addWidget(closeBtn);
 
     QPushButton* applyBtn = new QPushButton("Apply", this);
@@ -176,11 +177,8 @@ void BackgroundExtractionDialog::updatePreview() {
     auto win = getActiveImageWindow();
     if (!win) return;
 
-    ImageVariant current = win->currentImage();
-    if (current.index() == 0 && std::get<0>(current) == nullptr) return;
-
-    // Run the extraction on a fresh clone of the original base image
-    ImageVariant baseImg = win->imageView()->currentImage(); // Gets current displayed frame
+    ImageVariant baseImg = win->originalImage();
+    if (baseImg.index() == 0 && std::get<0>(baseImg) == nullptr) return;
     
     // Perform extraction
     int order = m_orderSpin->value();
@@ -189,12 +187,12 @@ void BackgroundExtractionDialog::updatePreview() {
 
     ImageVariant previewResult;
 
-    if (std::holds_alternative<GrayscaleImagePtr>(current)) {
-        auto gray = std::get<GrayscaleImagePtr>(current);
+    if (std::holds_alternative<GrayscaleImagePtr>(baseImg)) {
+        auto gray = std::get<GrayscaleImagePtr>(baseImg);
         auto cloned = cloneGrayscale(gray);
         previewResult = BackgroundExtractor::extractGrayscale(cloned, order, sigma, m_sampleFrac, m_huberDelta, equalize);
-    } else if (std::holds_alternative<RGBImagePtr>(current)) {
-        auto rgb = std::get<RGBImagePtr>(current);
+    } else if (std::holds_alternative<RGBImagePtr>(baseImg)) {
+        auto rgb = std::get<RGBImagePtr>(baseImg);
         auto cloned = cloneRGB(rgb);
         previewResult = BackgroundExtractor::extractRGB(cloned, order, sigma, m_sampleFrac, m_huberDelta, equalize);
     }
@@ -214,15 +212,15 @@ void BackgroundExtractionDialog::onApplyClicked() {
     double sigma = m_sigmaSpin->value();
     bool equalize = m_equalizeChk->isChecked();
 
-    ImageVariant current = win->currentImage();
+    ImageVariant baseImg = win->originalImage();
     ImageVariant finalResult;
 
-    if (std::holds_alternative<GrayscaleImagePtr>(current)) {
-        auto gray = std::get<GrayscaleImagePtr>(current);
+    if (std::holds_alternative<GrayscaleImagePtr>(baseImg)) {
+        auto gray = std::get<GrayscaleImagePtr>(baseImg);
         auto cloned = cloneGrayscale(gray);
         finalResult = BackgroundExtractor::extractGrayscale(cloned, order, sigma, m_sampleFrac, m_huberDelta, equalize);
-    } else if (std::holds_alternative<RGBImagePtr>(current)) {
-        auto rgb = std::get<RGBImagePtr>(current);
+    } else if (std::holds_alternative<RGBImagePtr>(baseImg)) {
+        auto rgb = std::get<RGBImagePtr>(baseImg);
         auto cloned = cloneRGB(rgb);
         finalResult = BackgroundExtractor::extractRGB(cloned, order, sigma, m_sampleFrac, m_huberDelta, equalize);
     }
@@ -273,7 +271,7 @@ void BackgroundExtractionDialog::onPrefsClicked() {
 
     QSpinBox* threadSpin = new QSpinBox(&dlg);
     threadSpin->setRange(1, 64);
-    threadSpin->setValue(m_threads > 0 ? m_threads : QThread::idealThreadCount());
+    threadSpin->setValue(m_threads > 0 ? m_threads : Preferences::instance().getThreadCount());
     form->addRow("Computation Threads:", threadSpin);
 
     QHBoxLayout* btns = new QHBoxLayout();

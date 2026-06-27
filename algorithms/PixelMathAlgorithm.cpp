@@ -4,7 +4,9 @@
 #include <stdexcept>
 #include <iostream>
 #include <omp.h>
-#include <QDebug>
+#include "core/Logger.h"
+#include <QElapsedTimer>
+#include "core/Preferences.h"
 
 namespace blastro {
 
@@ -32,11 +34,29 @@ void PixelMathAlgorithm::execute(WorkspaceRegistry& workspace,
     std::string outputName = config.count("output_name") ? config.at("output_name") : "PixelMath_Output";
     bool isRGB = config.count("color_space") ? (config.at("color_space") == "RGB") : true;
 
-    qInfo() << "[PixelMath] Starting execution. Output color space:" << (isRGB ? "RGB" : "Grayscale") << ", target output name:" << QString::fromStdString(outputName);
+    int threads = config.count("threads") ? std::stoi(config.at("threads")) : -1;
+    if (threads <= 0) {
+        threads = Preferences::instance().getThreadCount();
+    }
+    if (threads > 0) {
+        omp_set_num_threads(threads);
+    }
+
+    Logger::header("PixelMath", QString("Starting execution. Output color space: %1, target output name: %2, threads: %3")
+                   .arg(isRGB ? "RGB" : "Grayscale")
+                   .arg(QString::fromStdString(outputName))
+                   .arg(threads));
+
+    QElapsedTimer totalTimer;
+    totalTimer.start();
     if (isRGB) {
-        qInfo() << "[PixelMath] Expressions: R =" << QString::fromStdString(exprR) << ", G =" << QString::fromStdString(exprG) << ", B =" << QString::fromStdString(exprB);
+        Logger::info("PixelMath", QString("Expressions: R = %1, G = %2, B = %3")
+                     .arg(QString::fromStdString(exprR))
+                     .arg(QString::fromStdString(exprG))
+                     .arg(QString::fromStdString(exprB)));
     } else {
-        qInfo() << "[PixelMath] Expression: K =" << QString::fromStdString(exprK);
+        Logger::info("PixelMath", QString("Expression: K = %1")
+                     .arg(QString::fromStdString(exprK)));
     }
 
     if (isRGB && exprR.empty() && exprG.empty() && exprB.empty()) {
@@ -285,7 +305,9 @@ void PixelMathAlgorithm::execute(WorkspaceRegistry& workspace,
         workspace.unregisterElement(outputName);
     }
     workspace.registerElement(outputName, outputElem);
-    qInfo() << "[PixelMath] Finished execution. Registered output image:" << QString::fromStdString(outputName);
+    if (progress) progress(100);
+    Logger::success("PixelMath", QString("Finished execution in %1 ms. Registered output: %2")
+                    .arg(totalTimer.elapsed()).arg(QString::fromStdString(outputName)));
 }
 
 } // namespace blastro

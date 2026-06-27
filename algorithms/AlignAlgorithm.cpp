@@ -9,6 +9,9 @@
 #include <iostream>
 #include <omp.h>
 #include <QDebug>
+#include <QElapsedTimer>
+#include "core/Preferences.h"
+#include "core/Logger.h"
 
 namespace blastro {
 
@@ -18,10 +21,19 @@ void AlignAlgorithm::execute(WorkspaceRegistry& workspace,
     std::string inputName = config.at("input_name");
     std::string outputName = config.at("output_name");
     double drizzleScale = std::stod(config.at("drizzle_scale"));
-    int threads = std::stoi(config.at("threads"));
+    int threads = config.count("threads") ? std::stoi(config.at("threads")) : -1;
+    if (threads <= 0) {
+        threads = Preferences::instance().getThreadCount();
+    }
     bool evictCache = config.at("evict_cache") == "true";
 
-    qInfo() << "[Align] Starting execution. Input batch:" << QString::fromStdString(inputName) << ", output batch:" << QString::fromStdString(outputName) << ", drizzle scale:" << drizzleScale << ", threads:" << threads;
+    Logger::header("Align", QString("Starting execution. Input batch: %1, output batch: %2, drizzle scale: %3, threads: %4")
+                   .arg(QString::fromStdString(inputName))
+                   .arg(QString::fromStdString(outputName))
+                   .arg(drizzleScale).arg(threads));
+
+    QElapsedTimer totalTimer;
+    totalTimer.start();
 
     // Set thread count for OpenMP parallel loops
     if (threads > 0) {
@@ -61,7 +73,8 @@ void AlignAlgorithm::execute(WorkspaceRegistry& workspace,
 
         FrameMetadata meta = batch->frameMetadata(i);
         if (!meta.registered) {
-            std::cerr << "[AlignAlgorithm] Warning: frame " << i << " is selected but not registered. Skipping." << std::endl;
+            Logger::warning("Align", QString("Frame %1 (%2) is selected but not registered. Skipping.")
+                            .arg(i).arg(QString::fromStdString(batch->frameName(i))));
             names[i] = batch->frameName(i) + "_unregistered";
             filepaths[i] = "";
             continue;
@@ -122,7 +135,9 @@ void AlignAlgorithm::execute(WorkspaceRegistry& workspace,
         workspace.unregisterElement(outputName);
     }
     workspace.registerElement(outputName, alignedBatch);
-    qInfo() << "[Align] Finished alignment. Aligned" << count << "frames into temporary directory:" << QString::fromStdString(tempDir) << ". Registered output batch:" << QString::fromStdString(outputName);
+    Logger::success("Align", QString("Finished alignment. Aligned %1 frames in %2 ms (avg %3 ms per frame). Registered output batch: %4")
+                    .arg(count).arg(totalTimer.elapsed()).arg(totalTimer.elapsed() / (count > 0 ? count : 1))
+                    .arg(QString::fromStdString(outputName)));
 }
 
 } // namespace blastro

@@ -9,7 +9,10 @@
 #include <vector>
 #include <algorithm>
 #include <QFileInfo>
-#include <QDebug>
+#include "core/Logger.h"
+#include <omp.h>
+#include <QElapsedTimer>
+#include "core/Preferences.h"
 
 namespace blastro {
 
@@ -144,7 +147,24 @@ void DebayerAlgorithm::execute(WorkspaceRegistry& workspace,
     std::string method = config.at("method");
     bool greenEqualize = config.at("green_equalize") == "true";
 
-    qInfo() << "[Debayer] Starting execution. Input:" << QString::fromStdString(inputName) << ", output:" << QString::fromStdString(outputName) << ", pattern:" << QString::fromStdString(pattern) << ", method:" << QString::fromStdString(method) << ", green equalize:" << greenEqualize;
+    int threads = config.count("threads") ? std::stoi(config.at("threads")) : -1;
+    if (threads <= 0) {
+        threads = Preferences::instance().getThreadCount();
+    }
+    if (threads > 0) {
+        omp_set_num_threads(threads);
+    }
+
+    Logger::header("Debayer", QString("Starting execution. Input: %1, output: %2, pattern: %3, method: %4, green equalize: %5, threads: %6")
+                   .arg(QString::fromStdString(inputName))
+                   .arg(QString::fromStdString(outputName))
+                   .arg(QString::fromStdString(pattern))
+                   .arg(QString::fromStdString(method))
+                   .arg(greenEqualize ? "true" : "false")
+                   .arg(threads));
+
+    QElapsedTimer totalTimer;
+    totalTimer.start();
 
     WorkspaceElement inputElem = workspace.getElement(inputName);
 
@@ -203,6 +223,9 @@ void DebayerAlgorithm::execute(WorkspaceRegistry& workspace,
 
         if (progress) progress(100);
         workspace.registerElement(outputName, debayeredBatch);
+        Logger::success("Debayer", QString("Finished batch debayering (%1 frames) in %2 ms (avg %3 ms per frame). Registered output: %4")
+                        .arg(count).arg(totalTimer.elapsed()).arg(totalTimer.elapsed() / (count > 0 ? count : 1))
+                        .arg(QString::fromStdString(outputName)));
     } else {
         // Single image debayering
         GrayscaleImagePtr gray = nullptr;
@@ -222,7 +245,8 @@ void DebayerAlgorithm::execute(WorkspaceRegistry& workspace,
         workspace.registerElement(outputName, debRGB);
         if (progress) progress(100);
     }
-    qInfo() << "[Debayer] Finished debayering. Registered output:" << QString::fromStdString(outputName);
+    Logger::success("Debayer", QString("Finished debayering in %1 ms. Registered output: %2")
+                    .arg(totalTimer.elapsed()).arg(QString::fromStdString(outputName)));
 }
 
 } // namespace blastro

@@ -1,4 +1,5 @@
 #include "GhsDialog.h"
+#include "core/Preferences.h"
 #include "algorithms/GhsAlgorithm.h"
 #include "WorkspaceArea.h"
 #include <QVBoxLayout>
@@ -145,7 +146,7 @@ GhsDialog::GhsDialog(WorkspaceRegistry& workspace, QWidget* parent)
     btnLayout->addStretch(1);
     
     QPushButton* closeBtn = new QPushButton("Close", this);
-    connect(closeBtn, &QPushButton::clicked, this, &QWidget::close);
+    connect(closeBtn, &QPushButton::clicked, this, &AlgorithmDialog::onClose);
     btnLayout->addWidget(closeBtn);
 
     QPushButton* applyBtn = new QPushButton("Apply", this);
@@ -194,8 +195,8 @@ void GhsDialog::updatePreview() {
     auto win = getActiveImageWindow();
     if (!win) return;
 
-    ImageVariant current = win->currentImage();
-    if (current.index() == 0 && std::get<0>(current) == nullptr) return;
+    ImageVariant baseImg = win->originalImage();
+    if (baseImg.index() == 0 && std::get<0>(baseImg) == nullptr) return;
 
     double D = m_dSpin->value();
     double SP = m_spSpin->value();
@@ -203,14 +204,14 @@ void GhsDialog::updatePreview() {
 
     ImageVariant previewResult;
 
-    if (std::holds_alternative<GrayscaleImagePtr>(current)) {
-        auto gray = std::get<GrayscaleImagePtr>(current);
+    if (std::holds_alternative<GrayscaleImagePtr>(baseImg)) {
+        auto gray = std::get<GrayscaleImagePtr>(baseImg);
         auto cloned = cloneGrayscale(gray);
-        previewResult = GhsAlgorithm::stretchGrayscale(cloned, 0.0, 1.0, SP, D, 1);
-    } else if (std::holds_alternative<RGBImagePtr>(current)) {
-        auto rgb = std::get<RGBImagePtr>(current);
+        previewResult = GhsAlgorithm::stretchGrayscale(cloned, 0.0, 1.0, SP, D, static_cast<int>(b));
+    } else if (std::holds_alternative<RGBImagePtr>(baseImg)) {
+        auto rgb = std::get<RGBImagePtr>(baseImg);
         auto cloned = cloneRGB(rgb);
-        previewResult = GhsAlgorithm::stretchRGB(cloned, 0.0, 1.0, SP, D, 1, m_colorPreserving);
+        previewResult = GhsAlgorithm::stretchRGB(cloned, 0.0, 1.0, SP, D, static_cast<int>(b), m_colorPreserving);
     }
 
     win->setPreviewImage(previewResult);
@@ -228,17 +229,17 @@ void GhsDialog::onApplyClicked() {
     double SP = m_spSpin->value();
     double b = m_bSpin->value();
 
-    ImageVariant current = win->currentImage();
+    ImageVariant baseImg = win->originalImage();
     ImageVariant finalResult;
 
-    if (std::holds_alternative<GrayscaleImagePtr>(current)) {
-        auto gray = std::get<GrayscaleImagePtr>(current);
+    if (std::holds_alternative<GrayscaleImagePtr>(baseImg)) {
+        auto gray = std::get<GrayscaleImagePtr>(baseImg);
         auto cloned = cloneGrayscale(gray);
-        finalResult = GhsAlgorithm::stretchGrayscale(cloned, 0.0, 1.0, SP, D, 1);
-    } else if (std::holds_alternative<RGBImagePtr>(current)) {
-        auto rgb = std::get<RGBImagePtr>(current);
+        finalResult = GhsAlgorithm::stretchGrayscale(cloned, 0.0, 1.0, SP, D, static_cast<int>(b));
+    } else if (std::holds_alternative<RGBImagePtr>(baseImg)) {
+        auto rgb = std::get<RGBImagePtr>(baseImg);
         auto cloned = cloneRGB(rgb);
-        finalResult = GhsAlgorithm::stretchRGB(cloned, 0.0, 1.0, SP, D, 1, m_colorPreserving);
+        finalResult = GhsAlgorithm::stretchRGB(cloned, 0.0, 1.0, SP, D, static_cast<int>(b), m_colorPreserving);
     }
 
     if (m_previewChk->isChecked()) {
@@ -291,7 +292,7 @@ void GhsDialog::onPrefsClicked() {
 
     QSpinBox* threadSpin = new QSpinBox(&dlg);
     threadSpin->setRange(1, 64);
-    threadSpin->setValue(m_threads > 0 ? m_threads : QThread::idealThreadCount());
+    threadSpin->setValue(m_threads > 0 ? m_threads : Preferences::instance().getThreadCount());
     form->addRow("Computation Threads:", threadSpin);
 
     QHBoxLayout* btns = new QHBoxLayout();

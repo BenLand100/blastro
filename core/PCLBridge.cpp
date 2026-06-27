@@ -1,4 +1,5 @@
 #include "core/PCLBridge.h"
+#include "core/Logger.h"
 #include "ui/MainWindow.h"
 #include "core/PCLStubs.h"
 #include <pcl/api/APIInterface.h>
@@ -39,48 +40,69 @@ namespace blastro {
 
 static bool g_verbosePCL = false;
 
-class PCLDebug {
+class PCLBridgeLogger {
 public:
-    PCLDebug(bool enabled) {
-        if (enabled) {
-            m_dbg.emplace(qDebug());
-        }
+    PCLBridgeLogger(Logger::Level level, bool enabled = true)
+        : m_level(level), m_enabled(enabled), m_dbg(&m_buffer) {
+        m_dbg.noquote();
     }
     
-    PCLDebug& operator()() {
+    PCLBridgeLogger& operator()() {
         return *this;
     }
     
     template <typename T>
-    PCLDebug& operator<<(const T& t) {
-        if (m_dbg) {
-            *m_dbg << t;
+    PCLBridgeLogger& operator<<(const T& t) {
+        if (m_enabled) {
+            m_dbg << t;
         }
         return *this;
     }
     
-    PCLDebug& operator<<(QDebug& (*f)(QDebug&)) {
-        if (m_dbg) {
-            *m_dbg << f;
+    // Support QDebug manipulators like std::endl or Qt-specific formatting manipulators
+    PCLBridgeLogger& operator<<(QDebug& (*f)(QDebug&)) {
+        if (m_enabled) {
+            m_dbg << f;
         }
         return *this;
     }
     
-    PCLDebug& noquote() {
-        if (m_dbg) {
-            m_dbg->noquote();
+    PCLBridgeLogger& noquote() {
+        if (m_enabled) {
+            m_dbg.noquote();
         }
         return *this;
     }
 
+    ~PCLBridgeLogger() {
+        if (m_enabled && !m_buffer.isEmpty()) {
+            QString msg = m_buffer.trimmed();
+            if (msg.startsWith("[PCL Bridge]")) {
+                msg = msg.mid(12).trimmed();
+            } else if (msg.startsWith("[PCL Console]")) {
+                msg = msg.mid(13).trimmed();
+            } else if (msg.startsWith("[PCL Thread Console]")) {
+                msg = msg.mid(20).trimmed();
+            }
+            Logger::log(m_level, "PCL Bridge", msg);
+        }
+    }
+
 private:
-    std::optional<QDebug> m_dbg;
+    Logger::Level m_level;
+    bool m_enabled;
+    QString m_buffer;
+    QDebug m_dbg;
 };
 
 } // namespace blastro
 
 #undef qDebug
-#define qDebug ::blastro::PCLDebug(::blastro::g_verbosePCL)
+#define qDebug ::blastro::PCLBridgeLogger(::blastro::Logger::Level::Info, ::blastro::g_verbosePCL)
+#undef qInfo
+#define qInfo ::blastro::PCLBridgeLogger(::blastro::Logger::Level::Info)
+#undef qWarning
+#define qWarning ::blastro::PCLBridgeLogger(::blastro::Logger::Level::Warning)
 
 namespace blastro {
 

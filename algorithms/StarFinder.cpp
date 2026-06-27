@@ -63,6 +63,32 @@ static double evaluateGaussian(double x, double y, double mean_x, double mean_y,
     return A * std::exp(- (rot_x * rot_x) / (2.0 * sig_x * sig_x) - (rot_y * rot_y) / (2.0 * sig_y * sig_y)) + B;
 }
 
+static double estimateBackgroundNoise(const float* data, int numPixels) {
+    // Sample a subset of pixels to be fast (up to 20000 pixels)
+    int sampleSize = std::min(numPixels, 20000);
+    std::vector<float> sample(sampleSize);
+    int step = numPixels / sampleSize;
+    for (int i = 0; i < sampleSize; ++i) {
+        sample[i] = data[i * step];
+    }
+    
+    // Compute median
+    std::sort(sample.begin(), sample.end());
+    double median = sample[sampleSize / 2];
+    
+    // Compute MAD (Median Absolute Deviation)
+    std::vector<double> absDiffs(sampleSize);
+    for (int i = 0; i < sampleSize; ++i) {
+        absDiffs[i] = std::abs(sample[i] - median);
+    }
+    std::sort(absDiffs.begin(), absDiffs.end());
+    double mad = absDiffs[sampleSize / 2];
+    
+    // For normal distribution, sigma = 1.4826 * MAD
+    double sigma = 1.4826 * mad;
+    return sigma;
+}
+
 std::vector<Star> StarFinder::findStars(GrayscaleImagePtr img,
                                        int maxStars,
                                        double snrMin,
@@ -92,6 +118,9 @@ std::vector<Star> StarFinder::findStars(GrayscaleImagePtr img,
     double mean = sum / numPixels;
     double stddev = std::sqrt(std::max(0.0, (sumSq / numPixels) - (mean * mean)));
     double threshold = mean + 3.0 * stddev;
+
+    // Robust estimate of background noise standard deviation for SNR calculations
+    double globalNoiseSigma = std::max(estimateBackgroundNoise(data, numPixels), 1e-5);
 
     // 2. Identify candidate regions above mean + 3*stddev
     std::vector<float> reg_search(numPixels, 0.0f);
@@ -173,8 +202,9 @@ std::vector<Star> StarFinder::findStars(GrayscaleImagePtr img,
                 }
             }
 
-            // SNR Check
-            if (patchMin <= 0.0 || (patchMax / patchMin) < snrMin) {
+            // SNR Check (noise-based)
+            double amplitude = patchMax - patchMin;
+            if (amplitude <= 0.0 || (amplitude / globalNoiseSigma) < snrMin) {
                 continue;
             }
 
@@ -267,7 +297,7 @@ std::vector<Star> StarFinder::findStars(GrayscaleImagePtr img,
                     finalY += mean_y;
 
                     // Validate fit outputs
-                    if (dist < 2.0 && fwhm > minFwhm && eccentricity < maxEccentricity && star_lvl > 0.0 && (bkg_lvl > 0.0) && ((star_lvl / bkg_lvl) > snrMin)) {
+                    if (dist < 2.0 && fwhm > minFwhm && eccentricity < maxEccentricity && star_lvl > 0.0 && ((star_lvl / globalNoiseSigma) > snrMin)) {
                         fitSuccess = true;
                     }
                 }

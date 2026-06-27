@@ -8,6 +8,11 @@
 #include <iostream>
 
 void blastroMessageHandler(QtMsgType type, const QMessageLogContext& context, const QString& msg) {
+    // Filter out harmless internal Qt/KDE file dialog warnings to keep logs clean
+    if (msg.contains("No node found for item that was just removed")) {
+        return;
+    }
+
     // Write to standard error / standard output first (preserves terminal logs)
     std::string txt = msg.toStdString();
     switch (type) {
@@ -37,7 +42,6 @@ void blastroMessageHandler(QtMsgType type, const QMessageLogContext& context, co
 }
 
 int main(int argc, char* argv[]) {
-    qInstallMessageHandler(blastroMessageHandler);
 
     if (argc > 3 && (std::strcmp(argv[1], "--test-process") == 0 || std::strcmp(argv[1], "--run-plugin") == 0)) {
         QApplication app(argc, argv);

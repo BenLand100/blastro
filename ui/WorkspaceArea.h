@@ -34,9 +34,12 @@ public:
 
 signals:
     void elementRenameRequested(const QString& oldName, const QString& newName);
+    void elementClosed(const QString& name);
 
 private:
     QMap<QString, QMdiSubWindow*> m_subWindows;
+    int m_cascadeIndex = 0;
+    int m_cascadeColumn = 0;
 };
 
 } // namespace blastro

@@ -9,7 +9,10 @@
 #include <cmath>
 #include <stdexcept>
 #include <vector>
-#include <QDebug>
+#include <omp.h>
+#include "core/Logger.h"
+#include <QElapsedTimer>
+#include "core/Preferences.h"
 
 namespace blastro {
 
@@ -53,7 +56,8 @@ static ImageVariant loadPatch(ImageBatchPtr batch, int idx, int xStart, int ySta
         try {
             return fits.readImagePatch(filepath, xStart, yStart, patchW, patchH);
         } catch (const std::exception& e) {
-            qWarning() << "[Stacking] Failed to read patch from disk for" << QString::fromStdString(filepath) << ":" << e.what() << ". Falling back to in-memory crop.";
+            Logger::warning("Stacking", QString("Failed to read patch from disk for %1: %2. Falling back to in-memory crop.")
+                            .arg(QString::fromStdString(filepath)).arg(e.what()));
         }
     }
     // Fallback: load full image from batch and crop
@@ -223,6 +227,25 @@ void StackingAlgorithm::execute(WorkspaceRegistry& workspace,
     std::string mode = config.count("stacking_mode") ? config.at("stacking_mode") : "chunked";
     int patchSize = config.count("patch_size") ? std::stoi(config.at("patch_size")) : 1024;
 
+    int threads = config.count("threads") ? std::stoi(config.at("threads")) : -1;
+    if (threads <= 0) {
+        threads = Preferences::instance().getThreadCount();
+    }
+    if (threads > 0) {
+        omp_set_num_threads(threads);
+    }
+
+    Logger::header("Stacking", QString("Starting execution. Input batch: %1, output master: %2, method: %3, rejection: %4, mode: %5, threads: %6")
+                   .arg(QString::fromStdString(inputName))
+                   .arg(QString::fromStdString(outputName))
+                   .arg(QString::fromStdString(method))
+                   .arg(QString::fromStdString(rejection))
+                   .arg(QString::fromStdString(mode))
+                   .arg(threads));
+
+    QElapsedTimer totalTimer;
+    totalTimer.start();
+
     WorkspaceElement inputElem = workspace.getElement(inputName);
     if (!std::holds_alternative<ImageBatchPtr>(inputElem)) {
         throw std::runtime_error("Input workspace element is not an image batch");
@@ -242,16 +265,14 @@ void StackingAlgorithm::execute(WorkspaceRegistry& workspace,
 
     int numSelected = selectedIndices.size();
 
-    qInfo() << "[Stacking] Starting execution. Input batch:" << QString::fromStdString(inputName)
-            << ", output master:" << QString::fromStdString(outputName)
-            << ", method:" << QString::fromStdString(method)
-            << ", rejection:" << QString::fromStdString(rejection)
-            << ", mode:" << QString::fromStdString(mode);
-    qInfo() << "[Stacking] Total frames in batch:" << batch->count() << ", selected frames for stacking:" << numSelected;
+    Logger::info("Stacking", QString("Total frames in batch: %1, selected frames for stacking: %2")
+                 .arg(batch->count()).arg(numSelected));
     if (rejection == "sigma" || rejection == "winsorized_sigma") {
-        qInfo() << "[Stacking] Rejection thresholds: low =" << sigmaLow << ", high =" << sigmaHigh;
+        Logger::info("Stacking", QString("Rejection thresholds: low = %1, high = %2")
+                     .arg(sigmaLow).arg(sigmaHigh));
     } else if (rejection == "quantile") {
-        qInfo() << "[Stacking] Rejection quantiles: low =" << quantileLow << ", high =" << quantileHigh;
+        Logger::info("Stacking", QString("Rejection quantiles: low = %1, high = %2")
+                     .arg(quantileLow).arg(quantileHigh));
     }
 
     // Check if the first frame is RGB to determine color mode
@@ -277,8 +298,8 @@ void StackingAlgorithm::execute(WorkspaceRegistry& workspace,
         }
         std::string tempOutPath = tempDir + "/" + outputName + ".fits";
 
-        qInfo() << "[Stacking] Running in 2D Chunked mode with patch size:" << patchSize;
-        qInfo() << "[Stacking] Pre-allocating master FITS at:" << QString::fromStdString(tempOutPath);
+        Logger::info("Stacking", QString("Running in 2D Chunked mode with patch size: %1").arg(patchSize));
+        Logger::info("Stacking", QString("Pre-allocating master FITS at: %1").arg(QString::fromStdString(tempOutPath)));
 
         // Pre-allocate the master FITS file on disk
         FitsIO fits;
@@ -406,13 +427,15 @@ void StackingAlgorithm::execute(WorkspaceRegistry& workspace,
         }
 
         // Load the completed master back into memory and register it
-        qInfo() << "[Stacking] Loading completed master from disk...";
+        Logger::info("Stacking", "Loading completed master from disk...");
         ImageVariant finalMaster = fits.readImage(tempOutPath);
         WorkspaceElement elem = std::visit([](auto&& arg) -> WorkspaceElement {
             return arg;
         }, finalMaster);
         workspace.registerElement(outputName, elem);
-        qInfo() << "[Stacking] Finished chunked stacking. Registered output master:" << QString::fromStdString(outputName);
+        Logger::success("Stacking", QString("Finished chunked stacking of %1 frames in %2 ms. Registered output master: %3")
+                        .arg(numSelected).arg(totalTimer.elapsed())
+                        .arg(QString::fromStdString(outputName)));
     } else {
         // Full RAM stacking (original method)
         if (isRGB) {
@@ -462,7 +485,9 @@ void StackingAlgorithm::execute(WorkspaceRegistry& workspace,
             auto stackedGray = stackChannels(channels, method, rejection, sigmaLow, sigmaHigh, quantileLow, quantileHigh, progress);
             workspace.registerElement(outputName, stackedGray);
         }
-        qInfo() << "[Stacking] Finished RAM stacking. Registered output master:" << QString::fromStdString(outputName);
+        Logger::success("Stacking", QString("Finished RAM stacking of %1 frames in %2 ms. Registered output master: %3")
+                        .arg(numSelected).arg(totalTimer.elapsed())
+                        .arg(QString::fromStdString(outputName)));
     }
 }
 

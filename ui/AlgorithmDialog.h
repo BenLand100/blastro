@@ -16,6 +16,9 @@ public:
     virtual std::string algorithmName() const = 0;
     virtual void refreshWorkspaceElements() {}
 
+public slots:
+    void onClose();
+
 signals:
     void algorithmExecuted(const std::string& name, const std::map<std::string, std::string>& config);
 

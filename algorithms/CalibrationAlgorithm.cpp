@@ -8,7 +8,12 @@
 #include <cmath>
 #include <stdexcept>
 #include <vector>
-#include <QDebug>
+#include <atomic>
+#include <mutex>
+#include "core/Logger.h"
+#include <QElapsedTimer>
+#include <omp.h>
+#include "core/Preferences.h"
 
 namespace blastro {
 
@@ -16,6 +21,7 @@ static GrayscaleImagePtr calibrateChannel(GrayscaleImagePtr input,
                                          GrayscaleImagePtr bias,
                                          GrayscaleImagePtr dark,
                                          GrayscaleImagePtr flat,
+                                         float flatMean = 0.0f,
                                          std::function<void(int)> progressSub = nullptr) {
     if (!input) {
         throw std::runtime_error("Input channel is null");
@@ -43,11 +49,11 @@ static GrayscaleImagePtr calibrateChannel(GrayscaleImagePtr input,
     const float* darkData = dark ? dark->buffer()->data() : nullptr;
     const float* flatData = flat ? flat->buffer()->data() : nullptr;
 
-    // Calculate flat mean for normalization to preserve overall signal level
-    float flatMean = 1.0f;
-    if (flatData) {
+    // Calculate flat mean for normalization if not pre-calculated
+    if (flatData && flatMean <= 0.0f) {
         double sum = 0.0;
         int numPixels = w * h;
+        #pragma omp parallel for reduction(+:sum)
         for (int i = 0; i < numPixels; ++i) {
             sum += flatData[i];
         }
@@ -57,18 +63,25 @@ static GrayscaleImagePtr calibrateChannel(GrayscaleImagePtr input,
         }
     }
 
+    float invFlatMean = 1.0f;
+    if (flatData) {
+        invFlatMean = 1.0f / flatMean;
+    }
+
     int numPixels = w * h;
+    std::atomic<int> processed(0);
+    int lastPercent = 0;
+    std::mutex progressMutex;
+
+    #pragma omp parallel for
     for (int i = 0; i < numPixels; ++i) {
-        if (progressSub && (i % (numPixels / 20) == 0)) {
-            progressSub(static_cast<int>(100.0 * i / numPixels));
-        }
         float val = inData[i];
         if (darkData) val -= darkData[i];
         if (biasData) val -= biasData[i];
 
         if (flatData) {
             // Apply normalized flat: Calibrated = (Input - Dark - Bias) / (Flat / FlatMean)
-            float fVal = flatData[i] / flatMean;
+            float fVal = flatData[i] * invFlatMean;
             if (std::abs(fVal) < 1e-6f) {
                 outData[i] = 0.0f; // Division-by-zero safety
             } else {
@@ -77,6 +90,24 @@ static GrayscaleImagePtr calibrateChannel(GrayscaleImagePtr input,
         } else {
             outData[i] = val;
         }
+
+        // Thread-safe, throttled progress updates in 2% steps (every 1/50th of total pixels)
+        if (progressSub) {
+            int localProcessed = ++processed;
+            if (localProcessed % (numPixels / 50) == 0 || localProcessed == numPixels) {
+                int percent = static_cast<int>(100.0 * localProcessed / numPixels);
+                std::lock_guard<std::mutex> lock(progressMutex);
+                if (percent > lastPercent) {
+                    lastPercent = percent;
+                    progressSub(percent);
+                }
+            }
+        }
+    }
+
+    // Ensure final 100% progress update is sent
+    if (progressSub && lastPercent < 100) {
+        progressSub(100);
     }
 
     return std::make_shared<GrayscaleImage>(outBuffer);
@@ -85,6 +116,9 @@ static GrayscaleImagePtr calibrateChannel(GrayscaleImagePtr input,
 void CalibrationAlgorithm::execute(WorkspaceRegistry& workspace, 
                                    const std::map<std::string, std::string>& config, 
                                    ProgressCallback progress) {
+    QElapsedTimer totalTimer;
+    totalTimer.start();
+
     std::string inputName = config.at("input_name");
     std::string outputName = config.at("output_name");
     
@@ -92,10 +126,22 @@ void CalibrationAlgorithm::execute(WorkspaceRegistry& workspace,
     std::string darkName = config.at("dark_name");
     std::string flatName = config.at("flat_name");
 
-    qInfo() << "[Calibration] Starting execution. Input:" << QString::fromStdString(inputName) << ", output:" << QString::fromStdString(outputName);
-    qInfo() << "[Calibration] Calibration frames - Bias:" << (biasName.empty() ? "<None>" : QString::fromStdString(biasName))
-            << ", Dark:" << (darkName.empty() ? "<None>" : QString::fromStdString(darkName))
-            << ", Flat:" << (flatName.empty() ? "<None>" : QString::fromStdString(flatName));
+    int threads = config.count("threads") ? std::stoi(config.at("threads")) : -1;
+    if (threads <= 0) {
+        threads = Preferences::instance().getThreadCount();
+    }
+    if (threads > 0) {
+        omp_set_num_threads(threads);
+    }
+
+    Logger::header("Calibration", QString("Starting execution. Input: %1, output: %2, threads: %3")
+                   .arg(QString::fromStdString(inputName))
+                   .arg(QString::fromStdString(outputName))
+                   .arg(threads));
+    Logger::info("Calibration", QString("Calibration frames - Bias: %1, Dark: %2, Flat: %3")
+                 .arg(biasName.empty() ? "<None>" : QString::fromStdString(biasName))
+                 .arg(darkName.empty() ? "<None>" : QString::fromStdString(darkName))
+                 .arg(flatName.empty() ? "<None>" : QString::fromStdString(flatName)));
 
     WorkspaceElement inputElem = workspace.getElement(inputName);
 
@@ -129,8 +175,9 @@ void CalibrationAlgorithm::execute(WorkspaceRegistry& workspace,
         }
     }
 
-    // 3. Resolve optional Flat frame
+    // 3. Resolve optional Flat frame and pre-calculate channel means once
     GrayscaleImagePtr flatR = nullptr, flatG = nullptr, flatB = nullptr;
+    float flatMeanR = 0.0f, flatMeanG = 0.0f, flatMeanB = 0.0f;
     if (!flatName.empty() && workspace.contains(flatName)) {
         WorkspaceElement elem = workspace.getElement(flatName);
         if (std::holds_alternative<GrayscaleImagePtr>(elem)) {
@@ -142,12 +189,37 @@ void CalibrationAlgorithm::execute(WorkspaceRegistry& workspace,
             flatG = img->g();
             flatB = img->b();
         }
+
+        auto calcMean = [](GrayscaleImagePtr flatImg, const QString& channelLabel) -> float {
+            if (!flatImg) return 1.0f;
+            QElapsedTimer meanTimer;
+            meanTimer.start();
+            int w = flatImg->width();
+            int h = flatImg->height();
+            int numPixels = w * h;
+            const float* flatData = flatImg->buffer()->data();
+            double sum = 0.0;
+            #pragma omp parallel for reduction(+:sum)
+            for (int i = 0; i < numPixels; ++i) {
+                sum += flatData[i];
+            }
+            float mean = static_cast<float>(sum / numPixels);
+            mean = std::abs(mean) < 1e-6f ? 1.0f : mean;
+            Logger::info("Calibration", QString("Calculated master flat %1 mean: %2 (took %3 ms)")
+                         .arg(channelLabel).arg(mean).arg(meanTimer.elapsed()));
+            return mean;
+        };
+
+        flatMeanR = calcMean(flatR, "Red");
+        flatMeanG = calcMean(flatG, "Green");
+        flatMeanB = calcMean(flatB, "Blue");
     }
 
     // 4. Perform Calibration based on input type
     if (std::holds_alternative<ImageBatchPtr>(inputElem)) {
         auto inputBatch = std::get<ImageBatchPtr>(inputElem);
         int count = inputBatch->count();
+        Logger::info("Calibration", QString("Calibrating batch of %1 frames...").arg(count));
         
         std::string tempDir = TempDirectory::createTempDir("calibrated");
         if (tempDir.empty()) {
@@ -157,22 +229,53 @@ void CalibrationAlgorithm::execute(WorkspaceRegistry& workspace,
         std::vector<std::string> names(count);
         std::vector<std::string> filepaths(count);
         
-        FitsIO writer;
+        // Dynamically estimate memory usage per frame
+        ImageVariant firstFrame = inputBatch->getImage(0);
+        int channels = std::holds_alternative<RGBImagePtr>(firstFrame) ? 3 : 1;
+        int frameW = 0, frameH = 0;
+        if (channels == 3) {
+            auto rgb = std::get<RGBImagePtr>(firstFrame);
+            frameW = rgb->width();
+            frameH = rgb->height();
+        } else {
+            auto gray = std::get<GrayscaleImagePtr>(firstFrame);
+            frameW = gray->width();
+            frameH = gray->height();
+        }
+        inputBatch->clearCache(0); // Evict first frame immediately
 
+        double memPerFrameBytes = 2.0 * channels * frameW * frameH * 4.0; // Input + Output
+        double maxRamBytes = Preferences::instance().getMaxRamUsage() * 1024.0 * 1024.0 * 1024.0;
+        int maxParallelFrames = static_cast<int>(maxRamBytes / memPerFrameBytes);
+        if (maxParallelFrames < 1) maxParallelFrames = 1;
+        int parallelFrames = std::min({maxParallelFrames, count, threads});
+
+        Logger::info("Calibration", QString("Parallel frame calibration: using %1 threads based on RAM limit of %2 GB (requires %3 MB per frame)")
+                     .arg(parallelFrames)
+                     .arg(Preferences::instance().getMaxRamUsage())
+                     .arg(static_cast<int>(memPerFrameBytes / (1024.0 * 1024.0))));
+
+        std::atomic<int> completedFrames(0);
+        std::mutex progressMutex;
+
+        #pragma omp parallel for num_threads(parallelFrames) schedule(dynamic)
         for (int i = 0; i < count; ++i) {
+            QElapsedTimer frameTimer;
+            frameTimer.start();
+            
             ImageVariant frame = inputBatch->getImage(i);
             ImageVariant calibratedFrame;
 
             bool frameRGB = std::holds_alternative<RGBImagePtr>(frame);
             if (frameRGB) {
                 auto rgb = std::get<RGBImagePtr>(frame);
-                auto calR = calibrateChannel(rgb->r(), biasR, darkR, flatR);
-                auto calG = calibrateChannel(rgb->g(), biasG, darkG, flatG);
-                auto calB = calibrateChannel(rgb->b(), biasB, darkB, flatB);
+                auto calR = calibrateChannel(rgb->r(), biasR, darkR, flatR, flatMeanR);
+                auto calG = calibrateChannel(rgb->g(), biasG, darkG, flatG, flatMeanG);
+                auto calB = calibrateChannel(rgb->b(), biasB, darkB, flatB, flatMeanB);
                 calibratedFrame = std::make_shared<RGBImage>(calR, calG, calB);
             } else {
                 auto gray = std::get<GrayscaleImagePtr>(frame);
-                calibratedFrame = calibrateChannel(gray, biasR, darkR, flatR);
+                calibratedFrame = calibrateChannel(gray, biasR, darkR, flatR, flatMeanR);
             }
 
             // Generate intermediate filename: e.g. light_001_calibrated.fits
@@ -180,8 +283,9 @@ void CalibrationAlgorithm::execute(WorkspaceRegistry& workspace,
             std::string outFilename = TempDirectory::getIntermediateFileName(origPath, "_calibrated", i);
             std::string fullOutPath = tempDir + "/" + outFilename;
 
+            FitsIO writer;
             if (!writer.writeImage(fullOutPath, calibratedFrame)) {
-                throw std::runtime_error("Failed to write intermediate calibrated frame to " + fullOutPath);
+                Logger::error("Calibration", QString("Failed to write intermediate calibrated frame to %1").arg(QString::fromStdString(fullOutPath)));
             }
 
             names[i] = inputBatch->frameName(i) + "_calibrated";
@@ -190,8 +294,15 @@ void CalibrationAlgorithm::execute(WorkspaceRegistry& workspace,
             // Evict frame from RAM to keep memory usage flat
             inputBatch->clearCache(i);
 
+            Logger::info("Calibration", QString("Frame %1/%2 (%3) calibrated and written to disk in %4 ms")
+                         .arg(i + 1).arg(count)
+                         .arg(QString::fromStdString(inputBatch->frameName(i)))
+                         .arg(frameTimer.elapsed()));
+
+            int done = ++completedFrames;
             if (progress) {
-                progress(static_cast<int>(100.0 * i / count));
+                std::lock_guard<std::mutex> lock(progressMutex);
+                progress(static_cast<int>(100.0 * done / count));
             }
         }
 
@@ -208,23 +319,28 @@ void CalibrationAlgorithm::execute(WorkspaceRegistry& workspace,
 
         if (progress) progress(100);
         workspace.registerElement(outputName, calibBatch);
+        Logger::success("Calibration", QString("Batch calibration of %1 frames completed in %2 ms (avg %3 ms per frame)")
+                        .arg(count).arg(totalTimer.elapsed()).arg(totalTimer.elapsed() / (count > 0 ? count : 1)));
     } else {
         // Single image calibration
+        Logger::info("Calibration", "Calibrating single image...");
         bool isRGB = std::holds_alternative<RGBImagePtr>(inputElem);
         if (isRGB) {
             auto rgb = std::get<RGBImagePtr>(inputElem);
-            auto calR = calibrateChannel(rgb->r(), biasR, darkR, flatR, [progress](int p) { if (progress) progress(p / 3); });
-            auto calG = calibrateChannel(rgb->g(), biasG, darkG, flatG, [progress](int p) { if (progress) progress(33 + p / 3); });
-            auto calB = calibrateChannel(rgb->b(), biasB, darkB, flatB, [progress](int p) { if (progress) progress(66 + p / 3); });
+            auto calR = calibrateChannel(rgb->r(), biasR, darkR, flatR, flatMeanR, [progress](int p) { if (progress) progress(p / 3); });
+            auto calG = calibrateChannel(rgb->g(), biasG, darkG, flatG, flatMeanG, [progress](int p) { if (progress) progress(33 + p / 3); });
+            auto calB = calibrateChannel(rgb->b(), biasB, darkB, flatB, flatMeanB, [progress](int p) { if (progress) progress(66 + p / 3); });
             auto calRGB = std::make_shared<RGBImage>(calR, calG, calB);
             workspace.registerElement(outputName, calRGB);
         } else {
             auto gray = std::get<GrayscaleImagePtr>(inputElem);
-            auto calGray = calibrateChannel(gray, biasR, darkR, flatR, progress);
+            auto calGray = calibrateChannel(gray, biasR, darkR, flatR, flatMeanR, progress);
             workspace.registerElement(outputName, calGray);
         }
+        Logger::success("Calibration", QString("Single image calibration completed in %1 ms").arg(totalTimer.elapsed()));
     }
-    qInfo() << "[Calibration] Finished calibration. Registered output:" << QString::fromStdString(outputName);
+    Logger::success("Calibration", QString("Finished calibration. Registered output: %1")
+                    .arg(QString::fromStdString(outputName)));
 }
 
 } // namespace blastro

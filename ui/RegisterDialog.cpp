@@ -1,4 +1,5 @@
 #include "RegisterDialog.h"
+#include "core/Preferences.h"
 #include <QVBoxLayout>
 #include <QFormLayout>
 #include <QHBoxLayout>
@@ -12,7 +13,7 @@ namespace blastro {
 RegisterDialog::RegisterDialog(WorkspaceRegistry& workspace, QWidget* parent)
     : AlgorithmDialog(workspace, parent) {
     
-    setWindowTitle("Star Registration Configuration");
+    setWindowTitle("Star Registration");
     resize(380, 240);
 
 
@@ -69,7 +70,7 @@ RegisterDialog::RegisterDialog(WorkspaceRegistry& workspace, QWidget* parent)
     btnLayout->addStretch(1);
     
     QPushButton* closeBtn = new QPushButton("Close", this);
-    connect(closeBtn, &QPushButton::clicked, this, &QWidget::close);
+    connect(closeBtn, &QPushButton::clicked, this, &AlgorithmDialog::onClose);
     btnLayout->addWidget(closeBtn);
 
     QPushButton* runBtn = new QPushButton("Run", this);
@@ -121,7 +122,7 @@ void RegisterDialog::onPrefsClicked() {
 
     QSpinBox* threadSpin = new QSpinBox(&dlg);
     threadSpin->setRange(1, 64);
-    threadSpin->setValue(m_threads > 0 ? m_threads : QThread::idealThreadCount());
+    threadSpin->setValue(m_threads > 0 ? m_threads : Preferences::instance().getThreadCount());
     form->addRow("Orchestration Threads:", threadSpin);
 
     QHBoxLayout* btns = new QHBoxLayout();

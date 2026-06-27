@@ -1,4 +1,5 @@
 #include "DebayerDialog.h"
+#include "core/Preferences.h"
 #include <QVBoxLayout>
 #include <QFormLayout>
 #include <QHBoxLayout>
@@ -13,10 +14,12 @@ namespace blastro {
 DebayerDialog::DebayerDialog(WorkspaceRegistry& workspace, QWidget* parent)
     : AlgorithmDialog(workspace, parent) {
     
-    setWindowTitle("Debayer Configuration");
+    setWindowTitle("Debayer");
     resize(360, 220);
 
 
+
+    m_outputPattern = "{input}_debayered";
 
     QVBoxLayout* mainLayout = new QVBoxLayout(this);
     mainLayout->setContentsMargins(15, 15, 15, 15);
@@ -34,8 +37,19 @@ DebayerDialog::DebayerDialog(WorkspaceRegistry& workspace, QWidget* parent)
 
     // 2. Output Name LineEdit
     m_outputName = new QLineEdit(this);
-    m_outputName->setText("debayered_result");
     formLayout->addRow("Output Name:", m_outputName);
+
+    connect(m_targetInputCombo, &QComboBox::currentTextChanged, this, [this](const QString& text) {
+        if (!text.isEmpty()) {
+            QString name = m_outputPattern;
+            name.replace("{input}", text);
+            m_outputName->setText(name);
+        }
+    });
+
+    connect(m_outputName, &QLineEdit::textEdited, this, [this](const QString& text) {
+        m_outputPattern = text;
+    });
 
     // 3. Bayer Pattern ComboBox
     m_patternCombo = new QComboBox(this);
@@ -63,7 +77,7 @@ DebayerDialog::DebayerDialog(WorkspaceRegistry& workspace, QWidget* parent)
     btnLayout->addStretch(1);
     
     QPushButton* closeBtn = new QPushButton("Close", this);
-    connect(closeBtn, &QPushButton::clicked, this, &QWidget::close);
+    connect(closeBtn, &QPushButton::clicked, this, &AlgorithmDialog::onClose);
     btnLayout->addWidget(closeBtn);
 
     QPushButton* runBtn = new QPushButton("Run", this);
@@ -90,7 +104,7 @@ void DebayerDialog::onPrefsClicked() {
 
     QSpinBox* threadSpin = new QSpinBox(&dlg);
     threadSpin->setRange(1, 64);
-    threadSpin->setValue(m_threads > 0 ? m_threads : QThread::idealThreadCount());
+    threadSpin->setValue(m_threads > 0 ? m_threads : Preferences::instance().getThreadCount());
     form->addRow("Computation Threads:", threadSpin);
 
     QHBoxLayout* btns = new QHBoxLayout();

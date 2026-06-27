@@ -249,10 +249,59 @@ RGBImagePtr BackgroundExtractor::extractRGB(RGBImagePtr src,
                                             bool equalize) {
     if (!src) return nullptr;
 
-    // Process each channel independently
-    auto extR = extractGrayscale(src->r(), order, sigmaCut, sampleFrac, huberDelta, equalize);
-    auto extG = extractGrayscale(src->g(), order, sigmaCut, sampleFrac, huberDelta, equalize);
-    auto extB = extractGrayscale(src->b(), order, sigmaCut, sampleFrac, huberDelta, equalize);
+    // 1. Process each channel independently WITHOUT individual equalization
+    auto extR = extractGrayscale(src->r(), order, sigmaCut, sampleFrac, huberDelta, false);
+    auto extG = extractGrayscale(src->g(), order, sigmaCut, sampleFrac, huberDelta, false);
+    auto extB = extractGrayscale(src->b(), order, sigmaCut, sampleFrac, huberDelta, false);
+
+    // 2. If equalize is true, apply coordinated equalization to neutralize the background
+    if (equalize) {
+        int w = src->width();
+        int h = src->height();
+        int numPixels = w * h;
+
+        auto getStats = [numPixels](GrayscaleImagePtr img, double& median, double& stddev) {
+            const float* data = img->buffer()->data();
+            std::vector<float> sorted(data, data + numPixels);
+            std::sort(sorted.begin(), sorted.end());
+            median = sorted[numPixels / 2];
+
+            double sumSq = 0.0;
+            for (int i = 0; i < numPixels; ++i) {
+                double diff = data[i] - median;
+                sumSq += diff * diff;
+            }
+            stddev = std::sqrt(sumSq / numPixels);
+        };
+
+        double medR, stdR;
+        double medG, stdG;
+        double medB, stdB;
+
+        getStats(extR, medR, stdR);
+        getStats(extG, medG, stdG);
+        getStats(extB, medB, stdB);
+
+        // Common pedestal based on the maximum noise standard deviation of the channels
+        double maxStd = std::max({stdR, stdG, stdB});
+        float commonPedestal = static_cast<float>(sigmaCut * maxStd);
+
+        // Coordinated offsets to shift all channel medians to the exact same pedestal
+        float offsetR = static_cast<float>(-medR + commonPedestal);
+        float offsetG = static_cast<float>(-medG + commonPedestal);
+        float offsetB = static_cast<float>(-medB + commonPedestal);
+
+        float* dataR = extR->buffer()->data();
+        float* dataG = extG->buffer()->data();
+        float* dataB = extB->buffer()->data();
+
+        #pragma omp parallel for
+        for (int i = 0; i < numPixels; ++i) {
+            dataR[i] += offsetR;
+            dataG[i] += offsetG;
+            dataB[i] += offsetB;
+        }
+    }
 
     return std::make_shared<RGBImage>(extR, extG, extB);
 }

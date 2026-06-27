@@ -20,12 +20,14 @@ public:
 
     // Thread-safe method to append messages
     static void appendMessage(QtMsgType type, const QString& msg);
+    static void appendRichMessage(const QString& channel, const QString& message, const QString& levelStr);
 
     // Append raw formatted text (e.g., for welcome screen/ASCII art)
     void appendRawText(const QString& text, const QString& colorHtml = "#e0e0e0");
 
 public slots:
     void handleMessage(int type, const QString& msg);
+    void handleRichMessage(const QString& channel, const QString& message, const QString& levelStr);
 
 private:
     QPlainTextEdit* m_textEdit;

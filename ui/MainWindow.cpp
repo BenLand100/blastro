@@ -119,6 +119,9 @@ MainWindow::MainWindow(QWidget* parent)
     // Connect to subwindow activation signal
     connect(m_workspaceArea, &QMdiArea::subWindowActivated, this, &MainWindow::onSubWindowActivated);
     connect(m_workspaceArea, &WorkspaceArea::elementRenameRequested, this, &MainWindow::onRenameElement);
+    connect(m_workspaceArea, &WorkspaceArea::elementClosed, this, [this](const QString& name) {
+        m_workspace.unregisterElement(name.toStdString());
+    });
 }
 
 void MainWindow::createMenus() {

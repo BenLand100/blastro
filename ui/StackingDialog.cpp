@@ -1,4 +1,5 @@
 #include "StackingDialog.h"
+#include "core/Preferences.h"
 #include <QVBoxLayout>
 #include <QFormLayout>
 #include <QHBoxLayout>
@@ -13,10 +14,12 @@ namespace blastro {
 StackingDialog::StackingDialog(WorkspaceRegistry& workspace, QWidget* parent)
     : AlgorithmDialog(workspace, parent) {
     
-    setWindowTitle("Image Stacking Configuration");
+    setWindowTitle("Image Stacking");
     resize(380, 260);
 
 
+
+    m_outputPattern = "{input}_stacked";
 
     QVBoxLayout* mainLayout = new QVBoxLayout(this);
     mainLayout->setContentsMargins(15, 15, 15, 15);
@@ -34,8 +37,19 @@ StackingDialog::StackingDialog(WorkspaceRegistry& workspace, QWidget* parent)
 
     // 2. Output Name LineEdit
     m_outputName = new QLineEdit(this);
-    m_outputName->setText("stacked_master");
     formLayout->addRow("Output Name:", m_outputName);
+
+    connect(m_targetInputCombo, &QComboBox::currentTextChanged, this, [this](const QString& text) {
+        if (!text.isEmpty()) {
+            QString name = m_outputPattern;
+            name.replace("{input}", text);
+            m_outputName->setText(name);
+        }
+    });
+
+    connect(m_outputName, &QLineEdit::textEdited, this, [this](const QString& text) {
+        m_outputPattern = text;
+    });
 
     // 3. Stacking Method ComboBox
     m_methodCombo = new QComboBox(this);
@@ -51,15 +65,9 @@ StackingDialog::StackingDialog(WorkspaceRegistry& workspace, QWidget* parent)
     m_rejectionCombo->addItem("Winsorized Sigma Clipping", "winsorized_sigma");
     m_rejectionCombo->addItem("Sigma Clipping", "sigma");
     m_rejectionCombo->addItem("Quantile Rejection", "quantile");
+    m_rejectionCombo->setCurrentIndex(1); // Default to Winsorized Sigma Clipping
     formLayout->addRow("Rejection Method:", m_rejectionCombo);
     connect(m_rejectionCombo, &QComboBox::currentTextChanged, this, &StackingDialog::onRejectionChanged);
-
-    // 5. Stacking Mode ComboBox
-    m_modeCombo = new QComboBox(this);
-    m_modeCombo->addItem("Full RAM Stacking", "ram");
-    m_modeCombo->addItem("2D Chunked (Patch-based)", "chunked");
-    m_modeCombo->setCurrentIndex(1); // default to chunked
-    formLayout->addRow("Stacking Mode:", m_modeCombo);
 
     // 5. Low / High Rejection range
     m_lowClipSpin = new QDoubleSpinBox(this);
@@ -100,7 +108,7 @@ StackingDialog::StackingDialog(WorkspaceRegistry& workspace, QWidget* parent)
     btnLayout->addStretch(1);
     
     QPushButton* closeBtn = new QPushButton("Close", this);
-    connect(closeBtn, &QPushButton::clicked, this, &QWidget::close);
+    connect(closeBtn, &QPushButton::clicked, this, &AlgorithmDialog::onClose);
     btnLayout->addWidget(closeBtn);
 
     QPushButton* runBtn = new QPushButton("Run", this);
@@ -162,20 +170,32 @@ void StackingDialog::onPrefsClicked() {
     else if (m_weightMethod == "fwhm") weightCombo->setCurrentIndex(2);
     form->addRow("Frame Weighting:", weightCombo);
 
+    QComboBox* modeCombo = new QComboBox(&dlg);
+    modeCombo->addItem("Full RAM Stacking", "ram");
+    modeCombo->addItem("2D Chunked Stacking (Disk-Backed)", "chunked");
+    int modeIdx = modeCombo->findData(QString::fromStdString(Preferences::instance().getStackingMode()));
+    if (modeIdx >= 0) modeCombo->setCurrentIndex(modeIdx);
+    form->addRow("Stacking Mode:", modeCombo);
+
     QSpinBox* patchSpin = new QSpinBox(&dlg);
     patchSpin->setRange(16, 4096);
     patchSpin->setSingleStep(16);
     patchSpin->setValue(m_patchSize);
     
     // Toggle the patch size spinbox's enabled state based on the selected stacking mode
-    bool isChunked = (m_modeCombo->currentData().toString() == "chunked");
+    bool isChunked = (modeCombo->currentData().toString() == "chunked");
     patchSpin->setEnabled(isChunked);
+    
+    connect(modeCombo, &QComboBox::currentIndexChanged, this, [patchSpin, modeCombo]() {
+        bool isChunked = (modeCombo->currentData().toString() == "chunked");
+        patchSpin->setEnabled(isChunked);
+    });
     
     form->addRow("Stack Patch Size:", patchSpin);
 
     QSpinBox* threadSpin = new QSpinBox(&dlg);
     threadSpin->setRange(1, 64);
-    threadSpin->setValue(m_threads > 0 ? m_threads : QThread::idealThreadCount());
+    threadSpin->setValue(m_threads > 0 ? m_threads : Preferences::instance().getThreadCount());
     form->addRow("Computation Threads:", threadSpin);
 
     QHBoxLayout* btns = new QHBoxLayout();
@@ -193,6 +213,8 @@ void StackingDialog::onPrefsClicked() {
         m_weightMethod = weightCombo->currentData().toString().toStdString();
         m_patchSize = patchSpin->value();
         m_threads = threadSpin->value();
+        Preferences::instance().setStackingMode(modeCombo->currentData().toString().toStdString());
+        Preferences::instance().save();
     }
 }
 
@@ -231,7 +253,7 @@ std::map<std::string, std::string> StackingDialog::getConfig() const {
     }
 
     config["weight_method"] = m_weightMethod;
-    config["stacking_mode"] = m_modeCombo->currentData().toString().toStdString();
+    config["stacking_mode"] = Preferences::instance().getStackingMode();
     config["patch_size"] = std::to_string(m_patchSize);
     config["threads"] = std::to_string(m_threads);
     return config;

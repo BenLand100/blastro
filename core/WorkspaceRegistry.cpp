@@ -1,4 +1,5 @@
 #include "WorkspaceRegistry.h"
+#include "Logger.h"
 #include <algorithm>
 
 namespace blastro {
@@ -8,6 +9,28 @@ bool WorkspaceRegistry::registerElement(const std::string& name, WorkspaceElemen
     if (m_registry.find(name) != m_registry.end()) return false; // Already exists
     
     m_registry[name] = element;
+
+    std::string typeStr = "Unknown Element";
+    std::string details;
+    if (std::holds_alternative<GrayscaleImagePtr>(element)) {
+        auto img = std::get<GrayscaleImagePtr>(element);
+        typeStr = "Grayscale Image";
+        details = img ? (std::to_string(img->width()) + "x" + std::to_string(img->height())) : "null";
+    } else if (std::holds_alternative<RGBImagePtr>(element)) {
+        auto img = std::get<RGBImagePtr>(element);
+        typeStr = "RGB Image";
+        details = img ? (std::to_string(img->width()) + "x" + std::to_string(img->height())) : "null";
+    } else if (std::holds_alternative<ImageBatchPtr>(element)) {
+        auto batch = std::get<ImageBatchPtr>(element);
+        typeStr = "Image Batch";
+        details = batch ? (std::to_string(batch->count()) + " frames") : "null";
+    }
+
+    Logger::info("Workspace", QString("Registered %1: '%2' (%3)")
+                 .arg(QString::fromStdString(typeStr))
+                 .arg(QString::fromStdString(name))
+                 .arg(QString::fromStdString(details)));
+
     return true;
 }
 
@@ -16,6 +39,9 @@ bool WorkspaceRegistry::unregisterElement(const std::string& name) {
     if (it == m_registry.end()) return false;
     
     m_registry.erase(it);
+
+    Logger::info("Workspace", QString("Unregistered '%1'").arg(QString::fromStdString(name)));
+
     return true;
 }
 
@@ -30,6 +56,11 @@ bool WorkspaceRegistry::renameElement(const std::string& oldName, const std::str
     auto element = it->second;
     m_registry.erase(it);
     m_registry[newName] = element;
+
+    Logger::info("Workspace", QString("Renamed '%1' to '%2'")
+                 .arg(QString::fromStdString(oldName))
+                 .arg(QString::fromStdString(newName)));
+
     return true;
 }
 

@@ -22,6 +22,7 @@ private slots:
 private:
     QComboBox* m_targetInputCombo;
     QLineEdit* m_outputName;
+    QString m_outputPattern;
     QComboBox* m_biasCombo;
     QComboBox* m_darkCombo;
     QComboBox* m_flatCombo;

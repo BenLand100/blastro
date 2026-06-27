@@ -8,6 +8,10 @@
 #include <stdexcept>
 #include <iostream>
 #include <QDebug>
+#include <omp.h>
+#include <QElapsedTimer>
+#include "core/Preferences.h"
+#include "core/Logger.h"
 
 namespace blastro {
 
@@ -32,10 +36,21 @@ void BackgroundExtractionAlgorithm::execute(WorkspaceRegistry& workspace,
     double sampleFrac = config.count("sample_frac") ? std::stod(config.at("sample_frac")) : 0.01;
     double huberDelta = config.count("huber_delta") ? std::stod(config.at("huber_delta")) : 5.0;
 
-    qInfo() << "[BackgroundExtraction] Starting. Input:" << QString::fromStdString(inputName)
-            << "Output:" << QString::fromStdString(outputName)
-            << "Order:" << order << "SigmaCut:" << sigmaCut
-            << "Equalize:" << equalize << "SampleFrac:" << sampleFrac;
+    int threads = config.count("threads") ? std::stoi(config.at("threads")) : -1;
+    if (threads <= 0) {
+        threads = Preferences::instance().getThreadCount();
+    }
+    if (threads > 0) {
+        omp_set_num_threads(threads);
+    }
+
+    Logger::header("BackgroundExtraction", QString("Starting BGE execution. Input: %1, Output: %2, Order: %3, SigmaCut: %4, Equalize: %5, Threads: %6")
+                   .arg(QString::fromStdString(inputName))
+                   .arg(QString::fromStdString(outputName))
+                   .arg(order).arg(sigmaCut).arg(equalize).arg(threads));
+
+    QElapsedTimer totalTimer;
+    totalTimer.start();
 
     WorkspaceElement inputElem = workspace.getElement(inputName);
     if (progress) progress(5);
@@ -109,9 +124,9 @@ void BackgroundExtractionAlgorithm::execute(WorkspaceRegistry& workspace,
             workspace.unregisterElement(outputName);
         workspace.registerElement(outputName, outBatch);
 
-        qInfo() << "[BackgroundExtraction] Finished batch BGE ("
-                << count << "frames). Registered output:"
-                << QString::fromStdString(outputName);
+        Logger::success("BackgroundExtraction", QString("Finished batch BGE (%1 frames) in %2 ms (avg %3 ms per frame). Registered output: %4")
+                        .arg(count).arg(totalTimer.elapsed()).arg(totalTimer.elapsed() / (count > 0 ? count : 1))
+                        .arg(QString::fromStdString(outputName)));
         return;
     }
 
@@ -137,8 +152,8 @@ void BackgroundExtractionAlgorithm::execute(WorkspaceRegistry& workspace,
     workspace.registerElement(outputName, outputElem);
 
     if (progress) progress(100);
-    qInfo() << "[BackgroundExtraction] Finished BGE. Registered output:"
-            << QString::fromStdString(outputName);
+    Logger::success("BackgroundExtraction", QString("Finished BGE in %1 ms. Registered output: %2")
+                    .arg(totalTimer.elapsed()).arg(QString::fromStdString(outputName)));
 }
 
 } // namespace blastro

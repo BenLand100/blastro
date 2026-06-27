@@ -1,6 +1,7 @@
 #include "Preferences.h"
 #include <QSettings>
 #include <QDir>
+#include <thread>
 
 namespace blastro {
 
@@ -17,6 +18,13 @@ Preferences::Preferences() {
     m_pclLoadTensorflow = false;
     m_temporaryFolder = "/tmp";
     m_intermediateFolder = (QDir::currentPath() + "/process").toStdString();
+    
+    // Default thread count to hardware concurrency
+    unsigned int cores = std::thread::hardware_concurrency();
+    m_threadCount = (cores > 0) ? static_cast<int>(cores) : 4;
+    m_stackingMode = "ram";
+    m_maxRamUsage = 16;
+    
     load();
 }
 
@@ -80,6 +88,36 @@ void Preferences::setIntermediateFolder(const std::string& path) {
     m_intermediateFolder = path;
 }
 
+int Preferences::getThreadCount() const {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return m_threadCount;
+}
+
+void Preferences::setThreadCount(int count) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_threadCount = count;
+}
+
+std::string Preferences::getStackingMode() const {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return m_stackingMode;
+}
+
+void Preferences::setStackingMode(const std::string& mode) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_stackingMode = mode;
+}
+
+int Preferences::getMaxRamUsage() const {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return m_maxRamUsage;
+}
+
+void Preferences::setMaxRamUsage(int gb) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_maxRamUsage = gb;
+}
+
 void Preferences::load() {
     std::lock_guard<std::mutex> lock(m_mutex);
     QSettings settings("BLastro", "BLastro");
@@ -89,6 +127,9 @@ void Preferences::load() {
     m_pclLoadTensorflow = settings.value("Preferences/PclLoadTensorflow", m_pclLoadTensorflow).toBool();
     m_temporaryFolder = settings.value("Preferences/TemporaryFolder", QString::fromStdString(m_temporaryFolder)).toString().toStdString();
     m_intermediateFolder = settings.value("Preferences/IntermediateFolder", QString::fromStdString(m_intermediateFolder)).toString().toStdString();
+    m_threadCount = settings.value("Preferences/ThreadCount", m_threadCount).toInt();
+    m_stackingMode = settings.value("Preferences/StackingMode", QString::fromStdString(m_stackingMode)).toString().toStdString();
+    m_maxRamUsage = settings.value("Preferences/MaxRamUsage", m_maxRamUsage).toInt();
 }
 
 void Preferences::save() {
@@ -100,6 +141,9 @@ void Preferences::save() {
     settings.setValue("Preferences/PclLoadTensorflow", m_pclLoadTensorflow);
     settings.setValue("Preferences/TemporaryFolder", QString::fromStdString(m_temporaryFolder));
     settings.setValue("Preferences/IntermediateFolder", QString::fromStdString(m_intermediateFolder));
+    settings.setValue("Preferences/ThreadCount", m_threadCount);
+    settings.setValue("Preferences/StackingMode", QString::fromStdString(m_stackingMode));
+    settings.setValue("Preferences/MaxRamUsage", m_maxRamUsage);
 }
 
 } // namespace blastro

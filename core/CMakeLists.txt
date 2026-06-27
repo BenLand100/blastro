@@ -8,6 +8,7 @@ add_library(blastro_core
     PCLStubs.cpp
     TempDirectory.cpp
     Preferences.cpp
+    Logger.cpp
 )
 target_include_directories(blastro_core PUBLIC 
     ${CMAKE_CURRENT_SOURCE_DIR}/..

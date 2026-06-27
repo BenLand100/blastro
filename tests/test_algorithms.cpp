@@ -5,6 +5,7 @@
 #include "algorithms/RegisterAlgorithm.h"
 #include "algorithms/AlignAlgorithm.h"
 #include "algorithms/BackgroundExtractionAlgorithm.h"
+#include "algorithms/GhsAlgorithm.h"
 #include "core/WorkspaceRegistry.h"
 #include "core/ImageBatch.h"
 #include "core/GrayscaleImage.h"
@@ -993,6 +994,82 @@ void testLightFramePipeline() {
     std::cout << "[+] Light Frame Pipeline Test PASSED." << std::endl << std::endl;
 }
 
+void testGhsStretching() {
+    std::cout << "Running GHS Stretching Test..." << std::endl;
+
+    // 1. Create a synthetic grayscale image with a linear gradient
+    const int width = 100;
+    const int height = 100;
+    auto img = std::make_shared<GrayscaleImage>(width, height);
+    auto buf = img->buffer();
+    for (int y = 0; y < height; ++y) {
+        for (int x = 0; x < width; ++x) {
+            // Linear gradient from 0.0 to 1.0 horizontally
+            float val = static_cast<float>(x) / (width - 1);
+            buf->setPixel(x, y, val);
+        }
+    }
+
+    // 2. Test hyperbolic stretch (form = 1)
+    double SP = 0.1;
+    double D = 3.0;
+    auto stretchedGrayscale1 = GhsAlgorithm::stretchGrayscale(img, 0.0, 1.0, SP, D, 1);
+    assert(stretchedGrayscale1 != nullptr);
+    
+    // Check bounds and monotonicity
+    float prevVal = -1.0f;
+    for (int x = 0; x < width; ++x) {
+        float val = stretchedGrayscale1->buffer()->pixel(x, 50);
+        assert(val >= 0.0f && val <= 1.0f && "Stretched value out of [0,1] range");
+        assert(val >= prevVal && "Stretched values are not monotonically increasing");
+        prevVal = val;
+    }
+    
+    // Verifying that a linear input gets stretched non-linearly
+    float midIn = img->buffer()->pixel(50, 50); // 50 / 99 ≈ 0.505
+    float midOut = stretchedGrayscale1->buffer()->pixel(50, 50);
+    assert(midOut > midIn && "GHS stretch failed to boost midtone values");
+
+    // 3. Test exponential stretch (form = 0)
+    auto stretchedGrayscale0 = GhsAlgorithm::stretchGrayscale(img, 0.0, 1.0, SP, D, 0);
+    assert(stretchedGrayscale0 != nullptr);
+    float val0 = stretchedGrayscale0->buffer()->pixel(50, 50);
+    assert(val0 != midOut && "Exponential and hyperbolic stretches should produce different profiles");
+
+    // 4. Test RGB Color-Preserving Stretch
+    auto rgbImg = std::make_shared<RGBImage>(width, height);
+    // Set up a pixel with known color ratios: R:G:B = 1:2:3
+    rgbImg->r()->buffer()->setPixel(50, 50, 0.01f);
+    rgbImg->g()->buffer()->setPixel(50, 50, 0.02f);
+    rgbImg->b()->buffer()->setPixel(50, 50, 0.03f);
+
+    auto stretchedRGB = GhsAlgorithm::stretchRGB(rgbImg, 0.0, 1.0, SP, D, 1, true);
+    assert(stretchedRGB != nullptr);
+
+    float rOut = stretchedRGB->r()->buffer()->pixel(50, 50);
+    float gOut = stretchedRGB->g()->buffer()->pixel(50, 50);
+    float bOut = stretchedRGB->b()->buffer()->pixel(50, 50);
+
+    // Verify color ratios are preserved: gOut / rOut should be 2.0, bOut / rOut should be 3.0
+    assert(approxEqual(gOut / rOut, 2.0, 1e-4) && "Color-preserving GHS stretch failed to preserve R:G ratio");
+    assert(approxEqual(bOut / rOut, 3.0, 1e-4) && "Color-preserving GHS stretch failed to preserve R:B ratio");
+
+    // 5. Test RGB Independent Channel Stretch
+    auto stretchedRGBIndep = GhsAlgorithm::stretchRGB(rgbImg, 0.0, 1.0, SP, D, 1, false);
+    assert(stretchedRGBIndep != nullptr);
+
+    float rOutIndep = stretchedRGBIndep->r()->buffer()->pixel(50, 50);
+    float gOutIndep = stretchedRGBIndep->g()->buffer()->pixel(50, 50);
+    float bOutIndep = stretchedRGBIndep->b()->buffer()->pixel(50, 50);
+
+    // With independent stretch, since R, G, B have different inputs, they stretch non-linearly
+    // independently, so their output ratios will be distorted (not 1:2:3).
+    double ratioG = gOutIndep / rOutIndep;
+    assert(!approxEqual(ratioG, 2.0, 1e-3) && "Independent channel GHS stretch should not preserve color ratios");
+
+    std::cout << "[+] GHS Stretching Test PASSED." << std::endl << std::endl;
+}
+
 int main() {
     std::cout << "========================================" << std::endl;
     std::cout << "Starting Blastro Algorithm Unit Tests..." << std::endl;
@@ -1003,6 +1080,7 @@ int main() {
     testStackingMathematics();
     testCalibrationPipeline();
     testLightFramePipeline();
+    testGhsStretching();
 
     std::cout << "========================================" << std::endl;
     std::cout << "All Blastro Algorithm Unit Tests PASSED!" << std::endl;

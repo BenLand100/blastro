@@ -2,6 +2,8 @@
 #include <QWidget>
 #include <QLineEdit>
 #include <QCheckBox>
+#include <QSpinBox>
+#include <QComboBox>
 
 namespace blastro {
 
@@ -26,6 +28,8 @@ private:
     QCheckBox* m_tensorflowChk;
     QLineEdit* m_tempEdit;
     QLineEdit* m_intermediateEdit;
+    QSpinBox* m_threadSpin;
+    QSpinBox* m_ramSpin;
 };
 
 } // namespace blastro

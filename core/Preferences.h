@@ -27,6 +27,15 @@ public:
     std::string getIntermediateFolder() const;
     void setIntermediateFolder(const std::string& path);
 
+    int getThreadCount() const;
+    void setThreadCount(int count);
+
+    std::string getStackingMode() const;
+    void setStackingMode(const std::string& mode);
+
+    int getMaxRamUsage() const;
+    void setMaxRamUsage(int gb);
+
     // Save and load
     void load();
     void save();
@@ -41,6 +50,9 @@ private:
     bool m_pclLoadTensorflow;
     std::string m_temporaryFolder;
     std::string m_intermediateFolder;
+    int m_threadCount;
+    std::string m_stackingMode;
+    int m_maxRamUsage;
 
     mutable std::mutex m_mutex;
 };

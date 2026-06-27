@@ -123,6 +123,13 @@ ImageVariant WorkspaceImageWindow::currentImage() const {
     return ImageVariant();
 }
 
+ImageVariant WorkspaceImageWindow::originalImage() const {
+    if (m_hasPreviewActive) {
+        return m_originalImageForPreview;
+    }
+    return currentImage();
+}
+
 void WorkspaceImageWindow::onModeButtonClicked(int id) {
     if (id == 0) { // Normal
         m_imageView->setDisplayMode(ImageView::Normal);
