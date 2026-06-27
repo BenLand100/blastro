@@ -55,7 +55,7 @@ std::string TempDirectory::getIntermediateFileName(const std::string& originalPa
     if (ext.isEmpty()) {
         ext = "fits";
     }
-    return (baseName + QString::fromStdString(suffix) + "." + ext).toStdString();
+    return (baseName + "_" + QString::number(fallbackIndex) + QString::fromStdString(suffix) + "." + ext).toStdString();
 }
 
 } // namespace blastro
