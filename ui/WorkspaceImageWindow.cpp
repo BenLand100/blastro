@@ -18,7 +18,7 @@ WorkspaceImageWindow::WorkspaceImageWindow(const QString& name, const WorkspaceE
       m_stretchBtn(new QPushButton("Manual", this)),
       m_autoBtn(new QPushButton("Auto", this)),
       m_localHistBtn(new QPushButton("Hist", this)),
-      m_expandHistBtn(new QPushButton("📊 ▼", this)),
+      m_expandHistBtn(new QPushButton("▼", this)),
       m_headerHistContainer(new QWidget(this)),
       m_expandedHistBar(new QWidget(this)),
       m_channelGroup(new QButtonGroup(this)),
@@ -348,7 +348,7 @@ void WorkspaceImageWindow::onExpandHistClicked() {
         m_expandedHistBar->show();
         
         m_histogramWidget->setFixedHeight(40);
-        m_expandHistBtn->setText("📊 ▲");
+        m_expandHistBtn->setText("▲");
     } else {
         // Move back to header
         m_expandedHistBar->layout()->removeWidget(m_expandHistBtn);
@@ -368,14 +368,14 @@ void WorkspaceImageWindow::onExpandHistClicked() {
         m_headerHistContainer->show();
         
         m_histogramWidget->setFixedHeight(24);
-        m_expandHistBtn->setText("📊 ▼");
+        m_expandHistBtn->setText("▼");
     }
 }
 
 void WorkspaceImageWindow::resizeEvent(QResizeEvent* event) {
     QWidget::resizeEvent(event);
     if (m_nameBtn) {
-        m_nameBtn->setMaximumWidth(width() * 0.25);
+        m_nameBtn->setMaximumWidth(width() / 3.0);
         updateNameLabelText();
     }
 }
@@ -384,7 +384,7 @@ void WorkspaceImageWindow::updateNameLabelText() {
     if (!m_nameBtn) return;
     int availableWidth = m_nameBtn->width();
     if (availableWidth <= 0) {
-        availableWidth = width() * 0.25;
+        availableWidth = width() / 3.0;
     }
     availableWidth = std::max(20, availableWidth - 10);
     
