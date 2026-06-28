@@ -43,6 +43,7 @@
 #include "core/TempDirectory.h"
 #include "core/Preferences.h"
 #include "WorkspaceImageWindow.h"
+#include "PreprocessingWizardDialog.h"
 #include "BatchImageWidget.h"
 #include "algorithms/ImageOperations.h"
 #include <QFileDialog>
@@ -323,6 +324,12 @@ void MainWindow::createMenus() {
     m_algoMenu->addAction(m_pixelMathAct);
 
     m_algoMenu->addSeparator();
+
+    // Automation Menu
+    QMenu* automationMenu = menuBar()->addMenu("&Automation");
+    QAction* wbppAct = new QAction("&Preprocessing Wizard...", this);
+    connect(wbppAct, &QAction::triggered, this, &MainWindow::onOpenPpw);
+    automationMenu->addAction(wbppAct);
 
     // Window Menu
     m_windowMenu = menuBar()->addMenu("&Window");
@@ -717,6 +724,13 @@ void MainWindow::onOpenBackgroundExtraction() {
     sub->show();
 }
 
+void MainWindow::onOpenPpw() {
+    PreprocessingWizardDialog* dlg = new PreprocessingWizardDialog(m_workspace, this);
+    QMdiSubWindow* sub = m_workspaceArea->addSubWindow(dlg);
+    sub->setAttribute(Qt::WA_DeleteOnClose);
+    sub->show();
+}
+
 void MainWindow::onOpenGhs() {
     StretchingDialog* dlg = new StretchingDialog(m_workspace, this);
     connect(dlg, &StretchingDialog::algorithmExecuted, this, &MainWindow::executeAlgorithmSlot);
@@ -1022,8 +1036,8 @@ void MainWindow::setProcessingState(bool processing) {
     for (auto* subWin : m_workspaceArea->subWindowList()) {
         auto* widget = subWin->widget();
         if (widget) {
-            // Keep Process Console fully functional and responsive
-            if (qobject_cast<LogWindow*>(widget)) {
+            // Keep Process Console and Preprocessing Wizard fully functional and responsive
+            if (qobject_cast<LogWindow*>(widget) || qobject_cast<PreprocessingWizardDialog*>(widget)) {
                 continue;
             }
             widget->setDisabled(processing);

@@ -22,10 +22,24 @@
 
 namespace blastro {
 
+struct FitsHeaderInfo {
+    double exposureTime = 0.0;
+    std::string filter = "None";
+    std::string imageType = "Light";
+    int binningX = 1;
+    int binningY = 1;
+    int width = 0;
+    int height = 0;
+    double gain = 0.0;
+    std::string objectName = "";
+};
+
 class FitsIO : public ImageReader, public ImageWriter {
 public:
     FitsIO() = default;
     ~FitsIO() override = default;
+
+    static bool readHeaderInfo(const std::string& filepath, FitsHeaderInfo& info);
 
     // ImageReader interface
     bool supportsExtension(const std::string& ext) const override;

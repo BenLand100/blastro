@@ -84,8 +84,11 @@ private:
     PCLBridge* m_bridge;
 };
 
+class PreprocessingWizardDialog;
+
 class MainWindow : public QMainWindow {
     Q_OBJECT
+    friend class PreprocessingWizardDialog;
 public:
     explicit MainWindow(QWidget* parent = nullptr);
     ~MainWindow() override = default;
@@ -114,6 +117,7 @@ private slots:
     void onOpenRegister();
     void onOpenAlign();
     void onOpenBackgroundExtraction();
+    void onOpenPpw();
     void onOpenGhs();
     void onSubWindowActivated(QMdiSubWindow* window);
     void updateStatusReadout(int x, int y, bool isRGB, const std::vector<float>& values);

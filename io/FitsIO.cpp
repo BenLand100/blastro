@@ -531,4 +531,100 @@ bool FitsIO::writeImagePatch(const std::string& filepath, const ImageVariant& pa
     }
 }
 
+bool FitsIO::readHeaderInfo(const std::string& filepath, FitsHeaderInfo& info) {
+    try {
+        std::unique_ptr<CCfits::FITS> pInfile(new CCfits::FITS(filepath, CCfits::Read, false));
+        CCfits::PHDU& image = pInfile->pHDU();
+
+        info.width = static_cast<int>(image.axis(0));
+        info.height = static_cast<int>(image.axis(1));
+
+        // Read exposure time
+        try {
+            double exp = 0.0;
+            image.readKey("EXPTIME", exp);
+            info.exposureTime = exp;
+        } catch (...) {
+            try {
+                double exp = 0.0;
+                image.readKey("EXPOSURE", exp);
+                info.exposureTime = exp;
+            } catch (...) {
+                info.exposureTime = 0.0;
+            }
+        }
+
+        // Read filter
+        try {
+            std::string filter;
+            image.readKey("FILTER", filter);
+            info.filter = filter;
+        } catch (...) {
+            try {
+                std::string filter;
+                image.readKey("FILTNAM", filter);
+                info.filter = filter;
+            } catch (...) {
+                info.filter = "None";
+            }
+        }
+
+        // Read image type
+        try {
+            std::string imgType;
+            image.readKey("IMAGETYP", imgType);
+            std::transform(imgType.begin(), imgType.end(), imgType.begin(), ::tolower);
+            if (imgType.find("bias") != std::string::npos) {
+                info.imageType = "Bias";
+            } else if (imgType.find("dark") != std::string::npos) {
+                info.imageType = "Dark";
+            } else if (imgType.find("flat") != std::string::npos) {
+                info.imageType = "Flat";
+            } else {
+                info.imageType = "Light";
+            }
+        } catch (...) {
+            info.imageType = "Light";
+        }
+
+        // Read binning
+        try {
+            int binX = 1;
+            image.readKey("XBINNING", binX);
+            info.binningX = binX;
+        } catch (...) {
+            info.binningX = 1;
+        }
+        try {
+            int binY = 1;
+            image.readKey("YBINNING", binY);
+            info.binningY = binY;
+        } catch (...) {
+            info.binningY = 1;
+        }
+
+        // Read gain
+        try {
+            double gain = 0.0;
+            image.readKey("GAIN", gain);
+            info.gain = gain;
+        } catch (...) {
+            info.gain = 0.0;
+        }
+
+        // Read object/target name
+        try {
+            std::string obj;
+            image.readKey("OBJECT", obj);
+            info.objectName = obj;
+        } catch (...) {
+            info.objectName = "";
+        }
+
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
 } // namespace blastro

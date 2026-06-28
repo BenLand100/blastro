@@ -148,6 +148,7 @@ To ensure BLastro remains extremely performant and reliable under typical astron
 - **Output Filename Patterning**: All algorithm dialogs should support output name patterning. By default, suggest naming patterns like `{input}_calib`, `{input}_aligned`, or `{input}_registered` to automatically base the output filename on the active input element name.
 - **Window Cleanup**: When an MDI image window is closed, clean up all references, active timers, and menu hooks immediately to prevent dangling pointer errors and menu list desynchronizations.
 - **Middle-Elided Titles**: Image window titles and tabs should be elided in the middle (`...`) using `QFontMetrics::elidedText` with `Qt::ElideMiddle` so they do not take up excessive width, while permitting tab expansion when workspace views are collapsed/expanded.
+- **Disabled UI Element Contrast**: Ensure that all custom-styled widgets (especially `QPushButton` in dialogs) have highly distinct disabled states. When overriding styles dynamically (e.g. coloring the cancel button or execution buttons), explicitly define the `:disabled` selector (e.g. background `#222222`, text `#555555`, border `#2a2a2a`) to ensure disabled controls are visually muted and distinct from enabled states in dark mode.
 
 ### 6. Log Infrastructure & PCL Progress Interception
 - **Process Console Routing**: Do not route low-level debug warnings (e.g., Qt internal notifications, widget desync warnings) to the Process Console; let them output to the terminal (stdout). Only print high-level, actionable, formatted information (algorithm execution, load module confirmations, file actions) to the Rich HTML Process Console.
@@ -159,6 +160,14 @@ To ensure BLastro remains extremely performant and reliable under typical astron
 - **Contrast Limiting (CLAHE)**: Local histogram equalization is highly sensitive to noise. To prevent posterization and pixel clipping:
   - Perform smooth bilinear interpolation between tile grids.
   - Limit the maximum contrast limit on the highest level (Hist H) to half of the theoretical maximum, and scale down the limit substantially for Hist M and Hist L.
+
+### 8. Automated Preprocessing Pipeline & Staged Execution (PPW)
+- **Staged Design**: The Preprocessing Pipeline is split into two primary execution phases (`stage = "calibrate_register"` and `stage = "align_stack"`) to accommodate user-guided image review and filtering.
+- **Sensor Gain Matching**: Calibration frames (bias, darks, flats, flat-darks) and light frames must be grouped and matched by sensor `GAIN` in addition to dimensions, exposure time, binning, and filter.
+- **Asynchronous Execution & GUI Safety**: All pipeline processing must run asynchronously on a background `QThread` (using `PreprocessingWorker`) so the main thread remains responsive. Calls to `MainWindow::setProcessingState` suspend other image MDI windows and menus, but the Preprocessing Wizard and the Process Console are exempted from this lock so they can receive cancellation clicks and display real-time log updates.
+- **Adaptive/Exposed Registration**: Default star finding SNR thresholds (e.g. `snr_min = 4.0`) must be kept low/adaptive to support narrow-band frames (like Oiii). These parameters should be exposed in the Control UI so they can be modified by the user.
+- **Dynamic Tab UX**: The Frame Selection review tab should be omitted entirely on wizard startup, and dynamically inserted and focused only when Stage 1 completes successfully.
+- **Workspace Synchronization**: Upon successful completion of stacking, the final master light image must be directly loaded into the workspace using `m_workspaceArea->addElementView` so the user can immediately begin post-processing.
 
 ## Build Requirements
 

@@ -24,12 +24,16 @@
 #include "algorithms/AlignAlgorithm.h"
 #include "algorithms/BackgroundExtractionAlgorithm.h"
 #include "algorithms/StretchingAlgorithm.h"
+#include "algorithms/PreprocessingPipeline.h"
 #include "core/WorkspaceRegistry.h"
 #include "core/ImageBatch.h"
 #include "core/GrayscaleImage.h"
 #include "core/ImageBuffer.h"
 #include "core/TempDirectory.h"
 #include "io/FitsIO.h"
+#include <CCfits/CCfits>
+#include <QDir>
+#include <QString>
 #include <iostream>
 #include <cmath>
 #include <cassert>
@@ -1261,6 +1265,130 @@ void testRbfBackgroundExtraction() {
     std::cout << "[+] RBF Background Extraction Test PASSED." << std::endl << std::endl;
 }
 
+void createDummyFitsWithHeader(const std::string& filepath, const std::string& type, double exposure, const std::string& filter, bool addStars = false, double gain = 100.0) {
+    long numAxes = 2;
+    std::vector<long> naxes = { 512, 512 };
+    std::unique_ptr<CCfits::FITS> pOutfile(new CCfits::FITS("!" + filepath, FLOAT_IMG, numAxes, naxes.data()));
+    CCfits::PHDU& phdu = pOutfile->pHDU();
+    phdu.addKey("IMAGETYP", type, "Image type");
+    phdu.addKey("EXPTIME", exposure, "Exposure time");
+    phdu.addKey("FILTER", filter, "Filter name");
+    phdu.addKey("XBINNING", 1, "Binning X");
+    phdu.addKey("YBINNING", 1, "Binning Y");
+    phdu.addKey("GAIN", gain, "Gain");
+
+    float bg = 0.01f;
+    if (type == "BIAS") bg = 0.1f;
+    else if (type == "DARK") bg = 0.2f;
+    else if (type == "FLAT") bg = 0.5f;
+    else if (type == "LIGHT") bg = 0.3f;
+
+    std::valarray<float> arrayData(bg, 512 * 512);
+
+    if (addStars) {
+        struct StarDef { double x, y, peak, fwhm; };
+        std::vector<StarDef> stars = {
+            {100.0, 100.0, 50.0, 3.5},
+            {120.0, 350.0, 75.0, 4.0},
+            {350.0, 150.0, 100.0, 3.0},
+            {400.0, 400.0, 120.0, 4.5},
+            {256.0, 256.0, 60.0, 3.8}
+        };
+        for (const auto& s : stars) {
+            int r = static_cast<int>(std::ceil(s.fwhm * 3));
+            double sigma2 = (s.fwhm / 2.3548) * (s.fwhm / 2.3548);
+            int x0 = std::max(0, static_cast<int>(s.x) - r);
+            int x1 = std::min(511, static_cast<int>(s.x) + r);
+            int y0 = std::max(0, static_cast<int>(s.y) - r);
+            int y1 = std::min(511, static_cast<int>(s.y) + r);
+            for (int py = y0; py <= y1; ++py) {
+                for (int px = x0; px <= x1; ++px) {
+                    double dx = px - s.x;
+                    double dy = py - s.y;
+                    arrayData[py * 512 + px] += s.peak * std::exp(-(dx*dx + dy*dy) / (2.0 * sigma2));
+                }
+            }
+        }
+    }
+    phdu.write(1, 512 * 512, arrayData);
+}
+
+void testPreprocessingPipeline() {
+    std::cout << "Running Preprocessing Pipeline Integration Test..." << std::endl;
+
+    std::string tempDir = TempDirectory::createTempDir("preprocessing_test");
+    assert(!tempDir.empty() && "Failed to create temp directory");
+
+    std::string biasFile = tempDir + "/bias_001.fits";
+    std::string darkFile = tempDir + "/dark_001.fits";
+    std::string flatFile = tempDir + "/flat_001.fits";
+    std::string lightFile1 = tempDir + "/light_001.fits";
+    std::string lightFile2 = tempDir + "/light_002.fits";
+
+    createDummyFitsWithHeader(biasFile, "BIAS", 0.0, "None", false);
+    createDummyFitsWithHeader(darkFile, "DARK", 10.0, "None", false);
+    createDummyFitsWithHeader(flatFile, "FLAT", 2.0, "Ha", false);
+    createDummyFitsWithHeader(lightFile1, "LIGHT", 10.0, "Ha", true);
+    createDummyFitsWithHeader(lightFile2, "LIGHT", 10.0, "Ha", true);
+
+    WorkspaceRegistry workspace;
+
+    PreprocessingPipeline pipeline;
+    std::map<std::string, std::string> config = {
+        {"stage", "calibrate_register"},
+        {"mode", "dark_current"},
+        {"exp_tolerance", "0.5"},
+        {"debayer", "false"},
+        {"out_dir", tempDir},
+        {"bias_files", biasFile},
+        {"dark_files", darkFile},
+        {"flat_files", flatFile},
+        {"light_files", lightFile1 + ";" + lightFile2},
+        {"keep_intermediate", "true"}
+    };
+
+    pipeline.execute(workspace, config);
+
+    std::string batchName = "preprocessed_lights_Ha";
+    assert(workspace.contains(batchName) && "Registered lights batch not found in workspace");
+
+    auto batch = std::get<ImageBatchPtr>(workspace.getElement(batchName));
+    assert(batch->count() == 2 && "Light batch frame count is incorrect");
+
+    batch->setFrameSelected(0, true);
+    batch->setFrameSelected(1, true);
+
+    FrameMetadata meta1, meta2;
+    meta1.registered = true;
+    meta1.dx = 0.0; meta1.dy = 0.0; meta1.theta = 0.0;
+    meta1.starCount = 10;
+    meta1.snr = 20.0;
+    batch->setFrameMetadata(0, meta1);
+
+    meta2.registered = true;
+    meta2.dx = 1.0; meta2.dy = 0.0; meta2.theta = 0.0;
+    meta2.starCount = 8;
+    meta2.snr = 15.0;
+    batch->setFrameMetadata(1, meta2);
+
+    std::map<std::string, std::string> configAlign = {
+        {"stage", "align_stack"},
+        {"registered_light_batch_name", batchName},
+        {"drizzle_scale", "1.0"},
+        {"keep_intermediate", "true"},
+        {"out_dir", tempDir}
+    };
+
+    pipeline.execute(workspace, configAlign);
+
+    std::string finalMaster = batchName + "_stacked";
+    assert(workspace.contains(finalMaster) && "Final master stacked image not found in workspace");
+
+    std::cout << "[+] Preprocessing Pipeline Integration Test PASSED." << std::endl << std::endl;
+
+    QDir(QString::fromStdString(tempDir)).removeRecursively();
+}
+
 int main() {
     std::cout << "========================================" << std::endl;
     std::cout << "Starting Blastro Algorithm Unit Tests..." << std::endl;
@@ -1274,6 +1402,7 @@ int main() {
     testGhsStretching();
     testBackgroundExtractionOnGradient();
     testRbfBackgroundExtraction();
+    testPreprocessingPipeline();
 
     std::cout << "========================================" << std::endl;
     std::cout << "All Blastro Algorithm Unit Tests PASSED!" << std::endl;
