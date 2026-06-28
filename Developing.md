@@ -35,7 +35,30 @@ To add a new processing algorithm:
    - Implement `algorithmName()` to match your core algorithm.
 
 3. **Wire it Up:**
-   - Register your dialog in `MainWindow.cpp` so it can be launched from the main menu. The base `AlgorithmDialog` class handles the execution signal that triggers the backend algorithm processing.
+    - Register your dialog in `MainWindow.cpp` so it can be launched from the main menu. The base `AlgorithmDialog` class handles the execution signal that triggers the backend algorithm processing.
+
+### In-Place vs. New Image Algorithms
+
+When developing or modifying algorithms in BLastro, it is critical to handle image lifecycle and UI expectations correctly depending on whether the algorithm mutates existing images or creates new ones:
+
+1. **In-Place Mutation Algorithms**
+   - **Definition**: Algorithms that modify the active image's pixels directly (e.g. Stretching, Pixel Math with output matching input, or Background Subtraction replacing the current view).
+   - **Expectations**:
+     - **Undo Checkpoint**: You **must** call `saveUndoState()` on the active `WorkspaceImageWindow` *before* the modification is executed. This deep-copies the original `ImageBuffer`s onto the undo stack.
+     - **UI Refresh**: Once execution completes, update the active `WorkspaceImageWindow` via `setElement` to reload the mutated element.
+     - **Zoom State**: Ensure zoom/pan/scroll boundaries remain persistent (zoom persistence) by utilizing `preserveZoom = true` in `ImageView::setImage`.
+
+2. **New Image/Batch Creation Algorithms**
+   - **Definition**: Algorithms that produce a completely new element in the workspace (e.g. Stacking generating a stacked master, Calibration creating a calibrated batch, or Star Alignment creating aligned frames).
+   - **Expectations**:
+     - **Workspace Registration**: The algorithm must register the new element (e.g. `GrayscaleImage`, `RGBImage`, or `ImageBatch`) under a new, unique name in the `WorkspaceRegistry`.
+     - **Sub-Window Management**: The main application (`MainWindow`) intercepts the execution signal and creates a new MDI sub-window for the newly created element.
+     - **Undo Isolation**: The original input images are left unchanged (no undo checkpoint needed on their windows), and the new window starts with a clean, independent undo history.
+
+3. **Hybrid Algorithms**
+   - **Definition**: Algorithms that support both replacement (output name equals input name) and creation (different output name).
+   - **Expectations**:
+     - Programmatically inspect the configured output name. If it matches the input name, follow the **In-Place** guidelines (checkpointing the existing window). Otherwise, follow the **New Image** guidelines (opening a separate sub-window).
 
 ### The PCL Bridge
 
