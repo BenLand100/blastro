@@ -135,6 +135,27 @@ To ensure BLastro remains extremely performant and reliable under typical astron
 - **File Collision & Refcounting**: The package manager tracks all files extracted from update packages in `QSettings`. To prevent package uninstallation from breaking shared dependencies, track reference counts for files and skip deletion if a file is owned by another active package.
 - **Safe Extraction Scans**: Always verify the contents of download packages using dry-run zip/tar file list queries (`unzip -Z -1` or `tar -tf`) before extraction, warning the user of potential file collisions and allowing them to uninstall conflicting modules.
 
+### 4. Image Stacking & NaN Handling
+- **NaN Rejection**: Spatial transformations (alignment, rotation) produce out-of-bounds pixels represented as `NaN` (Not a Number). When stacking frames, do not propagate `NaN` values to the output master as they will corrupt subsequent fitters and stretching algorithms.
+- **Dynamic Normalization**: At each stacked pixel location, count the number of valid (non-NaN) frames. Divide the summed pixel intensity by the dynamic count of valid frames rather than the constant total frame count.
+
+### 5. UI/UX Cascading, Renaming, & Cleanup
+- **Window Cascading**: When opening new image windows, offset their initial MDI position slightly sequentially in X and Y (e.g. 20-30 pixels) to avoid stacking them perfectly on top of each other, cascading them naturally over time.
+- **Output Filename Patterning**: All algorithm dialogs should support output name patterning. By default, suggest naming patterns like `{input}_calib`, `{input}_aligned`, or `{input}_registered` to automatically base the output filename on the active input element name.
+- **Window Cleanup**: When an MDI image window is closed, clean up all references, active timers, and menu hooks immediately to prevent dangling pointer errors and menu list desynchronizations.
+- **Middle-Elided Titles**: Image window titles and tabs should be elided in the middle (`...`) using `QFontMetrics::elidedText` with `Qt::ElideMiddle` so they do not take up excessive width, while permitting tab expansion when workspace views are collapsed/expanded.
+
+### 6. Log Infrastructure & PCL Progress Interception
+- **Process Console Routing**: Do not route low-level debug warnings (e.g., Qt internal notifications, widget desync warnings) to the Process Console; let them output to the terminal (stdout). Only print high-level, actionable, formatted information (algorithm execution, load module confirmations, file actions) to the Rich HTML Process Console.
+- **PCL Progress Interception**: PCL modules (like DeepSNR, StarXterminator, or BlurXterminator) output progress values as control sequences (such as `...%` percentages) to standard output. Intercept these console outputs, parse the percentage values, update the main window's status progress bar, and show the latest percent in the process console log.
+
+### 7. Histogram & Local Histogram Equalization (CLAHE)
+- **Interactive Histograms**: The histogram widgets rendered on image views must remain fully interactive (supporting mouse scroll-zooming and click-dragging) in normal (non-expanded) display mode.
+- **Histogram Auto-Zoom Bounds**: When calculating auto-stretch limits, position the blackpoint at 5% of the histogram width and place the midpoint near the visual center to yield a balanced preview stretch.
+- **Contrast Limiting (CLAHE)**: Local histogram equalization is highly sensitive to noise. To prevent posterization and pixel clipping:
+  - Perform smooth bilinear interpolation between tile grids.
+  - Limit the maximum contrast limit on the highest level (Hist H) to half of the theoretical maximum, and scale down the limit substantially for Hist M and Hist L.
+
 ## Build Requirements
 
 - C++17 compliant compiler
