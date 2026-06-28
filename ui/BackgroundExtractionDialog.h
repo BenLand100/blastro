@@ -19,6 +19,8 @@
 #pragma once
 #include "AlgorithmDialog.h"
 #include "WorkspaceImageWindow.h"
+#include <QMdiArea>
+#include <QMdiSubWindow>
 #include <QSlider>
 #include <QSpinBox>
 #include <QDoubleSpinBox>
@@ -31,17 +33,27 @@ class BackgroundExtractionDialog : public AlgorithmDialog {
     Q_OBJECT
 public:
     BackgroundExtractionDialog(WorkspaceRegistry& workspace, QWidget* parent = nullptr);
-    ~BackgroundExtractionDialog() override = default;
+    ~BackgroundExtractionDialog() override;
 
     std::map<std::string, std::string> getConfig() const override;
     std::string algorithmName() const override { return "BackgroundExtraction"; }
 
+protected:
+    void showEvent(QShowEvent* event) override;
+    void hideEvent(QHideEvent* event) override;
+
 private slots:
     void onApplyClicked();
     void onPrefsClicked();
+    void onGenerateGridClicked();
+    void onClearPointsClicked();
+    void onSubWindowActivated(QMdiSubWindow* subWindow);
 
 private:
     WorkspaceImageWindow* getActiveImageWindow() const;
+    QMdiArea* findMdiArea() const;
+    void updateBgeModes();
+    void disableAllBgeModes();
 
     QSlider* m_orderSlider;
     QSpinBox* m_orderSpin;

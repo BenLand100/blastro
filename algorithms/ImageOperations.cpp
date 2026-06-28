@@ -28,6 +28,7 @@ ImageBufferPtr cloneBuffer(const ImageBufferPtr& src) {
     if (!src) return nullptr;
     auto dest = std::make_shared<ImageBuffer>(src->width(), src->height());
     std::copy(src->data(), src->data() + src->width() * src->height(), dest->data());
+    dest->setBgeControlPoints(src->bgeControlPoints());
     return dest;
 }
 

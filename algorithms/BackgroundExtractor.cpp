@@ -106,45 +106,73 @@ GrayscaleImagePtr BackgroundExtractor::extractGrayscale(GrayscaleImagePtr src,
     int numPixels = w * h;
     const float* data = src->buffer()->data();
 
-    // 1. Compute median and standard deviation of the channel
-    if (progress) progress(progressStart + (progressEnd - progressStart) * 5 / 100);
-    Logger::info("BackgroundExtraction", QString("Analyzing image data statistics (%1x%2 pixels)...").arg(w).arg(h));
-    
-    std::vector<float> sortedData(data, data + numPixels);
-    std::sort(sortedData.begin(), sortedData.end());
-    double median = sortedData[numPixels / 2];
-
-    double sumSqDiff = 0.0;
-    for (int i = 0; i < numPixels; ++i) {
-        double diff = data[i] - median;
-        sumSqDiff += diff * diff;
-    }
-    double stddev = std::sqrt(sumSqDiff / numPixels);
-    Logger::info("BackgroundExtraction", QString("  Channel Stats: Median = %1, StdDev = %2").arg(median).arg(stddev));
-
-    // 2. Select background sample points within sigmaCut of median
-    if (progress) progress(progressStart + (progressEnd - progressStart) * 15 / 100);
-    double lowBound = median - sigmaCut * stddev;
-    double highBound = median + sigmaCut * stddev;
-    Logger::info("BackgroundExtraction", QString("  Selecting background sample points in range [%1, %2] (sigma_cut = %3)...")
-                 .arg(lowBound).arg(highBound).arg(sigmaCut));
-
+    // 1. Select background sample points (user control points or auto statistical sampling)
     std::vector<FitPoint> samples;
-    std::minstd_rand rng(1337); // Deterministic seed for reproducibility
-    std::uniform_real_distribution<double> dist(0.0, 1.0);
+    const auto& ctrlPts = src->buffer()->bgeControlPoints();
+    if (!ctrlPts.empty()) {
+        if (progress) progress(progressStart + (progressEnd - progressStart) * 10 / 100);
+        Logger::info("BackgroundExtraction", QString("  Using %1 user-defined control points for background fitting...").arg(ctrlPts.size()));
+        for (const auto& pt : ctrlPts) {
+            int cx = static_cast<int>(std::round(pt.first));
+            int cy = static_cast<int>(std::round(pt.second));
+            double sumVal = 0.0;
+            int count = 0;
+            for (int dy = -2; dy <= 2; ++dy) {
+                for (int dx = -2; dx <= 2; ++dx) {
+                    int px = cx + dx;
+                    int py = cy + dy;
+                    if (px >= 0 && px < w && py >= 0 && py < h) {
+                        sumVal += src->buffer()->pixel(px, py);
+                        count++;
+                    }
+                }
+            }
+            double zVal = (count > 0) ? (sumVal / count) : src->buffer()->pixel(cx, cy);
 
-    for (int y = 0; y < h; ++y) {
-        for (int x = 0; x < w; ++x) {
-            float val = data[y * w + x];
-            if (val >= lowBound && val <= highBound) {
-                // Probabilistic sampling based on sampleFrac
-                if (dist(rng) < sampleFrac) {
-                    FitPoint pt;
-                    // Normalize coordinates to [-1, 1] to prevent numerical overflow at high orders
-                    pt.x_norm = (2.0 * x - w) / w;
-                    pt.y_norm = (2.0 * y - h) / h;
-                    pt.z = val;
-                    samples.push_back(pt);
+            FitPoint fpt;
+            fpt.x_norm = (2.0 * pt.first - w) / w;
+            fpt.y_norm = (2.0 * pt.second - h) / h;
+            fpt.z = zVal;
+            samples.push_back(fpt);
+        }
+    } else {
+        // Compute median and standard deviation of the channel
+        if (progress) progress(progressStart + (progressEnd - progressStart) * 5 / 100);
+        Logger::info("BackgroundExtraction", QString("Analyzing image data statistics (%1x%2 pixels)...").arg(w).arg(h));
+        
+        std::vector<float> sortedData(data, data + numPixels);
+        std::sort(sortedData.begin(), sortedData.end());
+        double median = sortedData[numPixels / 2];
+
+        double sumSqDiff = 0.0;
+        for (int i = 0; i < numPixels; ++i) {
+            double diff = data[i] - median;
+            sumSqDiff += diff * diff;
+        }
+        double stddev = std::sqrt(sumSqDiff / numPixels);
+        Logger::info("BackgroundExtraction", QString("  Channel Stats: Median = %1, StdDev = %2").arg(median).arg(stddev));
+
+        // Select background sample points within sigmaCut of median
+        if (progress) progress(progressStart + (progressEnd - progressStart) * 15 / 100);
+        double lowBound = median - sigmaCut * stddev;
+        double highBound = median + sigmaCut * stddev;
+        Logger::info("BackgroundExtraction", QString("  Selecting background sample points in range [%1, %2] (sigma_cut = %3)...")
+                     .arg(lowBound).arg(highBound).arg(sigmaCut));
+
+        std::minstd_rand rng(1337);
+        std::uniform_real_distribution<double> dist(0.0, 1.0);
+
+        for (int y = 0; y < h; ++y) {
+            for (int x = 0; x < w; ++x) {
+                float val = data[y * w + x];
+                if (val >= lowBound && val <= highBound) {
+                    if (dist(rng) < sampleFrac) {
+                        FitPoint pt;
+                        pt.x_norm = (2.0 * x - w) / w;
+                        pt.y_norm = (2.0 * y - h) / h;
+                        pt.z = val;
+                        samples.push_back(pt);
+                    }
                 }
             }
         }

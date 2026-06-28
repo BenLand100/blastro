@@ -862,6 +862,37 @@ void testLightFramePipeline() {
     }
     std::cout << "  [bge] Background extraction sanity check PASSED." << std::endl;
 
+    // Test user-placed control points BGE
+    {
+        std::cout << "  [bge_control_points] Testing background extraction with custom control points..." << std::endl;
+        auto calBatch = std::get<ImageBatchPtr>(workspace.getElement("cal_light_batch"));
+        auto firstImg = std::get<GrayscaleImagePtr>(calBatch->getImage(0));
+        
+        std::vector<std::pair<double, double>> pts = {
+            {10.0, 10.0}, {50.0, 10.0}, {90.0, 10.0},
+            {10.0, 50.0}, {50.0, 50.0}, {90.0, 50.0},
+            {10.0, 90.0}, {50.0, 90.0}, {90.0, 90.0}
+        };
+        firstImg->buffer()->setBgeControlPoints(pts);
+        
+        workspace.registerElement("single_cal_light", firstImg);
+        BackgroundExtractionAlgorithm bgeSingle;
+        bgeSingle.execute(workspace, {
+            {"input_name",   "single_cal_light"},
+            {"output_name",  "single_bge_light"},
+            {"order",        "1"},
+            {"sigma_cut",    "3.0"},
+            {"equalize",     "true"}
+        });
+        
+        auto bgeSingleImg = std::get<GrayscaleImagePtr>(workspace.getElement("single_bge_light"));
+        float cornerVal = bgeSingleImg->buffer()->pixel(0, 0);
+        float starVal   = bgeSingleImg->buffer()->pixel(53, 43);
+        assert(starVal > 0.80f && "Star signal lost after custom-points BGE");
+        assert(cornerVal >= 0.0f && cornerVal < 0.30f && "Custom-points BGE corner floor out of expected range");
+        std::cout << "  [bge_control_points] Custom control points BGE test PASSED." << std::endl;
+    }
+
     // -----------------------------------------------------------------------
     // 13. Register: determine shifts and rotations (on BGE frames)
     // -----------------------------------------------------------------------

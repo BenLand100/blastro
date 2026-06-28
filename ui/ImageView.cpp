@@ -502,6 +502,34 @@ void ImageView::wheelEvent(QWheelEvent* event) {
 }
 
 void ImageView::mousePressEvent(QMouseEvent* event) {
+    if (m_bgeMode && event->button() == Qt::LeftButton && !(event->modifiers() & Qt::ShiftModifier)) {
+        QPointF scenePos = mapToScene(event->pos());
+        QSize imgSz = currentImageSize();
+        if (scenePos.x() >= 0 && scenePos.x() < imgSz.width() && scenePos.y() >= 0 && scenePos.y() < imgSz.height()) {
+            auto pts = getBgeControlPoints();
+            bool removed = false;
+            double threshold = 12.0;
+            if (transform().m11() > 0.0) {
+                threshold = 12.0 / transform().m11();
+            }
+            for (auto it = pts.begin(); it != pts.end(); ++it) {
+                double dx = it->first - scenePos.x();
+                double dy = it->second - scenePos.y();
+                if (std::sqrt(dx*dx + dy*dy) < threshold) {
+                    pts.erase(it);
+                    removed = true;
+                    break;
+                }
+            }
+            if (!removed) {
+                pts.push_back({scenePos.x(), scenePos.y()});
+            }
+            setBgeControlPoints(pts);
+            event->accept();
+            return;
+        }
+    }
+
     if (event->button() == Qt::LeftButton && (event->modifiers() & Qt::ShiftModifier)) {
         QPointF scenePos = mapToScene(event->pos());
         ResizeHandle handle = getResizeHandleAt(scenePos);
@@ -1006,6 +1034,41 @@ void ImageView::setStars(const std::vector<Star>& stars) {
     viewport()->update();
 }
 
+void ImageView::setBgeMode(bool enabled) {
+    if (m_bgeMode != enabled) {
+        m_bgeMode = enabled;
+        viewport()->update();
+    }
+}
+
+std::vector<std::pair<double, double>> ImageView::getBgeControlPoints() const {
+    if (std::holds_alternative<GrayscaleImagePtr>(m_currentImage)) {
+        if (auto img = std::get<GrayscaleImagePtr>(m_currentImage)) {
+            if (img->buffer()) return img->buffer()->bgeControlPoints();
+        }
+    } else if (std::holds_alternative<RGBImagePtr>(m_currentImage)) {
+        if (auto img = std::get<RGBImagePtr>(m_currentImage)) {
+            if (img->r() && img->r()->buffer()) return img->r()->buffer()->bgeControlPoints();
+        }
+    }
+    return {};
+}
+
+void ImageView::setBgeControlPoints(const std::vector<std::pair<double, double>>& pts) {
+    if (std::holds_alternative<GrayscaleImagePtr>(m_currentImage)) {
+        if (auto img = std::get<GrayscaleImagePtr>(m_currentImage)) {
+            if (img->buffer()) img->buffer()->setBgeControlPoints(pts);
+        }
+    } else if (std::holds_alternative<RGBImagePtr>(m_currentImage)) {
+        if (auto img = std::get<RGBImagePtr>(m_currentImage)) {
+            if (img->r() && img->r()->buffer()) img->r()->buffer()->setBgeControlPoints(pts);
+            if (img->g() && img->g()->buffer()) img->g()->buffer()->setBgeControlPoints(pts);
+            if (img->b() && img->b()->buffer()) img->b()->buffer()->setBgeControlPoints(pts);
+        }
+    }
+    viewport()->update();
+}
+
 void ImageView::drawForeground(QPainter* painter, const QRectF& rect) {
     Q_UNUSED(rect);
 
@@ -1043,6 +1106,28 @@ void ImageView::drawForeground(QPainter* painter, const QRectF& rect) {
         painter->restore();
     }
     
+    // Draw BGE Control Points
+    auto bgePts = getBgeControlPoints();
+    if (!bgePts.empty()) {
+        painter->save();
+        QPen pen(QColor("#00ffff"));
+        pen.setWidth(1);
+        pen.setCosmetic(true);
+        painter->setPen(pen);
+        painter->setBrush(QColor(0, 255, 255, 40));
+        double size = 8.0;
+        if (transform().m11() > 0.0) {
+            size = 8.0 / transform().m11();
+        }
+        for (const auto& pt : bgePts) {
+            QRectF sq(pt.first - size/2, pt.second - size/2, size, size);
+            painter->drawRect(sq);
+            painter->drawLine(QPointF(pt.first - size/4, pt.second), QPointF(pt.first + size/4, pt.second));
+            painter->drawLine(QPointF(pt.first, pt.second - size/4), QPointF(pt.first, pt.second + size/4));
+        }
+        painter->restore();
+    }
+
     // Draw star circles
     if (m_showStars && !m_stars.empty()) {
         painter->save();

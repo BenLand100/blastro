@@ -84,11 +84,18 @@ public:
     QRect selectionRect() const { return m_selectionRect; }
     bool hasSelection() const { return m_hasSelection; }
     void clearSelection();
+    QSize currentImageSize() const;
 
     // Star/Constellation Visualization
     void setShowStars(bool show);
     void setShowConstellations(bool show);
     void setStars(const std::vector<Star>& stars);
+
+    // BGE control points editing mode
+    bool bgeMode() const { return m_bgeMode; }
+    void setBgeMode(bool enabled);
+    std::vector<std::pair<double, double>> getBgeControlPoints() const;
+    void setBgeControlPoints(const std::vector<std::pair<double, double>>& pts);
 
 signals:
     void stretchParamsChanged(double b, double w, double m);
@@ -110,7 +117,6 @@ private:
     void updateLUT();
     float applyMTF(float v, float B, float W, float M);
     void clearCLAHE();
-    QSize currentImageSize() const;
 
     enum ResizeHandle {
         HandleNone,
@@ -161,10 +167,12 @@ private:
     bool m_updatesSuspended = false;
     QImage m_cachedViewportImage;
 
-    // Star/Constellation Overlay state
     bool m_showStars = false;
     bool m_showConstellations = false;
     std::vector<Star> m_stars;
+
+    // BGE control points editing
+    bool m_bgeMode = false;
 };
 
 } // namespace blastro

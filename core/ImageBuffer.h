@@ -18,6 +18,7 @@
 
 #pragma once
 #include <vector>
+#include <utility>
 #include <memory>
 #include <cstdlib>
 #include <new>
@@ -76,10 +77,14 @@ public:
     float* data() { return m_data.data(); }
     const std::vector<float, AlignedAllocator<float, 32>>& rawData() const { return m_data; }
 
+    const std::vector<std::pair<double, double>>& bgeControlPoints() const { return m_bgeControlPoints; }
+    void setBgeControlPoints(const std::vector<std::pair<double, double>>& pts) { m_bgeControlPoints = pts; }
+
 private:
     int m_width;
     int m_height;
     std::vector<float, AlignedAllocator<float, 32>> m_data;
+    std::vector<std::pair<double, double>> m_bgeControlPoints;
 };
 
 using ImageBufferPtr = std::shared_ptr<ImageBuffer>;

@@ -60,6 +60,12 @@ BLastro implements an MDI-window-specific Undo/Redo history system and viewport 
    - Operations like changing frames in a batch (`BatchImageWidget`), applying stretches, or performing Undo/Redo should not reset the user's viewport zoom and panning boundaries.
    - To achieve this, the `ImageView::setImage` method supports a `preserveZoom` parameter. When `true`, it bypasses `fitToWindow()` auto-scaling, maintaining the graphics scene's transformation matrix and scroll states.
 
+### Interactive Control Point Algorithms
+
+Algorithms that require user-guided region/coordinate selection (such as Background Subtraction/Extraction) must split their workflow into two phases:
+1. **Interactive Placement**: User places, drags, or clears control points represented as a persistent property of the image's data structure (`ImageBuffer`). These coordinates are drawn directly as overlays on the `ImageView` using interactive edit modes.
+2. **Algorithm Execution**: The backend algorithm consumes the coordinates stored in the active image's property to sample local pixel values and run calculations (e.g. surface fitting). Because the control points are stored on the `ImageBuffer`, they are automatically deep-copied and restored by the Undo/Redo checkpoint system, enabling the user to undo a subtraction, tweak the points on the original image, and re-apply.
+
 ## Build Requirements
 
 - C++17 compliant compiler

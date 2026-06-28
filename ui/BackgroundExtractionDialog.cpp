@@ -101,6 +101,14 @@ BackgroundExtractionDialog::BackgroundExtractionDialog(WorkspaceRegistry& worksp
     connect(prefsBtn, &QPushButton::clicked, this, &BackgroundExtractionDialog::onPrefsClicked);
     btnLayout->addWidget(prefsBtn);
 
+    QPushButton* generateBtn = new QPushButton("Generate Grid", this);
+    connect(generateBtn, &QPushButton::clicked, this, &BackgroundExtractionDialog::onGenerateGridClicked);
+    btnLayout->addWidget(generateBtn);
+
+    QPushButton* clearBtn = new QPushButton("Clear Points", this);
+    connect(clearBtn, &QPushButton::clicked, this, &BackgroundExtractionDialog::onClearPointsClicked);
+    btnLayout->addWidget(clearBtn);
+
     btnLayout->addStretch(1);
     
     QPushButton* closeBtn = new QPushButton("Close", this);
@@ -113,6 +121,11 @@ BackgroundExtractionDialog::BackgroundExtractionDialog(WorkspaceRegistry& worksp
     btnLayout->addWidget(applyBtn);
 
     mainLayout->addLayout(btnLayout);
+
+    if (auto* mdi = findMdiArea()) {
+        connect(mdi, &QMdiArea::subWindowActivated, this, &BackgroundExtractionDialog::onSubWindowActivated);
+    }
+    updateBgeModes();
 }
 
 WorkspaceImageWindow* BackgroundExtractionDialog::getActiveImageWindow() const {
@@ -197,6 +210,97 @@ std::map<std::string, std::string> BackgroundExtractionDialog::getConfig() const
     config["huber_delta"] = std::to_string(m_huberDelta);
     config["threads"] = std::to_string(m_threads);
     return config;
+}
+
+BackgroundExtractionDialog::~BackgroundExtractionDialog() {
+    disableAllBgeModes();
+}
+
+void BackgroundExtractionDialog::showEvent(QShowEvent* event) {
+    AlgorithmDialog::showEvent(event);
+    updateBgeModes();
+}
+
+void BackgroundExtractionDialog::hideEvent(QHideEvent* event) {
+    disableAllBgeModes();
+    AlgorithmDialog::hideEvent(event);
+}
+
+void BackgroundExtractionDialog::onGenerateGridClicked() {
+    auto* win = getActiveImageWindow();
+    if (!win || !win->imageView()) return;
+    
+    QSize imgSz = win->imageView()->currentImageSize();
+    if (imgSz.isEmpty()) return;
+    
+    int cols = 5;
+    int rows = 5;
+    
+    double marginX = imgSz.width() * 0.08;
+    double marginY = imgSz.height() * 0.08;
+    
+    double stepX = (imgSz.width() - 2 * marginX) / std::max(1, cols - 1);
+    double stepY = (imgSz.height() - 2 * marginY) / std::max(1, rows - 1);
+    
+    std::vector<std::pair<double, double>> pts;
+    for (int r = 0; r < rows; ++r) {
+        for (int c = 0; c < cols; ++c) {
+            double x = marginX + c * stepX;
+            double y = marginY + r * stepY;
+            pts.push_back({x, y});
+        }
+    }
+    win->imageView()->setBgeControlPoints(pts);
+}
+
+void BackgroundExtractionDialog::onClearPointsClicked() {
+    auto* win = getActiveImageWindow();
+    if (!win || !win->imageView()) return;
+    win->imageView()->setBgeControlPoints({});
+}
+
+void BackgroundExtractionDialog::onSubWindowActivated(QMdiSubWindow*) {
+    updateBgeModes();
+}
+
+QMdiArea* BackgroundExtractionDialog::findMdiArea() const {
+    QWidget* p = parentWidget();
+    while (p) {
+        if (auto* mw = qobject_cast<QMainWindow*>(p)) {
+            return mw->findChild<QMdiArea*>();
+        }
+        p = p->parentWidget();
+    }
+    return nullptr;
+}
+
+void BackgroundExtractionDialog::updateBgeModes() {
+    auto* mdi = findMdiArea();
+    if (!mdi) return;
+    
+    auto* activeSub = mdi->activeSubWindow();
+    QWidget* activeWidget = activeSub ? activeSub->widget() : nullptr;
+    
+    for (auto* sub : mdi->subWindowList()) {
+        if (auto* win = qobject_cast<WorkspaceImageWindow*>(sub->widget())) {
+            if (win->imageView()) {
+                win->imageView()->setBgeMode(win == activeWidget);
+            }
+        }
+    }
+}
+
+void BackgroundExtractionDialog::disableAllBgeModes() {
+    auto* mdi = findMdiArea();
+    if (!mdi) return;
+    
+    for (auto* sub : mdi->subWindowList()) {
+        if (auto* win = qobject_cast<WorkspaceImageWindow*>(sub->widget())) {
+            if (win->imageView()) {
+                win->imageView()->setBgeMode(false);
+            }
+        }
+    }
 }
 
 } // namespace blastro
