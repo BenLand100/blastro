@@ -116,6 +116,25 @@ Algorithms that require user-guided region/coordinate selection (such as Backgro
 1. **Interactive Placement**: User places, drags, or clears control points represented as a persistent property of the image's data structure (`ImageBuffer`). These coordinates are drawn directly as overlays on the `ImageView` using interactive edit modes.
 2. **Algorithm Execution**: The backend algorithm consumes the coordinates stored in the active image's property to sample local pixel values and run calculations (e.g. surface fitting). Because the control points are stored on the `ImageBuffer`, they are automatically deep-copied and restored by the Undo/Redo checkpoint system, enabling the user to undo a subtraction, tweak the points on the original image, and re-apply.
 
+## Performance & Implementation Insights (Astro Use Case)
+
+To ensure BLastro remains extremely performant and reliable under typical astronomical imaging workloads (which involve processing dozens of high-resolution FITS/RAW frames, often exceeding 50 megapixels per frame), follow these implementation insights:
+
+### 1. High-Performance Pixel Processing & Concurrency
+- **Avoid Loop Overhead**: Never use bounds-checked pixel accessors like `pixel(x, y)` inside nested loops for whole-image processing. Get the raw float data pointer using `buffer->data()` and iterate contiguously.
+- **OpenMP Parallelization**: Almost all whole-image processing (stretching, calibration, subtraction) should be parallelized using `#pragma omp parallel for`. Ensure loops are free of thread-unsafe shared resource access.
+- **Memory Allocation**: Astronomical batches allocate gigabytes of RAM. Minimize temporary image copies and buffer allocations. Where possible, perform computations in-place or reuse pre-allocated intermediate buffers.
+
+### 2. Robust Mathematical Solvers
+- **Outlier Mitigation**: Raw astronomical frames contain stars, hot pixels, and cosmic rays. Standard Least Squares fitting is highly sensitive to these spikes. Always use robust estimators (like Huber loss or RANSAC) combined with Iteratively Reweighted Least Squares (IRLS) for surface fitting.
+- **Coordinate Normalization**: When solving polynomial surfaces (e.g. background models up to order 5), raw pixel coordinates $(x, y)$ can lead to numerical overflow and matrix singularity. Normalize all coordinates to $[-1.0, 1.0]$ relative to image dimensions before building design matrices.
+- **Local Neighborhood Sampling**: When evaluating image properties at discrete coordinate points (like user-placed control points or star centroids), sample a small local region (e.g. 5x5 box average or median) to mitigate the impact of random noise or localized stellar signal.
+
+### 3. PCL Module & Downloader Integration
+- **TensorFlow Runtime Fallback**: Stars removal and noise reduction PCL modules require the PixInsight TensorFlow runtime library. If missing, configure BLastro to locate it or download it from the configured preference URL (`https://download.starnetastro.com/pixinsight/legacy/tensorflow-runtime/pixinsight_tensorflow_runtime_linux_TF_x64.zip`) and unpack it locally.
+- **File Collision & Refcounting**: The package manager tracks all files extracted from update packages in `QSettings`. To prevent package uninstallation from breaking shared dependencies, track reference counts for files and skip deletion if a file is owned by another active package.
+- **Safe Extraction Scans**: Always verify the contents of download packages using dry-run zip/tar file list queries (`unzip -Z -1` or `tar -tf`) before extraction, warning the user of potential file collisions and allowing them to uninstall conflicting modules.
+
 ## Build Requirements
 
 - C++17 compliant compiler
