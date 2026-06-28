@@ -19,6 +19,33 @@ The core concept in BLastro is the `WorkspaceRegistry`. All loaded images and im
 - Elements are defined as a `std::variant<GrayscaleImagePtr, RGBImagePtr, ImageBatchPtr>`.
 - Algorithms execute against elements in the workspace, modifying them in place or creating new elements.
 
+### Interacting with the ImageBuffer
+
+`ImageBuffer` is BLastro's primary pixel data container. Understanding how to interact with it is key to writing high-performance algorithms:
+
+1. **Memory Layout**:
+   - Pixel data is stored contiguously in a `std::vector<float, AlignedAllocator<float, 32>>`.
+   - The memory is 32-byte aligned to allow for AVX/SIMD vectorization.
+
+2. **Pixel Access**:
+   - **Safe/Bounds-Checked**: Use `buffer->pixel(x, y)` and `buffer->setPixel(x, y, val)`. Out-of-bounds coordinates return `0.0f` safely or are ignored. Excellent for localized operations like interpolation or sampling.
+   - **Direct Pointer (High Performance)**: Use `buffer->data()` to get the raw `float*` pointer. In critical loops, iterate directly over the contiguous array to avoid function call overhead and bounds checking.
+
+3. **Performance Guidelines**:
+   - Parallelize loop iterations over raw pixel pointers using OpenMP:
+     ```cpp
+     float* pixels = buffer->data();
+     int numPixels = buffer->width() * buffer->height();
+     #pragma omp parallel for
+     for (int i = 0; i < numPixels; ++i) {
+         pixels[i] = process(pixels[i]);
+     }
+     ```
+
+4. **Thread Safety**:
+   - `ImageBuffer` does not implement locks. Mutating buffer data on a background thread while the UI is rendering will cause visual artifacts or race conditions.
+   - Ensure the UI suspends rendering during thread execution by calling `setUpdatesSuspended(true)` (this displays a "Processing..." screen) and releases it afterwards.
+
 ### Adding an Algorithm
 
 To add a new processing algorithm:
