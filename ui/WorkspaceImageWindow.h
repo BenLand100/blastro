@@ -43,7 +43,7 @@ public:
     void notifyImageUpdated();
     void setUpdatesSuspended(bool suspended);
 
-    void setElement(const WorkspaceElement& element);
+    void setElement(const WorkspaceElement& element, bool preserveZoom = false);
 
     // Undo/Redo support
     void undo();

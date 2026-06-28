@@ -17,6 +17,7 @@
  */
 
 #include "UpdateManagerDialog.h"
+#include "PreferencesWindow.h"
 #include "core/Preferences.h"
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -28,14 +29,184 @@
 #include <QStandardPaths>
 #include <QTimer>
 #include <QPointer>
+#include <QSettings>
+#include <QCoreApplication>
+
+#include <QRegularExpression>
+#include <QSet>
+#include <QUrl>
 
 namespace blastro {
+
+// Helper to query ZIP or tar.gz file list
+static QStringList getArchiveFiles(const QString& archivePath) {
+    QStringList files;
+    QProcess listProc;
+    if (archivePath.endsWith(".zip", Qt::CaseInsensitive)) {
+        listProc.start("unzip", QStringList() << "-Z" << "-1" << archivePath);
+    } else if (archivePath.endsWith(".tar.gz", Qt::CaseInsensitive) || archivePath.endsWith(".tgz", Qt::CaseInsensitive)) {
+        listProc.start("tar", QStringList() << "-tf" << archivePath);
+    } else {
+        QFileInfo fi(archivePath);
+        files << fi.fileName();
+        return files;
+    }
+    
+    if (listProc.waitForFinished(10000)) {
+        if (listProc.exitCode() == 0) {
+            QString out = QString::fromUtf8(listProc.readAllStandardOutput());
+            QStringList lines = out.split(QRegularExpression("[\r\n]+"), Qt::SkipEmptyParts);
+            for (QString line : lines) {
+                line = line.trimmed();
+                if (!line.isEmpty() && !line.endsWith("/")) {
+                    files << line;
+                }
+            }
+        }
+    }
+    return files;
+}
+
+// QSettings storage helpers
+static void saveInstalledPackage(const UpdatePackage& pkg, const QStringList& files) {
+    QSettings settings("BLastro", "BLastro");
+    QString group = QString("InstalledPackages/%1/").arg(pkg.fileName);
+    settings.setValue(group + "title", pkg.title);
+    settings.setValue(group + "description", pkg.description);
+    settings.setValue(group + "fileName", pkg.fileName);
+    settings.setValue(group + "downloadUrl", pkg.downloadUrl);
+    settings.setValue(group + "sha1", pkg.sha1);
+    settings.setValue(group + "type", pkg.type);
+    settings.setValue(group + "version", pkg.version);
+    settings.setValue(group + "repoUrl", pkg.repoUrl);
+    settings.setValue(group + "files", files);
+}
+
+static std::vector<UpdatePackage> getInstalledPackages() {
+    std::vector<UpdatePackage> list;
+    QSettings settings("BLastro", "BLastro");
+    settings.beginGroup("InstalledPackages");
+    QStringList keys = settings.childGroups();
+    for (const auto& key : keys) {
+        settings.beginGroup(key);
+        UpdatePackage pkg;
+        pkg.title = settings.value("title").toString();
+        pkg.description = settings.value("description").toString();
+        pkg.fileName = settings.value("fileName").toString();
+        pkg.downloadUrl = settings.value("downloadUrl").toString();
+        pkg.sha1 = settings.value("sha1").toString();
+        pkg.type = settings.value("type").toString();
+        pkg.version = settings.value("version").toString();
+        pkg.repoUrl = settings.value("repoUrl").toString();
+        list.push_back(pkg);
+        settings.endGroup();
+    }
+    settings.endGroup();
+    return list;
+}
+
+static QStringList getInstalledPackageFiles(const QString& fileName) {
+    QSettings settings("BLastro", "BLastro");
+    return settings.value(QString("InstalledPackages/%1/files").arg(fileName)).toStringList();
+}
+
+static void removeInstalledPackage(const QString& fileName) {
+    QSettings settings("BLastro", "BLastro");
+    
+    // Delete files first (checking refcounts)
+    QStringList files = getInstalledPackageFiles(fileName);
+    Preferences& prefs = Preferences::instance();
+    QString moduleFolder = QString::fromStdString(prefs.getPclModuleFolder());
+    QString targetDir = QFileInfo(moduleFolder).absolutePath(); // plugins root
+    
+    // Check directory write permissions
+    QFileInfo dirInfo(targetDir);
+    if (targetDir.isEmpty() || !dirInfo.isWritable()) {
+        QString configDir = QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation);
+        targetDir = QDir(configDir).filePath("plugins");
+    }
+
+    // Get all other installed packages' files to compute refcounts dynamically
+    std::vector<UpdatePackage> allInstalled = getInstalledPackages();
+    QSet<QString> otherFiles;
+    for (const auto& otherPkg : allInstalled) {
+        if (otherPkg.fileName != fileName) {
+            QStringList of = getInstalledPackageFiles(otherPkg.fileName);
+            for (const auto& f : of) {
+                otherFiles.insert(f);
+            }
+        }
+    }
+
+    for (const auto& file : files) {
+        if (otherFiles.contains(file)) {
+            qInfo() << "[Uninstall] File" << file << "is shared by another package, skipping physical deletion.";
+            continue; // Do not delete this file as it's still owned by another package!
+        }
+        QString fullPath = QDir(targetDir).filePath(file);
+        QFile::remove(fullPath);
+        // Also remove parent directory if empty
+        QDir().rmdir(QFileInfo(fullPath).absolutePath());
+    }
+
+    // Remove from settings
+    settings.remove(QString("InstalledPackages/%1").arg(fileName));
+}
+
+#include <QDateTime>
+
+static void saveAvailablePackagesCache(const std::vector<UpdatePackage>& packages) {
+    QSettings settings("BLastro", "BLastro");
+    settings.remove("AvailablePackagesCache");
+    settings.beginWriteArray("AvailablePackagesCache/packages");
+    for (size_t i = 0; i < packages.size(); ++i) {
+        settings.setArrayIndex(i);
+        const auto& pkg = packages[i];
+        settings.setValue("title", pkg.title);
+        settings.setValue("description", pkg.description);
+        settings.setValue("fileName", pkg.fileName);
+        settings.setValue("downloadUrl", pkg.downloadUrl);
+        settings.setValue("sha1", pkg.sha1);
+        settings.setValue("type", pkg.type);
+        settings.setValue("version", pkg.version);
+        settings.setValue("repoUrl", pkg.repoUrl);
+    }
+    settings.endArray();
+    settings.setValue("AvailablePackagesCache/LastCheckTimestamp", QDateTime::currentDateTime().toString(Qt::ISODate));
+}
+
+static std::vector<UpdatePackage> loadAvailablePackagesCache(bool& ok) {
+    std::vector<UpdatePackage> packages;
+    QSettings settings("BLastro", "BLastro");
+    if (!settings.contains("AvailablePackagesCache/LastCheckTimestamp")) {
+        ok = false;
+        return packages;
+    }
+    
+    int size = settings.beginReadArray("AvailablePackagesCache/packages");
+    for (int i = 0; i < size; ++i) {
+        settings.setArrayIndex(i);
+        UpdatePackage pkg;
+        pkg.title = settings.value("title").toString();
+        pkg.description = settings.value("description").toString();
+        pkg.fileName = settings.value("fileName").toString();
+        pkg.downloadUrl = settings.value("downloadUrl").toString();
+        pkg.sha1 = settings.value("sha1").toString();
+        pkg.type = settings.value("type").toString();
+        pkg.version = settings.value("version").toString();
+        pkg.repoUrl = settings.value("repoUrl").toString();
+        packages.push_back(pkg);
+    }
+    settings.endArray();
+    ok = true;
+    return packages;
+}
 
 UpdateManagerDialog::UpdateManagerDialog(QWidget* parent)
     : QDialog(parent), m_currentRepoIdx(0), m_currentDownloadIdx(0),
       m_fetchProcess(nullptr), m_downloadProcess(nullptr) {
 
-    setWindowTitle("Download from Repo");
+    setWindowTitle("PCL Repo Packages");
     resize(640, 500);
 
     setStyleSheet(
@@ -63,12 +234,34 @@ UpdateManagerDialog::UpdateManagerDialog(QWidget* parent)
     titleLabel->setStyleSheet("font-weight: bold; font-size: 12px; color: #ffffff;");
     mainLayout->addWidget(titleLabel);
 
+    QLabel* noteLabel = new QLabel("Repositories can be configured in <a href=\"preferences\" style=\"color: #007acc; text-decoration: none;\">Preferences</a>.", this);
+    noteLabel->setTextFormat(Qt::RichText);
+    noteLabel->setTextInteractionFlags(Qt::TextBrowserInteraction);
+    connect(noteLabel, &QLabel::linkActivated, this, [this](const QString&) {
+        QDialog prefDlg(this);
+        prefDlg.setWindowTitle("Preferences");
+        prefDlg.resize(600, 500);
+        QVBoxLayout* layout = new QVBoxLayout(&prefDlg);
+        layout->setContentsMargins(0, 0, 0, 0);
+        PreferencesWindow* prefWin = new PreferencesWindow(&prefDlg);
+        prefWin->setAttribute(Qt::WA_DeleteOnClose);
+        layout->addWidget(prefWin);
+        connect(prefWin, &QObject::destroyed, &prefDlg, &QDialog::accept);
+        prefDlg.exec();
+        onCheckClicked(true);
+    });
+    mainLayout->addWidget(noteLabel);
+
     m_treeWidget = new QTreeWidget(this);
-    m_treeWidget->setHeaderLabels(QStringList() << "Download" << "Version" << "Type" << "Repository Source");
-    m_treeWidget->header()->setSectionResizeMode(0, QHeaderView::Stretch);
-    m_treeWidget->header()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
-    m_treeWidget->header()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
-    m_treeWidget->header()->setSectionResizeMode(3, QHeaderView::ResizeToContents);
+    m_treeWidget->setHeaderLabels(QStringList() << "Package" << "Version" << "Type" << "Repository Source");
+    m_treeWidget->header()->setSectionResizeMode(0, QHeaderView::Interactive);
+    m_treeWidget->header()->setSectionResizeMode(1, QHeaderView::Interactive);
+    m_treeWidget->header()->setSectionResizeMode(2, QHeaderView::Interactive);
+    m_treeWidget->header()->setSectionResizeMode(3, QHeaderView::Interactive);
+    m_treeWidget->setColumnWidth(0, 320);
+    m_treeWidget->setColumnWidth(1, 80);
+    m_treeWidget->setColumnWidth(2, 100);
+    m_treeWidget->setColumnWidth(3, 180);
     connect(m_treeWidget, &QTreeWidget::itemSelectionChanged, this, &UpdateManagerDialog::onItemSelectionChanged);
     mainLayout->addWidget(m_treeWidget, 2);
 
@@ -91,7 +284,7 @@ UpdateManagerDialog::UpdateManagerDialog(QWidget* parent)
     QHBoxLayout* btnLayout = new QHBoxLayout();
     
     m_checkBtn = new QPushButton("Check for Downloads", this);
-    connect(m_checkBtn, &QPushButton::clicked, this, &UpdateManagerDialog::onCheckClicked);
+    connect(m_checkBtn, &QPushButton::clicked, this, [this]() { onCheckClicked(true); });
     btnLayout->addWidget(m_checkBtn);
 
     btnLayout->addStretch(1);
@@ -100,16 +293,16 @@ UpdateManagerDialog::UpdateManagerDialog(QWidget* parent)
     connect(closeBtn, &QPushButton::clicked, this, &QDialog::accept);
     btnLayout->addWidget(closeBtn);
 
-    m_downloadBtn = new QPushButton("Download", this);
+    m_downloadBtn = new QPushButton("Apply Changes", this);
     m_downloadBtn->setObjectName("primaryButton");
     m_downloadBtn->setEnabled(false);
-    connect(m_downloadBtn, &QPushButton::clicked, this, &UpdateManagerDialog::onDownloadClicked);
+    connect(m_downloadBtn, &QPushButton::clicked, this, &UpdateManagerDialog::onApplyChangesClicked);
     btnLayout->addWidget(m_downloadBtn);
 
     mainLayout->addLayout(btnLayout);
 
     // Initial check on load
-    onCheckClicked();
+    onCheckClicked(false);
 }
 
 UpdateManagerDialog::~UpdateManagerDialog() {
@@ -125,16 +318,34 @@ UpdateManagerDialog::~UpdateManagerDialog() {
 
 void UpdateManagerDialog::updateUIState(bool working) {
     m_checkBtn->setEnabled(!working);
-    m_downloadBtn->setEnabled(!working && !m_availablePackages.empty());
+    m_downloadBtn->setEnabled(!working);
 }
 
-void UpdateManagerDialog::onCheckClicked() {
+void UpdateManagerDialog::onCheckClicked(bool force) {
     m_treeWidget->clear();
     m_availablePackages.clear();
     m_repoQueue.clear();
 
     m_descBrowser->clear();
     m_downloadBtn->setEnabled(false);
+
+    if (!force) {
+        // Try to load from cache if less than 1 day old
+        QSettings settings("BLastro", "BLastro");
+        QString tsStr = settings.value("AvailablePackagesCache/LastCheckTimestamp").toString();
+        if (!tsStr.isEmpty()) {
+            QDateTime lastCheck = QDateTime::fromString(tsStr, Qt::ISODate);
+            if (lastCheck.isValid() && lastCheck.secsTo(QDateTime::currentDateTime()) < 86400 && lastCheck.secsTo(QDateTime::currentDateTime()) >= 0) {
+                bool ok = false;
+                m_availablePackages = loadAvailablePackagesCache(ok);
+                if (ok) {
+                    qInfo() << "[Update Cache] Loaded available packages list from cache (timestamp:" << tsStr << ")";
+                    populateTreeWidget();
+                    return;
+                }
+            }
+        }
+    }
 
     Preferences& prefs = Preferences::instance();
     std::vector<std::string> repos = prefs.getUpdateRepositories();
@@ -152,32 +363,116 @@ void UpdateManagerDialog::onCheckClicked() {
     startFetchingNextRepo();
 }
 
-void UpdateManagerDialog::startFetchingNextRepo() {
-    if (m_currentRepoIdx >= (int)m_repoQueue.size()) {
-        // Queue finished
-        m_statusLabel->setText(QString("Check for downloads complete. Found %1 packages.").arg(m_availablePackages.size()));
-        updateUIState(false);
+void UpdateManagerDialog::populateTreeWidget() {
+    m_treeWidget->clear();
+
+    std::vector<UpdatePackage> installedPkgs = getInstalledPackages();
+    QMap<QString, UpdatePackage> installedMap;
+    for (const auto& pkg : installedPkgs) {
+        installedMap[pkg.fileName] = pkg;
+    }
+
+    // Group active packages by repo URL
+    QMap<QString, std::vector<size_t>> repoToPackageIndices;
+    for (size_t i = 0; i < m_availablePackages.size(); ++i) {
+        repoToPackageIndices[m_availablePackages[i].repoUrl].push_back(i);
+    }
+
+    // Keep track of which installed fileNames are found in the repos
+    QSet<QString> foundFileNames;
+
+    // Populate tree by repo
+    for (auto it = repoToPackageIndices.begin(); it != repoToPackageIndices.end(); ++it) {
+        QString repoUrl = it.key();
+        const auto& indices = it.value();
+
+        QTreeWidgetItem* repoGroupItem = new QTreeWidgetItem(m_treeWidget);
+        repoGroupItem->setText(0, QString("Repository: %1").arg(repoUrl));
+        repoGroupItem->setFlags(repoGroupItem->flags() & ~Qt::ItemIsUserCheckable);
         
-        // Populate TreeWidget
-        for (size_t i = 0; i < m_availablePackages.size(); ++i) {
-            const auto& pkg = m_availablePackages[i];
-            QTreeWidgetItem* item = new QTreeWidgetItem(m_treeWidget);
+        QFont font = repoGroupItem->font(0);
+        font.setBold(true);
+        repoGroupItem->setFont(0, font);
+        repoGroupItem->setExpanded(true);
+
+        for (size_t idx : indices) {
+            const auto& pkg = m_availablePackages[idx];
+            foundFileNames.insert(pkg.fileName);
+
+            QTreeWidgetItem* item = new QTreeWidgetItem(repoGroupItem);
             item->setText(0, pkg.title.isEmpty() ? pkg.fileName : pkg.title);
             item->setText(1, pkg.version);
             item->setText(2, pkg.type);
-            
-            // Clean display repo source
-            QUrl url(pkg.repoUrl);
-            item->setText(3, url.host());
-            
+            item->setText(3, QUrl(pkg.repoUrl).host());
+
             item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
-            item->setCheckState(0, Qt::Unchecked);
-            item->setData(0, Qt::UserRole, (int)i);
+            bool isInstalled = installedMap.contains(pkg.fileName);
+            item->setCheckState(0, isInstalled ? Qt::Checked : Qt::Unchecked);
+            item->setData(0, Qt::UserRole, (int)idx);
+            item->setData(0, Qt::UserRole + 1, "repo");
         }
+    }
+
+    // Find and populate orphaned/missing packages
+    QTreeWidgetItem* orphanedGroupItem = nullptr;
+    for (const auto& pkg : installedPkgs) {
+        if (!foundFileNames.contains(pkg.fileName)) {
+            if (!orphanedGroupItem) {
+                orphanedGroupItem = new QTreeWidgetItem(m_treeWidget);
+                orphanedGroupItem->setText(0, "Orphaned / Missing Packages (Installed but missing from repos)");
+                orphanedGroupItem->setFlags(orphanedGroupItem->flags() & ~Qt::ItemIsUserCheckable);
+                
+                QFont font = orphanedGroupItem->font(0);
+                font.setBold(true);
+                orphanedGroupItem->setFont(0, font);
+                orphanedGroupItem->setExpanded(true);
+            }
+
+            QTreeWidgetItem* item = new QTreeWidgetItem(orphanedGroupItem);
+            item->setText(0, (pkg.title.isEmpty() ? pkg.fileName : pkg.title) + " (Missing)");
+            item->setText(1, pkg.version);
+            item->setText(2, pkg.type);
+            item->setText(3, pkg.repoUrl);
+
+            item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
+            item->setCheckState(0, Qt::Checked); // Missing packages are installed
+            item->setForeground(0, QBrush(Qt::red));
+            
+            item->setData(0, Qt::UserRole + 1, "orphaned");
+            item->setData(0, Qt::UserRole + 2, pkg.title);
+            item->setData(0, Qt::UserRole + 3, pkg.description);
+            item->setData(0, Qt::UserRole + 4, pkg.fileName);
+            item->setData(0, Qt::UserRole + 5, pkg.downloadUrl);
+            item->setData(0, Qt::UserRole + 6, pkg.sha1);
+            item->setData(0, Qt::UserRole + 7, pkg.type);
+            item->setData(0, Qt::UserRole + 8, pkg.version);
+            item->setData(0, Qt::UserRole + 9, pkg.repoUrl);
+        }
+    }
+
+    // Select first leaf item
+    QTreeWidgetItemIterator itemIt(m_treeWidget);
+    while (*itemIt) {
+        if ((*itemIt)->childCount() == 0 && (*itemIt)->parent()) {
+            (*itemIt)->setSelected(true);
+            break;
+        }
+        ++itemIt;
+    }
+
+    m_downloadBtn->setEnabled(true);
+}
+
+void UpdateManagerDialog::startFetchingNextRepo() {
+    if (m_currentRepoIdx >= (int)m_repoQueue.size()) {
+        // Queue finished
+        m_statusLabel->setText(QString("Check complete. Found %1 packages.").arg(m_availablePackages.size()));
+        updateUIState(false);
         
-        if (m_treeWidget->topLevelItemCount() > 0) {
-            m_treeWidget->topLevelItem(0)->setSelected(true);
-        }
+        // Save fetched packages to cache
+        saveAvailablePackagesCache(m_availablePackages);
+
+        populateTreeWidget();
         return;
     }
 
@@ -359,40 +654,118 @@ void UpdateManagerDialog::onItemSelectionChanged() {
         return;
     }
 
-    int idx = selected.first()->data(0, Qt::UserRole).toInt();
-    if (idx >= 0 && idx < (int)m_availablePackages.size()) {
-        m_descBrowser->setHtml(m_availablePackages[idx].description);
+    QTreeWidgetItem* item = selected.first();
+    QString itemType = item->data(0, Qt::UserRole + 1).toString();
+    if (itemType == "repo") {
+        int idx = item->data(0, Qt::UserRole).toInt();
+        if (idx >= 0 && idx < (int)m_availablePackages.size()) {
+            m_descBrowser->setHtml(m_availablePackages[idx].description);
+        }
+    } else if (itemType == "orphaned") {
+        m_descBrowser->setHtml(item->data(0, Qt::UserRole + 3).toString());
+    } else {
+        m_descBrowser->clear();
     }
 }
 
-void UpdateManagerDialog::onDownloadClicked() {
+void UpdateManagerDialog::onApplyChangesClicked() {
     m_packagesToDownload.clear();
-    for (int i = 0; i < m_treeWidget->topLevelItemCount(); ++i) {
-        QTreeWidgetItem* item = m_treeWidget->topLevelItem(i);
-        if (item->checkState(0) == Qt::Checked) {
-            int idx = item->data(0, Qt::UserRole).toInt();
-            m_packagesToDownload.push_back(m_availablePackages[idx]);
-        }
+    m_packagesToUninstall.clear();
+
+    std::vector<UpdatePackage> installedPkgs = getInstalledPackages();
+    QMap<QString, UpdatePackage> installedMap;
+    for (const auto& pkg : installedPkgs) {
+        installedMap[pkg.fileName] = pkg;
     }
 
-    if (m_packagesToDownload.empty()) {
-        QMessageBox::information(this, "No Selection", "Please check at least one package to download.");
+    // Traverse the tree widget to find checks/unchecks
+    QTreeWidgetItemIterator it(m_treeWidget);
+    while (*it) {
+        QTreeWidgetItem* item = *it;
+        QString itemType = item->data(0, Qt::UserRole + 1).toString();
+
+        if (itemType == "repo") {
+            int idx = item->data(0, Qt::UserRole).toInt();
+            const auto& pkg = m_availablePackages[idx];
+            bool currentlyInstalled = installedMap.contains(pkg.fileName);
+            bool checked = (item->checkState(0) == Qt::Checked);
+
+            if (checked && !currentlyInstalled) {
+                m_packagesToDownload.push_back(pkg);
+            } else if (!checked && currentlyInstalled) {
+                m_packagesToUninstall.push_back(pkg);
+            }
+        } else if (itemType == "orphaned") {
+            bool checked = (item->checkState(0) == Qt::Checked);
+            if (!checked) {
+                // Orphaned package uninstalled
+                UpdatePackage pkg;
+                pkg.title = item->data(0, Qt::UserRole + 2).toString();
+                pkg.description = item->data(0, Qt::UserRole + 3).toString();
+                pkg.fileName = item->data(0, Qt::UserRole + 4).toString();
+                pkg.downloadUrl = item->data(0, Qt::UserRole + 5).toString();
+                pkg.sha1 = item->data(0, Qt::UserRole + 6).toString();
+                pkg.type = item->data(0, Qt::UserRole + 7).toString();
+                pkg.version = item->data(0, Qt::UserRole + 8).toString();
+                pkg.repoUrl = item->data(0, Qt::UserRole + 9).toString();
+                m_packagesToUninstall.push_back(pkg);
+            }
+        }
+        ++it;
+    }
+
+    if (m_packagesToDownload.empty() && m_packagesToUninstall.empty()) {
+        QMessageBox::information(this, "No Changes", "No changes were made to package check states.");
         return;
     }
 
-    m_currentDownloadIdx = 0;
+    // Confirm uninstallation
+    if (!m_packagesToUninstall.empty()) {
+        QStringList names;
+        for (const auto& pkg : m_packagesToUninstall) {
+            names << QString("- %1 (%2)").arg(pkg.title.isEmpty() ? pkg.fileName : pkg.title).arg(pkg.version);
+        }
+        QMessageBox::StandardButton reply = QMessageBox::question(this, "Confirm Changes",
+            QString("You are about to uninstall the following package(s):\n\n%1\n\nAre you sure you want to proceed?")
+            .arg(names.join("\n")),
+            QMessageBox::Yes | QMessageBox::No);
+        if (reply != QMessageBox::Yes) {
+            return;
+        }
+    }
+
     m_progressBar->setVisible(true);
     m_progressBar->setRange(0, 0); // Pulse behavior
     updateUIState(true);
-    startDownloadingNextPackage();
+
+    m_currentUninstallIdx = 0;
+    startUninstallingNextPackage();
+}
+
+void UpdateManagerDialog::startUninstallingNextPackage() {
+    if (m_currentUninstallIdx >= (int)m_packagesToUninstall.size()) {
+        // Uninstallation complete, proceed to downloads/installations
+        m_currentDownloadIdx = 0;
+        startDownloadingNextPackage();
+        return;
+    }
+
+    const auto& pkg = m_packagesToUninstall[m_currentUninstallIdx];
+    m_statusLabel->setText(QString("Uninstalling %1...").arg(pkg.title));
+    QCoreApplication::processEvents();
+
+    removeInstalledPackage(pkg.fileName);
+
+    m_currentUninstallIdx++;
+    startUninstallingNextPackage();
 }
 
 void UpdateManagerDialog::startDownloadingNextPackage() {
     if (m_currentDownloadIdx >= (int)m_packagesToDownload.size()) {
         m_progressBar->setVisible(false);
-        m_statusLabel->setText("All selected downloads completed.");
+        m_statusLabel->setText("All package modifications applied successfully.");
         updateUIState(false);
-        QMessageBox::information(this, "Downloads Completed", "Packages downloaded and installed successfully! Please restart BLastro to load new modules.");
+        QMessageBox::information(this, "Changes Applied", "Packages updated successfully! Please restart BLastro to reload modules.");
         onCheckClicked();
         return;
     }
@@ -432,8 +805,63 @@ void UpdateManagerDialog::onDownloadFinished(int exitCode) {
     QString tempFilePath = QDir(tempDir).filePath(pkg.fileName);
 
     if (exitCode == 0) {
+        // Collision checks
+        QStringList archiveFiles = getArchiveFiles(tempFilePath);
+        std::vector<UpdatePackage> installedPkgs = getInstalledPackages();
+
+        bool stopQueue = false;
+        
+        for (const auto& file : archiveFiles) {
+            for (const auto& oldPkg : installedPkgs) {
+                if (oldPkg.fileName == pkg.fileName) continue; // skip self
+                
+                QStringList oldFiles = getInstalledPackageFiles(oldPkg.fileName);
+                if (oldFiles.contains(file)) {
+                    // Collision found! Prompt user
+                    QMessageBox msgBox(this);
+                    msgBox.setWindowTitle("File Collision Detected");
+                    msgBox.setText(QString("The package '%1' wants to install the file '%2'\nwhich is already owned by package '%3'.")
+                                   .arg(pkg.title).arg(file).arg(oldPkg.title));
+                    msgBox.setInformativeText("Would you like to uninstall the other package first, share file ownership, or cancel?");
+                    
+                    QPushButton* uninstallBtn = msgBox.addButton("Uninstall Other", QMessageBox::ActionRole);
+                    QPushButton* shareBtn = msgBox.addButton("Share Ownership", QMessageBox::ActionRole);
+                    QPushButton* cancelBtn = msgBox.addButton(QMessageBox::Cancel);
+                    msgBox.setDefaultButton(shareBtn);
+                    msgBox.exec();
+
+                    if (msgBox.clickedButton() == uninstallBtn) {
+                        qInfo() << "[Collision] Uninstalling" << oldPkg.fileName << "to resolve collision.";
+                        removeInstalledPackage(oldPkg.fileName);
+                        // Refresh list
+                        installedPkgs = getInstalledPackages();
+                        break;
+                    } else if (msgBox.clickedButton() == cancelBtn) {
+                        qInfo() << "[Collision] Installation cancelled.";
+                        stopQueue = true;
+                        break;
+                    } else {
+                        qInfo() << "[Collision] Share ownership chosen.";
+                        break;
+                    }
+                }
+            }
+            if (stopQueue) break;
+        }
+
+        if (stopQueue) {
+            QFile::remove(tempFilePath);
+            m_progressBar->setVisible(false);
+            m_statusLabel->setText("Operation cancelled.");
+            updateUIState(false);
+            onCheckClicked();
+            return;
+        }
+
         bool installed = extractAndInstall(tempFilePath, pkg.type);
-        if (!installed) {
+        if (installed) {
+            saveInstalledPackage(pkg, archiveFiles);
+        } else {
             QMessageBox::warning(this, "Download Failed", QString("Failed to extract or copy files from %1").arg(pkg.fileName));
         }
     } else {

@@ -92,7 +92,7 @@ private:
     double m_midpoint = 0.5;
 
     double m_spPoint = 0.5;
-    double m_stretchFactor = 3.0;
+    double m_stretchFactor = 0.0;
     double m_shadowProtect = 0.0;
     double m_highlightProtect = 1.0;
 

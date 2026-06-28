@@ -55,7 +55,7 @@ ImageView::ImageView(QWidget* parent)
     updateLUT();
 }
 
-void ImageView::setImage(const ImageVariant& image, bool preserveStretch) {
+void ImageView::setImage(const ImageVariant& image, bool preserveStretch, bool preserveZoom) {
     clearCLAHE();
     m_currentImage = image;
     m_hasSelection = false;
@@ -73,11 +73,13 @@ void ImageView::setImage(const ImageVariant& image, bool preserveStretch) {
     }
     m_scene->setSceneRect(0, 0, w, h);
     
-    // Auto-fit to the MDI window on load
-    if (viewport()->width() > 100 && viewport()->height() > 100) {
-        fitToWindow();
-    } else {
-        m_fitOnNextResize = true;
+    // Auto-fit to the MDI window on load, unless preserving zoom
+    if (!preserveZoom) {
+        if (viewport()->width() > 100 && viewport()->height() > 100) {
+            fitToWindow();
+        } else {
+            m_fitOnNextResize = true;
+        }
     }
     
     if (preserveStretch) {

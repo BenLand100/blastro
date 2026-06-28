@@ -232,7 +232,7 @@ void BatchImageWidget::onIndexChanged(int index) {
     
     try {
         ImageVariant img = m_batch->getImage(m_currentIndex);
-        m_imageView->setImage(img, true);
+        m_imageView->setImage(img, true, true);
         updateBottomBarReadout();
         updateStarOverlay();
         emit frameChanged(index);

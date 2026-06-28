@@ -34,6 +34,7 @@ Preferences::Preferences() {
     m_pclLibFolder = (QDir::currentPath() + "/plugins/lib").toStdString();
     m_pclLibraryFolder = (QDir::currentPath() + "/plugins/library").toStdString();
     m_pclLoadTensorflow = false;
+    m_pclTensorflowDownloadUrl = "https://download.starnetastro.com/pixinsight/legacy/tensorflow-runtime/pixinsight_tensorflow_runtime_linux_TF_x64.zip";
     m_temporaryFolder = "/tmp";
     m_intermediateFolder = (QDir::currentPath() + "/process").toStdString();
     
@@ -85,6 +86,16 @@ bool Preferences::getPclLoadTensorflow() const {
 void Preferences::setPclLoadTensorflow(bool load) {
     std::lock_guard<std::mutex> lock(m_mutex);
     m_pclLoadTensorflow = load;
+}
+
+std::string Preferences::getPclTensorflowDownloadUrl() const {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return m_pclTensorflowDownloadUrl;
+}
+
+void Preferences::setPclTensorflowDownloadUrl(const std::string& url) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_pclTensorflowDownloadUrl = url;
 }
 
 std::string Preferences::getTemporaryFolder() const {
@@ -154,6 +165,7 @@ void Preferences::load() {
     m_pclLibFolder = settings.value("Preferences/PclLibFolder", QString::fromStdString(m_pclLibFolder)).toString().toStdString();
     m_pclLibraryFolder = settings.value("Preferences/PclLibraryFolder", QString::fromStdString(m_pclLibraryFolder)).toString().toStdString();
     m_pclLoadTensorflow = settings.value("Preferences/PclLoadTensorflow", m_pclLoadTensorflow).toBool();
+    m_pclTensorflowDownloadUrl = settings.value("Preferences/PclTensorflowDownloadUrl", QString::fromStdString(m_pclTensorflowDownloadUrl)).toString().toStdString();
     m_temporaryFolder = settings.value("Preferences/TemporaryFolder", QString::fromStdString(m_temporaryFolder)).toString().toStdString();
     m_intermediateFolder = settings.value("Preferences/IntermediateFolder", QString::fromStdString(m_intermediateFolder)).toString().toStdString();
     m_threadCount = settings.value("Preferences/ThreadCount", m_threadCount).toInt();
@@ -178,6 +190,7 @@ void Preferences::save() {
     settings.setValue("Preferences/PclLibFolder", QString::fromStdString(m_pclLibFolder));
     settings.setValue("Preferences/PclLibraryFolder", QString::fromStdString(m_pclLibraryFolder));
     settings.setValue("Preferences/PclLoadTensorflow", m_pclLoadTensorflow);
+    settings.setValue("Preferences/PclTensorflowDownloadUrl", QString::fromStdString(m_pclTensorflowDownloadUrl));
     settings.setValue("Preferences/TemporaryFolder", QString::fromStdString(m_temporaryFolder));
     settings.setValue("Preferences/IntermediateFolder", QString::fromStdString(m_intermediateFolder));
     settings.setValue("Preferences/ThreadCount", m_threadCount);

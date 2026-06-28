@@ -207,12 +207,12 @@ StretchingDialog::StretchingDialog(WorkspaceRegistry& workspace, QWidget* parent
     QHBoxLayout* dLayout = new QHBoxLayout();
     m_dSlider = new QSlider(Qt::Horizontal, this);
     m_dSlider->setRange(0, 150);
-    m_dSlider->setValue(30);
+    m_dSlider->setValue(0);
     m_dSpin = new QDoubleSpinBox(this);
     m_dSpin->setRange(0.0, 15.0);
     m_dSpin->setSingleStep(0.1);
     m_dSpin->setDecimals(2);
-    m_dSpin->setValue(3.0);
+    m_dSpin->setValue(0.0);
     dLayout->addWidget(m_dSlider, 1);
     dLayout->addWidget(m_dSpin);
     ghsForm->addRow("Stretch Factor (D):", dLayout);
@@ -279,14 +279,14 @@ StretchingDialog::StretchingDialog(WorkspaceRegistry& workspace, QWidget* parent
         m_highlightSpin->blockSignals(true);
         m_highlightSpin->setValue(val / 100.0);
         m_highlightSpin->blockSignals(false);
-        m_highlightProtect = val / 100.0;
+        m_highlightProtect = 1.0 - (val / 100.0);
         onParameterChanged();
     });
     connect(m_highlightSpin, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double val) {
         m_highlightSlider->blockSignals(true);
         m_highlightSlider->setValue(static_cast<int>(val * 100.0));
         m_highlightSlider->blockSignals(false);
-        m_highlightProtect = val;
+        m_highlightProtect = 1.0 - val;
         onParameterChanged();
     });
 
@@ -461,12 +461,12 @@ void StretchingDialog::onGhsProtectionsChanged(double shadowProtect, double high
 
     if (m_highlightSpin) {
         m_highlightSpin->blockSignals(true);
-        m_highlightSpin->setValue(highlightProtect);
+        m_highlightSpin->setValue(1.0 - highlightProtect);
         m_highlightSpin->blockSignals(false);
     }
     if (m_highlightSlider) {
         m_highlightSlider->blockSignals(true);
-        m_highlightSlider->setValue(static_cast<int>(highlightProtect * 100.0));
+        m_highlightSlider->setValue(static_cast<int>((1.0 - highlightProtect) * 100.0));
         m_highlightSlider->blockSignals(false);
     }
 
@@ -557,10 +557,10 @@ void StretchingDialog::syncUiFromValues() {
     m_shadowSlider->blockSignals(false);
 
     m_highlightSpin->blockSignals(true);
-    m_highlightSpin->setValue(m_highlightProtect);
+    m_highlightSpin->setValue(1.0 - m_highlightProtect);
     m_highlightSpin->blockSignals(false);
     m_highlightSlider->blockSignals(true);
-    m_highlightSlider->setValue(static_cast<int>(m_highlightProtect * 100.0));
+    m_highlightSlider->setValue(static_cast<int>((1.0 - m_highlightProtect) * 100.0));
     m_highlightSlider->blockSignals(false);
 
     if (m_isGhsMode) {

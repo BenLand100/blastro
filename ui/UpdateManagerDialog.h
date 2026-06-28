@@ -53,8 +53,8 @@ public:
     ~UpdateManagerDialog() override;
 
 private slots:
-    void onCheckClicked();
-    void onDownloadClicked();
+    void onCheckClicked(bool force = true);
+    void onApplyChangesClicked();
     void onItemSelectionChanged();
     void onFetchFinished(int exitCode);
     void onDownloadFinished(int exitCode);
@@ -64,8 +64,10 @@ private:
     void parseXriData(const QByteArray& data, const QString& repoUrl);
     bool platformMatches(const QString& os, const QString& arch) const;
     void startDownloadingNextPackage();
+    void startUninstallingNextPackage();
     bool extractAndInstall(const QString& archivePath, const QString& type);
     void updateUIState(bool working);
+    void populateTreeWidget();
 
     QTreeWidget* m_treeWidget;
     QTextBrowser* m_descBrowser;
@@ -78,7 +80,9 @@ private:
     int m_currentRepoIdx;
     std::vector<UpdatePackage> m_availablePackages;
     std::vector<UpdatePackage> m_packagesToDownload;
+    std::vector<UpdatePackage> m_packagesToUninstall;
     int m_currentDownloadIdx;
+    int m_currentUninstallIdx;
 
     QProcess* m_fetchProcess;
     QProcess* m_downloadProcess;

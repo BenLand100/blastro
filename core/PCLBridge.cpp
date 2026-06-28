@@ -44,6 +44,9 @@
 #include <optional>
 #include <QWidget>
 #include <QDialog>
+#include <QProgressDialog>
+#include <QProcess>
+#include <QDirIterator>
 #include <QFrame>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -2462,6 +2465,78 @@ void PCLBridge::setupOverrides() {
     overridePCLStub("InterfaceDefinition/ExitInterfaceDefinitionContext", reinterpret_cast<void*>(mock_ExitInterfaceDefinitionContext));
 }
 
+static bool downloadAndExtractTensorFlow() {
+    QString tfDownloadUrl = QString::fromStdString(Preferences::instance().getPclTensorflowDownloadUrl());
+    if (tfDownloadUrl.isEmpty()) {
+        tfDownloadUrl = "https://download.starnetastro.com/pixinsight/legacy/tensorflow-runtime/pixinsight_tensorflow_runtime_linux_TF_x64.zip";
+    }
+
+    QString tfLibDir = QString::fromStdString(Preferences::instance().getPclLibFolder());
+    QDir().mkpath(tfLibDir);
+
+    QProgressDialog progress("Downloading TensorFlow Runtime...\nThis may take a moment.", "Cancel", 0, 0, nullptr);
+    progress.setWindowTitle("Downloading Dependencies");
+    progress.setWindowModality(Qt::ApplicationModal);
+    progress.setMinimumDuration(0);
+    progress.setValue(0);
+    progress.show();
+    QCoreApplication::processEvents();
+
+    QString tempZip = QDir::temp().filePath("tensorflow_runtime_linux.zip");
+    QFile::remove(tempZip);
+
+    QProcess curlProc;
+    curlProc.start("curl", QStringList() << "-L" << "-f" << "-o" << tempZip << tfDownloadUrl);
+    
+    while (!curlProc.waitForFinished(100)) {
+        QCoreApplication::processEvents();
+        if (progress.wasCanceled()) {
+            curlProc.kill();
+            curlProc.waitForFinished();
+            QFile::remove(tempZip);
+            return false;
+        }
+    }
+
+    if (curlProc.exitCode() != 0 || !QFile::exists(tempZip)) {
+        qWarning() << "[PCL Bridge] TensorFlow download failed with exit code:" << curlProc.exitCode();
+        QFile::remove(tempZip);
+        return false;
+    }
+
+    progress.setLabelText("Extracting TensorFlow Runtime...");
+    QCoreApplication::processEvents();
+
+    QProcess unzipProc;
+    unzipProc.start("unzip", QStringList() << "-o" << tempZip << "-d" << tfLibDir);
+    
+    while (!unzipProc.waitForFinished(100)) {
+        QCoreApplication::processEvents();
+    }
+
+    QFile::remove(tempZip);
+
+    if (unzipProc.exitCode() != 0) {
+        qWarning() << "[PCL Bridge] TensorFlow extraction failed with exit code:" << unzipProc.exitCode();
+        return false;
+    }
+
+    // Scan recursively for libtensorflow.so.2 and libtensorflow_framework.so.2 and move them to tfLibDir
+    QDirIterator it(tfLibDir, QStringList() << "libtensorflow.so.2" << "libtensorflow_framework.so.2", QDir::Files, QDirIterator::Subdirectories);
+    while (it.hasNext()) {
+        QString foundPath = it.next();
+        QFileInfo fi(foundPath);
+        QString destPath = QDir(tfLibDir).filePath(fi.fileName());
+        if (QDir(tfLibDir).absolutePath() != fi.absoluteDir().absolutePath()) {
+            QFile::remove(destPath);
+            QFile::rename(foundPath, destPath);
+        }
+    }
+
+    qInfo() << "[PCL Bridge] TensorFlow runtime downloaded and extracted successfully to:" << tfLibDir;
+    return true;
+}
+
 bool PCLBridge::loadModule(const QString& path) {
     // Check if this module is already loaded to avoid duplicates
     for (const auto& mod : m_modules) {
@@ -2477,18 +2552,36 @@ bool PCLBridge::loadModule(const QString& path) {
         QString tfFrameworkPath = QDir(tfLibDir).filePath("libtensorflow_framework.so.2");
         QString tfPath = QDir(tfLibDir).filePath("libtensorflow.so.2");
 
-        if (tfLibDir.isEmpty() || !QFile::exists(tfPath)) {
+        bool tfFound = QFile::exists(tfPath) && QFile::exists(tfFrameworkPath);
+        if (!tfFound) {
             QString appDir = QCoreApplication::applicationDirPath();
-            tfFrameworkPath = appDir + "/lib/libtensorflow_framework.so.2";
-            tfPath = appDir + "/lib/libtensorflow.so.2";
+            QString fallbackTF1 = appDir + "/lib/libtensorflow.so.2";
+            QString fallbackTFF1 = appDir + "/lib/libtensorflow_framework.so.2";
+            QString fallbackTF2 = appDir + "/../lib/libtensorflow.so.2";
+            QString fallbackTFF2 = appDir + "/../lib/libtensorflow_framework.so.2";
 
-            if (!QFile::exists(tfPath)) {
-                tfFrameworkPath = appDir + "/../lib/libtensorflow_framework.so.2";
-                tfPath = appDir + "/../lib/libtensorflow.so.2";
+            if (QFile::exists(fallbackTF1) && QFile::exists(fallbackTFF1)) {
+                tfFrameworkPath = fallbackTFF1;
+                tfPath = fallbackTF1;
+                tfFound = true;
+            } else if (QFile::exists(fallbackTF2) && QFile::exists(fallbackTFF2)) {
+                tfFrameworkPath = fallbackTFF2;
+                tfPath = fallbackTF2;
+                tfFound = true;
             }
         }
 
-        if (QFile::exists(tfPath)) {
+        if (!tfFound) {
+            qInfo() << "[PCL Bridge] TensorFlow dependencies not found. Initiating automatic download...";
+            if (downloadAndExtractTensorFlow()) {
+                // Re-evaluate paths after download
+                tfFrameworkPath = QDir(tfLibDir).filePath("libtensorflow_framework.so.2");
+                tfPath = QDir(tfLibDir).filePath("libtensorflow.so.2");
+                tfFound = QFile::exists(tfPath) && QFile::exists(tfFrameworkPath);
+            }
+        }
+
+        if (tfFound) {
             qDebug() << "[PCL Bridge] Pre-loading TensorFlow framework from:" << tfFrameworkPath;
             void* tfFrameHandle = dlopen(tfFrameworkPath.toUtf8().constData(), RTLD_LAZY | RTLD_GLOBAL);
             if (!tfFrameHandle) {
@@ -2500,6 +2593,8 @@ bool PCLBridge::loadModule(const QString& path) {
             if (!tfHandle) {
                 qWarning() << "[PCL Bridge] Failed to pre-load libtensorflow.so.2:" << dlerror();
             }
+        } else {
+            qWarning() << "[PCL Bridge] TensorFlow libraries were not loaded. StarNet or XTerminator modules may fail to execute.";
         }
     }
 
@@ -2591,10 +2686,10 @@ bool PCLBridge::loadModule(const QString& path) {
     }
 
     // Print metadata
-    qInfo() << "[PCL Bridge] Module Identified Successfully:";
-    qInfo() << "  Name:       " << newModule.description->name;
-    qInfo() << "  Version:    " << newModule.description->versionInfo;
-    qInfo() << "  API Version:" << QString::number(newModule.description->apiVersion, 16);
+    qInfo().noquote() << QString("[PCL Bridge] Loaded Module: %1 API Rev: %2 Version: %3")
+                         .arg(QString::fromUtf8(newModule.description->name))
+                         .arg(QString::number(newModule.description->apiVersion, 16))
+                         .arg(QString::fromUtf8(newModule.description->versionInfo));
 
     // Call the module's OnLoad routine if registered!
     if (newModule.onLoadFn) {

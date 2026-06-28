@@ -515,13 +515,13 @@ void WorkspaceImageWindow::setPreviewImage(const ImageVariant& previewImage) {
         m_originalImageForPreview = currentImage();
         m_hasPreviewActive = true;
     }
-    m_imageView->setImage(previewImage, true);
+    m_imageView->setImage(previewImage, true, true);
     notifyImageUpdated();
 }
 
 void WorkspaceImageWindow::restoreOriginalImage() {
     if (m_hasPreviewActive) {
-        m_imageView->setImage(m_originalImageForPreview, true);
+        m_imageView->setImage(m_originalImageForPreview, true, true);
         m_hasPreviewActive = false;
         m_originalImageForPreview = ImageVariant();
         notifyImageUpdated();
@@ -530,6 +530,16 @@ void WorkspaceImageWindow::restoreOriginalImage() {
 
 void WorkspaceImageWindow::commitPreviewImage(const ImageVariant& finalImage) {
     if (m_hasPreviewActive) {
+        // Save undo state using the unstretched original image before mutating it!
+        UndoState state;
+        state.image = ImageOperations::cloneImageVariant(m_originalImageForPreview);
+        m_undoStack.push_back(state);
+        if (m_undoStack.size() > m_maxUndoDepth) {
+            m_undoStack.erase(m_undoStack.begin());
+        }
+        m_redoStack.clear();
+        emit undoRedoStateChanged();
+
         // Mutate the original image in-place
         if (std::holds_alternative<GrayscaleImagePtr>(m_originalImageForPreview) &&
             std::holds_alternative<GrayscaleImagePtr>(finalImage)) {
@@ -549,21 +559,21 @@ void WorkspaceImageWindow::commitPreviewImage(const ImageVariant& finalImage) {
             }
         }
         
-        // Restore view pointer to the mutated original
-        m_imageView->setImage(m_originalImageForPreview, true);
+        // Restore view pointer to the mutated original, keeping zoom
+        m_imageView->setImage(m_originalImageForPreview, true, true);
         m_hasPreviewActive = false;
         m_originalImageForPreview = ImageVariant();
         notifyImageUpdated();
     }
 }
 
-void WorkspaceImageWindow::setElement(const WorkspaceElement& element) {
+void WorkspaceImageWindow::setElement(const WorkspaceElement& element, bool preserveZoom) {
     m_element = element;
     if (auto iv = qobject_cast<ImageView*>(m_viewportWidget)) {
         if (std::holds_alternative<GrayscaleImagePtr>(element)) {
-            iv->setImage(std::get<GrayscaleImagePtr>(element));
+            iv->setImage(std::get<GrayscaleImagePtr>(element), false, preserveZoom);
         } else if (std::holds_alternative<RGBImagePtr>(element)) {
-            iv->setImage(std::get<RGBImagePtr>(element));
+            iv->setImage(std::get<RGBImagePtr>(element), false, preserveZoom);
         }
     }
     notifyImageUpdated();
@@ -603,7 +613,7 @@ void WorkspaceImageWindow::undo() {
         elem = std::get<RGBImagePtr>(undoState.image);
     }
 
-    setElement(elem);
+    setElement(elem, true);
     emit undoRedoStateChanged();
 }
 
@@ -624,7 +634,7 @@ void WorkspaceImageWindow::redo() {
         elem = std::get<RGBImagePtr>(redoState.image);
     }
 
-    setElement(elem);
+    setElement(elem, true);
     emit undoRedoStateChanged();
 }
 

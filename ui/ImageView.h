@@ -48,7 +48,7 @@ public:
     explicit ImageView(QWidget* parent = nullptr);
     ~ImageView() override = default;
 
-    void setImage(const ImageVariant& image, bool preserveStretch = false);
+    void setImage(const ImageVariant& image, bool preserveStretch = false, bool preserveZoom = false);
     ImageVariant currentImage() const { return m_currentImage; }
     int autoStretchLevel() const { return m_autoStretchLevel; }
     int localHistLevel() const { return m_localHistLevel; }

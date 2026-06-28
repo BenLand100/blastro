@@ -47,6 +47,7 @@ private:
     QLineEdit* m_libEdit;
     QLineEdit* m_libraryEdit;
     QCheckBox* m_tensorflowChk;
+    QLineEdit* m_tensorflowUrlEdit;
     QLineEdit* m_tempEdit;
     QLineEdit* m_intermediateEdit;
     QSpinBox* m_threadSpin;

@@ -101,6 +101,9 @@ PreferencesWindow::PreferencesWindow(QWidget* parent)
 
     m_tensorflowChk = new QCheckBox("Load TensorFlow dynamically on startup", this);
     pclForm->addRow("", m_tensorflowChk);
+
+    m_tensorflowUrlEdit = new QLineEdit(this);
+    pclForm->addRow("TensorFlow Download URL:", m_tensorflowUrlEdit);
     generalLayout->addWidget(pclGroup);
 
     // Group 2: Path Configurations
@@ -205,6 +208,7 @@ PreferencesWindow::PreferencesWindow(QWidget* parent)
     m_libEdit->setText(QString::fromStdString(prefs.getPclLibFolder()));
     m_libraryEdit->setText(QString::fromStdString(prefs.getPclLibraryFolder()));
     m_tensorflowChk->setChecked(prefs.getPclLoadTensorflow());
+    m_tensorflowUrlEdit->setText(QString::fromStdString(prefs.getPclTensorflowDownloadUrl()));
     m_tempEdit->setText(QString::fromStdString(prefs.getTemporaryFolder()));
     m_intermediateEdit->setText(QString::fromStdString(prefs.getIntermediateFolder()));
     m_threadSpin->setValue(prefs.getThreadCount());
@@ -257,6 +261,7 @@ void PreferencesWindow::onSaveClicked() {
     prefs.setPclLibFolder(m_libEdit->text().trimmed().toStdString());
     prefs.setPclLibraryFolder(m_libraryEdit->text().trimmed().toStdString());
     prefs.setPclLoadTensorflow(m_tensorflowChk->isChecked());
+    prefs.setPclTensorflowDownloadUrl(m_tensorflowUrlEdit->text().trimmed().toStdString());
     prefs.setTemporaryFolder(m_tempEdit->text().trimmed().toStdString());
     prefs.setIntermediateFolder(m_intermediateEdit->text().trimmed().toStdString());
     prefs.setThreadCount(m_threadSpin->value());

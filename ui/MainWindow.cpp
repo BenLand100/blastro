@@ -203,6 +203,16 @@ void MainWindow::createMenus() {
 
     m_fileMenu->addSeparator();
 
+    m_loadPluginAct = new QAction("&Load PCL Module", this);
+    connect(m_loadPluginAct, &QAction::triggered, this, &MainWindow::onLoadPCLModule);
+    m_fileMenu->addAction(m_loadPluginAct);
+
+    m_checkForUpdatesAct = new QAction("&PCL Repo Packages", this);
+    connect(m_checkForUpdatesAct, &QAction::triggered, this, &MainWindow::onCheckForUpdates);
+    m_fileMenu->addAction(m_checkForUpdatesAct);
+
+    m_fileMenu->addSeparator();
+
     QAction* preferencesAct = new QAction("&Preferences", this);
     connect(preferencesAct, &QAction::triggered, this, &MainWindow::onOpenPreferences);
     m_fileMenu->addAction(preferencesAct);
@@ -301,14 +311,6 @@ void MainWindow::createMenus() {
     m_algoMenu->addAction(m_pixelMathAct);
 
     m_algoMenu->addSeparator();
-
-    m_loadPluginAct = new QAction("&Load PCL Module", this);
-    connect(m_loadPluginAct, &QAction::triggered, this, &MainWindow::onLoadPCLModule);
-    m_algoMenu->addAction(m_loadPluginAct);
-
-    m_checkForUpdatesAct = new QAction("&Download from Repo...", this);
-    connect(m_checkForUpdatesAct, &QAction::triggered, this, &MainWindow::onCheckForUpdates);
-    m_algoMenu->addAction(m_checkForUpdatesAct);
 
     // Window Menu
     m_windowMenu = menuBar()->addMenu("&Window");
@@ -856,8 +858,14 @@ void MainWindow::executeAlgorithmSlot(const std::string& name, const std::map<st
                     WorkspaceElement outElem = m_workspace.getElement(outName);
 
                     QString qOutName = QString::fromStdString(outName);
-                    m_workspaceArea->removeElementView(qOutName);
-                    m_workspaceArea->addElementView(qOutName, outElem);
+                    WorkspaceImageWindow* win = m_workspaceArea->getImageWindow(qOutName);
+                    if (win) {
+                        win->saveUndoState();
+                        win->setElement(outElem, true); // Update in-place and preserve zoom
+                    } else {
+                        m_workspaceArea->removeElementView(qOutName);
+                        m_workspaceArea->addElementView(qOutName, outElem);
+                    }
 
                     showStatusMessage(QString("Successfully completed %1: %2").arg(QString::fromStdString(name)).arg(qOutName), 5000);
                 } else {
@@ -1182,6 +1190,11 @@ bool MainWindow::executePCLProcessOnActiveImage(const QString& processId, void* 
     
     setProcessingState(true);
     m_algorithmRunning = true;
+
+    // Save undo state before PCL process mutates the buffers in-place!
+    if (auto* win = m_workspaceArea->getImageWindow(activeName)) {
+        win->saveUndoState();
+    }
 
     // Reset and show progress bar with standard range
     m_progressBar->setRange(0, 100);

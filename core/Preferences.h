@@ -40,6 +40,9 @@ public:
     bool getPclLoadTensorflow() const;
     void setPclLoadTensorflow(bool load);
 
+    std::string getPclTensorflowDownloadUrl() const;
+    void setPclTensorflowDownloadUrl(const std::string& url);
+
     std::string getTemporaryFolder() const;
     void setTemporaryFolder(const std::string& path);
 
@@ -70,6 +73,7 @@ private:
     std::string m_pclLibFolder;
     std::string m_pclLibraryFolder;
     bool m_pclLoadTensorflow;
+    std::string m_pclTensorflowDownloadUrl;
     std::string m_temporaryFolder;
     std::string m_intermediateFolder;
     int m_threadCount;

@@ -46,6 +46,20 @@ BLastro has a unique subsystem called `PCLBridge` which allows loading compiled 
 - **In-Place Modification & UI Suspension:** Many algorithms and PCL processes modify image buffer data in-place on background threads. To guarantee thread safety and prevent rendering of corrupt or intermediate state data, the GUI automatically suspends viewport updates, rendering a "Processing..." overlay until the thread completes.
 - **Third-Party Updates & Repository Manager:** The `UpdateManagerDialog` supports fetching and installing third-party PCL modules using standard PixInsight update repository structures. It downloads repository-defined `updates.xri` XML manifests over HTTPS, parses `<platform>` target constraints, retrieves target files, and extracts them locally to the configured module folder.
 
+### Undo/Redo System & Viewport State Persistence
+
+BLastro implements an MDI-window-specific Undo/Redo history system and viewport state preservation system to facilitate non-destructive editing workflows:
+
+1. **In-Memory Checkpointing**:
+   - The undo history is maintained on a per-window basis (`WorkspaceImageWindow`).
+   - Before any destructive action (such as crop/rotate operations in the Image menu, committing a stretch, or running in-place PCL plugin processes), the current `ImageVariant` is cloned (creating deep copies of the raw `ImageBuffer`s) and pushed to the window's undo stack.
+   - Redo stacks are cleared upon performing new operations, and histories are capped at a maximum depth of 10 to limit RAM consumption.
+   - When an algorithm replaces the active window's contents (e.g. Background Extraction with the same output name), instead of destroying the window, the old state is pushed to the undo stack, and the window's viewport element is replaced in-place via `setElement`.
+
+2. **Viewport Zoom & Pan Persistence**:
+   - Operations like changing frames in a batch (`BatchImageWidget`), applying stretches, or performing Undo/Redo should not reset the user's viewport zoom and panning boundaries.
+   - To achieve this, the `ImageView::setImage` method supports a `preserveZoom` parameter. When `true`, it bypasses `fitToWindow()` auto-scaling, maintaining the graphics scene's transformation matrix and scroll states.
+
 ## Build Requirements
 
 - C++17 compliant compiler
