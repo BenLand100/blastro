@@ -21,6 +21,7 @@
 #include "core/RGBImage.h"
 #include <vector>
 #include <functional>
+#include <string>
 
 namespace blastro {
 
@@ -42,7 +43,9 @@ public:
                                              bool equalize = true,
                                              ProgressCallback progress = nullptr,
                                              int progressStart = 0,
-                                             int progressEnd = 100);
+                                             int progressEnd = 100,
+                                             const std::string& method = "Polynomial",
+                                             double rbfSmoothing = 0.0);
 
     static RGBImagePtr extractRGB(RGBImagePtr src,
                                   int order = 3,
@@ -50,7 +53,9 @@ public:
                                   double sampleFrac = 0.01,
                                   double huberDelta = 5.0,
                                   bool equalize = true,
-                                  ProgressCallback progress = nullptr);
+                                  ProgressCallback progress = nullptr,
+                                  const std::string& method = "Polynomial",
+                                  double rbfSmoothing = 0.0);
 };
 
 } // namespace blastro

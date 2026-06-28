@@ -55,3 +55,15 @@ When using the histogram panel (manual stretching or Generalized Hyperbolic Stre
   - **GHS Stretch**: Symmetry Point (SP), Shadow Protection, and Highlight Protection.
 - **Scrolling the Histogram**: Right-click and drag anywhere on the histogram to pan/scroll horizontally.
 - **Zooming the Histogram**: Scroll the mouse wheel up or down over the histogram to zoom in or out centered on your mouse cursor.
+
+---
+
+## 5. Background Subtraction & Control Points
+
+The **Background Extraction** algorithm removes background gradients (such as sky glow or light pollution) from raw or calibrated images.
+
+- **Phase 1: Placing Control Points**: When the **Algorithms -> Background Extraction** dialog is open, use **Ctrl + Left Click** on the image to place control points in regions that contain only background sky (avoid placing them on stars, nebulosity, or galaxies). Use **Ctrl + Right Click** near an existing control point to remove it. Standard left-click and drag can still be used to pan/scroll the viewport.
+- **Phase 2: Execution**: The algorithm fits a 2D polynomial surface to these points and subtracts it.
+- **Verification / Visualization**: Since the image viewer automatically stretches previews to center the background at a specific grey level, the background before and after extraction might visually look similar. To verify the extraction:
+  1. Inspect the pixel values at different areas (e.g. corners) before and after subtraction to see if the values have been neutralized.
+  2. Notice the improvement in target contrast (nebulae/galaxies) when a fresh auto-stretch is applied, as the dynamic range is no longer dominated by the gradient.

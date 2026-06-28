@@ -28,13 +28,124 @@
 #include <QMessageBox>
 #include <QMainWindow>
 
+#include <QLabel>
+
 namespace blastro {
+
+static float getPixelValue(const ImageVariant& imgVar, int x, int y, int channel = 0) {
+    if (std::holds_alternative<GrayscaleImagePtr>(imgVar)) {
+        auto img = std::get<GrayscaleImagePtr>(imgVar);
+        if (img && x >= 0 && x < img->width() && y >= 0 && y < img->height()) {
+            return img->buffer()->pixel(x, y);
+        }
+    } else if (std::holds_alternative<RGBImagePtr>(imgVar)) {
+        auto img = std::get<RGBImagePtr>(imgVar);
+        if (img && x >= 0 && x < img->width() && y >= 0 && y < img->height()) {
+            if (channel == 0) return img->r()->buffer()->pixel(x, y);
+            if (channel == 1) return img->g()->buffer()->pixel(x, y);
+            if (channel == 2) return img->b()->buffer()->pixel(x, y);
+        }
+    }
+    return 0.0f;
+}
+
+static void getLocalPatchStats(const ImageVariant& imgVar, int cx, int cy, int size, double& median, double& stddev) {
+    std::vector<float> vals;
+    vals.reserve(size * size);
+    int w = 0, h = 0;
+    if (std::holds_alternative<GrayscaleImagePtr>(imgVar)) {
+        auto img = std::get<GrayscaleImagePtr>(imgVar);
+        if (img) { w = img->width(); h = img->height(); }
+    } else if (std::holds_alternative<RGBImagePtr>(imgVar)) {
+        auto img = std::get<RGBImagePtr>(imgVar);
+        if (img) { w = img->width(); h = img->height(); }
+    }
+
+    int half = size / 2;
+    double sum = 0.0;
+    for (int dy = -half; dy <= half; ++dy) {
+        for (int dx = -half; dx <= half; ++dx) {
+            int px = cx + dx;
+            int py = cy + dy;
+            if (px >= 0 && px < w && py >= 0 && py < h) {
+                float val = 0.0f;
+                if (std::holds_alternative<GrayscaleImagePtr>(imgVar)) {
+                    val = getPixelValue(imgVar, px, py);
+                } else {
+                    val = (getPixelValue(imgVar, px, py, 0) + getPixelValue(imgVar, px, py, 1) + getPixelValue(imgVar, px, py, 2)) / 3.0f;
+                }
+                vals.push_back(val);
+                sum += val;
+            }
+        }
+    }
+
+    if (vals.empty()) {
+        median = 0.0;
+        stddev = 0.0;
+        return;
+    }
+
+    std::sort(vals.begin(), vals.end());
+    median = vals[vals.size() / 2];
+
+    double mean = sum / vals.size();
+    double sumSqDiff = 0.0;
+    for (float val : vals) {
+        double diff = val - mean;
+        sumSqDiff += diff * diff;
+    }
+    stddev = std::sqrt(sumSqDiff / vals.size());
+}
+
+static void getGlobalStats(const ImageVariant& imgVar, double& median, double& stddev) {
+    int w = 0, h = 0;
+    if (std::holds_alternative<GrayscaleImagePtr>(imgVar)) {
+        auto img = std::get<GrayscaleImagePtr>(imgVar);
+        if (img) { w = img->width(); h = img->height(); }
+    } else if (std::holds_alternative<RGBImagePtr>(imgVar)) {
+        auto img = std::get<RGBImagePtr>(imgVar);
+        if (img) { w = img->width(); h = img->height(); }
+    }
+
+    std::vector<float> vals;
+    double sum = 0.0;
+    for (int y = 0; y < h; y += 4) {
+        for (int x = 0; x < w; x += 4) {
+            float val = 0.0f;
+            if (std::holds_alternative<GrayscaleImagePtr>(imgVar)) {
+                val = getPixelValue(imgVar, x, y);
+            } else {
+                val = (getPixelValue(imgVar, x, y, 0) + getPixelValue(imgVar, x, y, 1) + getPixelValue(imgVar, x, y, 2)) / 3.0f;
+            }
+            vals.push_back(val);
+            sum += val;
+        }
+    }
+
+    if (vals.empty()) {
+        median = 0.0;
+        stddev = 0.0;
+        return;
+    }
+
+    std::sort(vals.begin(), vals.end());
+    median = vals[vals.size() / 2];
+
+    double mean = sum / vals.size();
+    double sumSqDiff = 0.0;
+    for (float val : vals) {
+        double diff = val - mean;
+        sumSqDiff += diff * diff;
+    }
+    stddev = std::sqrt(sumSqDiff / vals.size());
+}
 
 BackgroundExtractionDialog::BackgroundExtractionDialog(WorkspaceRegistry& workspace, QWidget* parent)
     : AlgorithmDialog(workspace, parent) {
     
     setWindowTitle("Background Gradient Extraction");
-    resize(360, 180);
+    resize(380, 300);
 
     QVBoxLayout* mainLayout = new QVBoxLayout(this);
     mainLayout->setContentsMargins(15, 15, 15, 15);
@@ -45,7 +156,18 @@ BackgroundExtractionDialog::BackgroundExtractionDialog(WorkspaceRegistry& worksp
     formLayout->setFormAlignment(Qt::AlignLeft | Qt::AlignTop);
     formLayout->setSpacing(10);
 
-    // 1. Polynomial Order (1 to 5)
+    // Extraction Method Choice
+    m_methodCombo = new QComboBox(this);
+    m_methodCombo->addItem("Polynomial Surface Fit");
+    m_methodCombo->addItem("Radial Basis Function (RBF)");
+    formLayout->addRow("Method:", m_methodCombo);
+
+    // Polynomial parameters widget
+    m_polyParamsWidget = new QWidget(this);
+    QFormLayout* polyForm = new QFormLayout(m_polyParamsWidget);
+    polyForm->setContentsMargins(0, 0, 0, 0);
+    polyForm->setSpacing(10);
+
     QHBoxLayout* orderLayout = new QHBoxLayout();
     m_orderSlider = new QSlider(Qt::Horizontal, this);
     m_orderSlider->setRange(1, 5);
@@ -55,10 +177,54 @@ BackgroundExtractionDialog::BackgroundExtractionDialog(WorkspaceRegistry& worksp
     m_orderSpin->setValue(3);
     orderLayout->addWidget(m_orderSlider, 1);
     orderLayout->addWidget(m_orderSpin);
-    formLayout->addRow("Polynomial Order:", orderLayout);
+    polyForm->addRow("Polynomial Order:", orderLayout);
+    formLayout->addRow(m_polyParamsWidget);
 
     connect(m_orderSlider, &QSlider::valueChanged, m_orderSpin, &QSpinBox::setValue);
     connect(m_orderSpin, qOverload<int>(&QSpinBox::valueChanged), m_orderSlider, &QSlider::setValue);
+
+    // RBF parameters widget
+    m_rbfParamsWidget = new QWidget(this);
+    QFormLayout* rbfForm = new QFormLayout(m_rbfParamsWidget);
+    rbfForm->setContentsMargins(0, 0, 0, 0);
+    rbfForm->setSpacing(10);
+
+    QHBoxLayout* rbfSmoothingLayout = new QHBoxLayout();
+    m_rbfSmoothingSlider = new QSlider(Qt::Horizontal, this);
+    m_rbfSmoothingSlider->setRange(0, 100);
+    m_rbfSmoothingSlider->setValue(50);
+    m_rbfSmoothingSpin = new QDoubleSpinBox(this);
+    m_rbfSmoothingSpin->setRange(0.0, 1000.0);
+    m_rbfSmoothingSpin->setSingleStep(0.01);
+    m_rbfSmoothingSpin->setValue(0.5);
+    m_rbfSmoothingSpin->setToolTip("Smoothing regularizer (lambda). 0 = exact interpolation.");
+
+    rbfSmoothingLayout->addWidget(m_rbfSmoothingSlider, 1);
+    rbfSmoothingLayout->addWidget(m_rbfSmoothingSpin);
+    rbfForm->addRow("RBF Smoothing:", rbfSmoothingLayout);
+    formLayout->addRow(m_rbfParamsWidget);
+    m_rbfParamsWidget->setVisible(false);
+
+    connect(m_rbfSmoothingSlider, &QSlider::valueChanged, this, [this](int val) {
+        m_rbfSmoothingSpin->blockSignals(true);
+        m_rbfSmoothingSpin->setValue(val / 100.0);
+        m_rbfSmoothingSpin->blockSignals(false);
+    });
+    connect(m_rbfSmoothingSpin, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double val) {
+        m_rbfSmoothingSlider->blockSignals(true);
+        if (val >= 0.0 && val <= 1.0) {
+            m_rbfSmoothingSlider->setValue(static_cast<int>(val * 100.0));
+        } else {
+            m_rbfSmoothingSlider->setValue(0);
+        }
+        m_rbfSmoothingSlider->blockSignals(false);
+    });
+
+    connect(m_methodCombo, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int index) {
+        m_polyParamsWidget->setVisible(index == 0);
+        m_rbfParamsWidget->setVisible(index == 1);
+        adjustSize();
+    });
 
     // 2. Sigma Cut (1.0 to 10.0)
     QHBoxLayout* sigmaLayout = new QHBoxLayout();
@@ -83,6 +249,37 @@ BackgroundExtractionDialog::BackgroundExtractionDialog(WorkspaceRegistry& worksp
         m_sigmaSlider->setValue(static_cast<int>(val * 10.0));
         m_sigmaSlider->blockSignals(false);
     });
+
+    // Grid Spacing Density
+    QHBoxLayout* gridLayout = new QHBoxLayout();
+    gridLayout->addWidget(new QLabel("Cols:", this));
+    m_gridColsSpin = new QSpinBox(this);
+    m_gridColsSpin->setRange(3, 30);
+    m_gridColsSpin->setValue(5);
+    gridLayout->addWidget(m_gridColsSpin);
+
+    gridLayout->addWidget(new QLabel("Rows:", this));
+    m_gridRowsSpin = new QSpinBox(this);
+    m_gridRowsSpin->setRange(3, 30);
+    m_gridRowsSpin->setValue(5);
+    gridLayout->addWidget(m_gridRowsSpin);
+    formLayout->addRow("Grid Dimensions:", gridLayout);
+
+    // Bad point rejection controls
+    QHBoxLayout* rejectLayout = new QHBoxLayout();
+    m_autoExcludeChk = new QCheckBox("Auto-Exclude Stars", this);
+    m_autoExcludeChk->setChecked(true);
+    rejectLayout->addWidget(m_autoExcludeChk);
+
+    rejectLayout->addWidget(new QLabel("Thresh:", this));
+    m_excludeThresholdSpin = new QDoubleSpinBox(this);
+    m_excludeThresholdSpin->setRange(0.5, 10.0);
+    m_excludeThresholdSpin->setSingleStep(0.1);
+    m_excludeThresholdSpin->setValue(1.5);
+    rejectLayout->addWidget(m_excludeThresholdSpin);
+    formLayout->addRow("Bad Point Rejection:", rejectLayout);
+
+    connect(m_autoExcludeChk, &QCheckBox::toggled, m_excludeThresholdSpin, &QDoubleSpinBox::setEnabled);
 
     // 3. Channel Equalization Toggle
     QHBoxLayout* togglesLayout = new QHBoxLayout();
@@ -203,12 +400,20 @@ void BackgroundExtractionDialog::onPrefsClicked() {
 
 std::map<std::string, std::string> BackgroundExtractionDialog::getConfig() const {
     std::map<std::string, std::string> config;
+    config["method"] = m_methodCombo->currentIndex() == 1 ? "RBF" : "Polynomial";
     config["order"] = std::to_string(m_orderSpin->value());
+    config["rbf_smoothing"] = std::to_string(m_rbfSmoothingSpin->value());
     config["sigma_cut"] = std::to_string(m_sigmaSpin->value());
     config["equalize"] = m_equalizeChk->isChecked() ? "true" : "false";
     config["sample_frac"] = std::to_string(m_sampleFrac);
     config["huber_delta"] = std::to_string(m_huberDelta);
     config["threads"] = std::to_string(m_threads);
+
+    if (auto* win = getActiveImageWindow()) {
+        std::string activeName = win->name().toStdString();
+        config["input_name"] = activeName;
+        config["output_name"] = activeName;
+    }
     return config;
 }
 
@@ -233,8 +438,11 @@ void BackgroundExtractionDialog::onGenerateGridClicked() {
     QSize imgSz = win->imageView()->currentImageSize();
     if (imgSz.isEmpty()) return;
     
-    int cols = 5;
-    int rows = 5;
+    // Clear previous control points
+    win->imageView()->setBgeControlPoints({});
+    
+    int cols = m_gridColsSpin->value();
+    int rows = m_gridRowsSpin->value();
     
     double marginX = imgSz.width() * 0.08;
     double marginY = imgSz.height() * 0.08;
@@ -242,15 +450,40 @@ void BackgroundExtractionDialog::onGenerateGridClicked() {
     double stepX = (imgSz.width() - 2 * marginX) / std::max(1, cols - 1);
     double stepY = (imgSz.height() - 2 * marginY) / std::max(1, rows - 1);
     
+    // Compute global stats if bad point auto-exclusion is enabled
+    bool runExclude = m_autoExcludeChk->isChecked();
+    double globalMedian = 0.0, globalStddev = 0.0;
+    if (runExclude) {
+        getGlobalStats(win->currentImage(), globalMedian, globalStddev);
+    }
+    
     std::vector<std::pair<double, double>> pts;
     for (int r = 0; r < rows; ++r) {
         for (int c = 0; c < cols; ++c) {
             double x = marginX + c * stepX;
             double y = marginY + r * stepY;
+            
+            // Check for bad point exclusion
+            if (runExclude) {
+                double localMedian = 0.0, localStddev = 0.0;
+                getLocalPatchStats(win->currentImage(), static_cast<int>(std::round(x)), static_cast<int>(std::round(y)), 15, localMedian, localStddev);
+                
+                // Exclude if local median exceeds threshold of global noise floor,
+                // or if local standard deviation is too high
+                double thresholdVal = globalMedian + m_excludeThresholdSpin->value() * globalStddev;
+                if (localMedian > thresholdVal) {
+                    continue; // Exclude
+                }
+                if (localStddev > 1.5 * globalStddev) {
+                    continue; // Exclude
+                }
+            }
+            
             pts.push_back({x, y});
         }
     }
     win->imageView()->setBgeControlPoints(pts);
+    win->imageView()->setShowBgeControlPoints(true, true);
 }
 
 void BackgroundExtractionDialog::onClearPointsClicked() {
@@ -278,13 +511,12 @@ void BackgroundExtractionDialog::updateBgeModes() {
     auto* mdi = findMdiArea();
     if (!mdi) return;
     
-    auto* activeSub = mdi->activeSubWindow();
-    QWidget* activeWidget = activeSub ? activeSub->widget() : nullptr;
+    auto* activeWin = getActiveImageWindow();
     
     for (auto* sub : mdi->subWindowList()) {
         if (auto* win = qobject_cast<WorkspaceImageWindow*>(sub->widget())) {
             if (win->imageView()) {
-                win->imageView()->setBgeMode(win == activeWidget);
+                win->imageView()->setBgeMode(win == activeWin);
             }
         }
     }

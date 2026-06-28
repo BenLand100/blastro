@@ -26,6 +26,7 @@
 #include <QDoubleSpinBox>
 #include <QCheckBox>
 #include <QPushButton>
+#include <QComboBox>
 
 namespace blastro {
 
@@ -55,12 +56,25 @@ private:
     void updateBgeModes();
     void disableAllBgeModes();
 
+    QComboBox* m_methodCombo;
+    QWidget* m_polyParamsWidget;
     QSlider* m_orderSlider;
     QSpinBox* m_orderSpin;
+
+    QWidget* m_rbfParamsWidget;
+    QSlider* m_rbfSmoothingSlider;
+    QDoubleSpinBox* m_rbfSmoothingSpin;
+
     QSlider* m_sigmaSlider;
     QDoubleSpinBox* m_sigmaSpin;
 
     QCheckBox* m_equalizeChk;
+
+    // Grid Generation controls
+    QSpinBox* m_gridColsSpin;
+    QSpinBox* m_gridRowsSpin;
+    QCheckBox* m_autoExcludeChk;
+    QDoubleSpinBox* m_excludeThresholdSpin;
 
     // Advanced Preferences
     double m_sampleFrac = 0.01;

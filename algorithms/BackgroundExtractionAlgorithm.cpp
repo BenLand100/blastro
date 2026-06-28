@@ -53,6 +53,8 @@ void BackgroundExtractionAlgorithm::execute(WorkspaceRegistry& workspace,
     bool   equalize   = config.count("equalize")    ? (config.at("equalize") == "true")   : true;
     double sampleFrac = config.count("sample_frac") ? std::stod(config.at("sample_frac")) : 0.01;
     double huberDelta = config.count("huber_delta") ? std::stod(config.at("huber_delta")) : 5.0;
+    std::string method = config.count("method") ? config.at("method") : "Polynomial";
+    double rbfSmoothing = config.count("rbf_smoothing") ? std::stod(config.at("rbf_smoothing")) : 0.0;
 
     int threads = config.count("threads") ? std::stoi(config.at("threads")) : -1;
     if (threads <= 0) {
@@ -62,10 +64,11 @@ void BackgroundExtractionAlgorithm::execute(WorkspaceRegistry& workspace,
         omp_set_num_threads(threads);
     }
 
-    Logger::header("BackgroundExtraction", QString("Starting BGE execution. Input: %1, Output: %2, Order: %3, SigmaCut: %4, Equalize: %5, Threads: %6")
+    Logger::header("BackgroundExtraction", QString("Starting BGE execution. Input: %1, Output: %2, Method: %3, Order: %4, RbfSmoothing: %5, SigmaCut: %6, Equalize: %7, Threads: %8")
                    .arg(QString::fromStdString(inputName))
                    .arg(QString::fromStdString(outputName))
-                   .arg(order).arg(sigmaCut).arg(equalize).arg(threads));
+                   .arg(QString::fromStdString(method))
+                   .arg(order).arg(rbfSmoothing).arg(sigmaCut).arg(equalize).arg(threads));
 
     QElapsedTimer totalTimer;
     totalTimer.start();
@@ -104,11 +107,13 @@ void BackgroundExtractionAlgorithm::execute(WorkspaceRegistry& workspace,
             if (std::holds_alternative<GrayscaleImagePtr>(frame)) {
                 extracted = BackgroundExtractor::extractGrayscale(
                     std::get<GrayscaleImagePtr>(frame),
-                    order, sigmaCut, sampleFrac, huberDelta, equalize);
+                    order, sigmaCut, sampleFrac, huberDelta, equalize,
+                    nullptr, 0, 100, method, rbfSmoothing);
             } else if (std::holds_alternative<RGBImagePtr>(frame)) {
                 extracted = BackgroundExtractor::extractRGB(
                     std::get<RGBImagePtr>(frame),
-                    order, sigmaCut, sampleFrac, huberDelta, equalize);
+                    order, sigmaCut, sampleFrac, huberDelta, equalize,
+                    nullptr, method, rbfSmoothing);
             } else {
                 throw std::runtime_error("Unsupported frame type in batch background extraction");
             }
@@ -156,12 +161,12 @@ void BackgroundExtractionAlgorithm::execute(WorkspaceRegistry& workspace,
         outputElem = BackgroundExtractor::extractGrayscale(
             std::get<GrayscaleImagePtr>(inputElem),
             order, sigmaCut, sampleFrac, huberDelta, equalize,
-            progress, 5, 95);
+            progress, 5, 95, method, rbfSmoothing);
     } else if (std::holds_alternative<RGBImagePtr>(inputElem)) {
         outputElem = BackgroundExtractor::extractRGB(
             std::get<RGBImagePtr>(inputElem),
             order, sigmaCut, sampleFrac, huberDelta, equalize,
-            progress);
+            progress, method, rbfSmoothing);
     } else {
         throw std::runtime_error("Background extraction is not supported on this element type");
     }

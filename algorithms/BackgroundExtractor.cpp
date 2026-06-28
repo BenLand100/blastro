@@ -27,6 +27,58 @@
 
 namespace blastro {
 
+// Solves A * x = B using Gaussian Elimination with partial pivoting
+static std::vector<double> solveGaussianElimination(const std::vector<double>& A, const std::vector<double>& B, int m) {
+    std::vector<double> x(m, 0.0);
+    // Augmented matrix [A | B]
+    std::vector<std::vector<double>> aug(m, std::vector<double>(m + 1, 0.0));
+    for (int i = 0; i < m; ++i) {
+        for (int j = 0; j < m; ++j) {
+            aug[i][j] = A[i * m + j];
+        }
+        aug[i][m] = B[i];
+    }
+
+    for (int i = 0; i < m; ++i) {
+        // Pivot selection
+        int pivotRow = i;
+        double maxVal = std::abs(aug[i][i]);
+        for (int r = i + 1; r < m; ++r) {
+            if (std::abs(aug[r][i]) > maxVal) {
+                maxVal = std::abs(aug[r][i]);
+                pivotRow = r;
+            }
+        }
+
+        if (maxVal < 1e-12) {
+            return {}; // Singular matrix
+        }
+
+        if (pivotRow != i) {
+            std::swap(aug[i], aug[pivotRow]);
+        }
+
+        // Elimination
+        for (int r = i + 1; r < m; ++r) {
+            double factor = aug[r][i] / aug[i][i];
+            for (int c = i; c <= m; ++c) {
+                aug[r][c] -= factor * aug[i][c];
+            }
+        }
+    }
+
+    // Back substitution
+    for (int i = m - 1; i >= 0; --i) {
+        double sum = 0.0;
+        for (int j = i + 1; j < m; ++j) {
+            sum += aug[i][j] * x[j];
+        }
+        x[i] = (aug[i][m] - sum) / aug[i][i];
+    }
+
+    return x;
+}
+
 // Helper: Solve A * x = B using Cholesky decomposition A = L * L^T
 static std::vector<double> solveCholesky(const std::vector<double>& A, const std::vector<double>& B, int m) {
     std::vector<double> L(m * m, 0.0);
@@ -98,7 +150,9 @@ GrayscaleImagePtr BackgroundExtractor::extractGrayscale(GrayscaleImagePtr src,
                                                        bool equalize,
                                                        ProgressCallback progress,
                                                        int progressStart,
-                                                       int progressEnd) {
+                                                       int progressEnd,
+                                                       const std::string& method,
+                                                       double rbfSmoothing) {
     if (!src) return nullptr;
 
     int w = src->width();
@@ -183,141 +237,309 @@ GrayscaleImagePtr BackgroundExtractor::extractGrayscale(GrayscaleImagePtr src,
     }
     Logger::info("BackgroundExtraction", QString("  Selected %1 sample points for robust fitting (sample_frac = %2).").arg(samples.size()).arg(sampleFrac));
 
-    // Number of polynomial terms
-    int numTerms = 0;
-    for (int i = 0; i <= order; ++i) {
-        for (int j = 0; j <= order; ++j) {
-            if (i + j <= order) numTerms++;
+    if (method == "RBF") {
+        if (samples.empty()) {
+            throw std::runtime_error("Radial Basis Function (RBF) background extraction requires control points.");
         }
-    }
+        Logger::info("BackgroundExtraction", QString("  Solving robust Thin Plate Spline RBF fit (%1 centers, smoothing = %2, max IRLS iterations = 8)...")
+                     .arg(samples.size()).arg(rbfSmoothing));
 
-    // 3. Solve robust polynomial fit using Iteratively Reweighted Least Squares (IRLS)
-    Logger::info("BackgroundExtraction", QString("  Solving robust 2D polynomial surface fit (order = %1, %2 terms, max IRLS iterations = 8)...").arg(order).arg(numTerms));
-    std::vector<double> coeffs(numTerms, 0.0);
-    std::vector<double> weights(samples.size(), 1.0);
+        int n = samples.size();
+        int m = n + 3;
+        std::vector<double> weights(n, 1.0);
+        std::vector<double> rbfCoeffs(m, 0.0);
 
-    const int maxIRLSIterations = 8;
-    for (int iter = 0; iter < maxIRLSIterations; ++iter) {
-        if (progress) {
-            int stepProgress = progressStart + (progressEnd - progressStart) * (20 + 5 * iter) / 100;
-            progress(stepProgress);
-        }
+        const int maxIRLSIterations = 8;
+        for (int iter = 0; iter < maxIRLSIterations; ++iter) {
+            if (progress) {
+                int stepProgress = progressStart + (progressEnd - progressStart) * (20 + 5 * iter) / 100;
+                progress(stepProgress);
+            }
 
-        // Build Normal Equations: A * c = B
-        std::vector<double> A(numTerms * numTerms, 0.0);
-        std::vector<double> B(numTerms, 0.0);
+            std::vector<double> A(m * m, 0.0);
+            std::vector<double> B(m, 0.0);
 
-        // Add small ridge regularization to diagonal to guarantee positive definiteness
-        for (int i = 0; i < numTerms; ++i) {
-            A[i * numTerms + i] = 1e-6; 
-        }
-
-        for (size_t p = 0; p < samples.size(); ++p) {
-            const auto& pt = samples[p];
-            double wVal = weights[p];
-            std::vector<double> terms = getPolynomialTerms(pt.x_norm, pt.y_norm, order);
-
-            for (int i = 0; i < numTerms; ++i) {
-                for (int j = 0; j < numTerms; ++j) {
-                    A[i * numTerms + j] += terms[i] * terms[j] * wVal;
+            for (int i = 0; i < n; ++i) {
+                for (int j = 0; j < n; ++j) {
+                    double dx = samples[i].x_norm - samples[j].x_norm;
+                    double dy = samples[i].y_norm - samples[j].y_norm;
+                    double r2 = dx*dx + dy*dy;
+                    double val = 0.0;
+                    if (r2 > 0.0) {
+                        val = 0.5 * r2 * std::log(r2);
+                    }
+                    A[i * m + j] = val;
                 }
-                B[i] += terms[i] * pt.z * wVal;
+
+                double reg = rbfSmoothing;
+                if (weights[i] > 1e-6) {
+                    reg /= weights[i];
+                } else {
+                    reg = 1e6;
+                }
+                A[i * m + i] += reg;
+            }
+
+            for (int i = 0; i < n; ++i) {
+                double xi = samples[i].x_norm;
+                double yi = samples[i].y_norm;
+
+                A[i * m + n] = 1.0;
+                A[i * m + n + 1] = xi;
+                A[i * m + n + 2] = yi;
+
+                A[n * m + i] = 1.0;
+                A[(n + 1) * m + i] = xi;
+                A[(n + 2) * m + i] = yi;
+            }
+
+            for (int i = 0; i < n; ++i) {
+                B[i] = samples[i].z;
+            }
+
+            auto nextCoeffs = solveGaussianElimination(A, B, m);
+            if (nextCoeffs.empty()) {
+                Logger::warning("BackgroundExtraction", QString("    RBF IRLS Iteration %1: Linear system solve failed, stopping early.").arg(iter + 1));
+                break;
+            }
+            rbfCoeffs = nextCoeffs;
+
+            double sumAbsRes = 0.0;
+            for (int i = 0; i < n; ++i) {
+                double xi = samples[i].x_norm;
+                double yi = samples[i].y_norm;
+
+                double fitVal = rbfCoeffs[n] + rbfCoeffs[n + 1] * xi + rbfCoeffs[n + 2] * yi;
+                for (int j = 0; j < n; ++j) {
+                    double dx = xi - samples[j].x_norm;
+                    double dy = yi - samples[j].y_norm;
+                    double r2 = dx*dx + dy*dy;
+                    if (r2 > 0.0) {
+                        fitVal += rbfCoeffs[j] * 0.5 * r2 * std::log(r2);
+                    }
+                }
+
+                double residual = samples[i].z - fitVal;
+                double absRes = std::abs(residual);
+                sumAbsRes += absRes;
+
+                if (absRes <= huberDelta) {
+                    weights[i] = 1.0;
+                } else {
+                    weights[i] = huberDelta / absRes;
+                }
+            }
+
+            if (iter == 0 || iter == maxIRLSIterations - 1) {
+                Logger::info("BackgroundExtraction", QString("    RBF IRLS Iteration %1/8: Mean Absolute Residual = %2")
+                             .arg(iter + 1).arg(sumAbsRes / n));
             }
         }
 
-        // Solve linear system via Cholesky
-        auto nextCoeffs = solveCholesky(A, B, numTerms);
-        if (nextCoeffs.empty()) {
-            Logger::warning("BackgroundExtraction", QString("    IRLS Iteration %1: Cholesky decomposition failed or became unstable, stopping early.").arg(iter + 1));
-            break; 
+        if (progress) progress(progressStart + (progressEnd - progressStart) * 65 / 100);
+        Logger::info("BackgroundExtraction", QString("  Evaluating RBF background model and performing subtraction..."));
+
+        auto outBuffer = std::make_shared<ImageBuffer>(w, h);
+        float* outData = outBuffer->data();
+
+        std::vector<double> x_norms(w);
+        for (int x = 0; x < w; ++x) x_norms[x] = (2.0 * x - w) / w;
+
+        double c0 = rbfCoeffs[n];
+        double c1 = rbfCoeffs[n + 1];
+        double c2 = rbfCoeffs[n + 2];
+
+        std::vector<double> sx(n), sy(n), half_coeffs(n);
+        for (int i = 0; i < n; ++i) {
+            sx[i] = samples[i].x_norm;
+            sy[i] = samples[i].y_norm;
+            half_coeffs[i] = rbfCoeffs[i] * 0.5;
         }
-        coeffs = nextCoeffs;
 
-        // Update residuals and weights using robust Huber loss influence
-        double sumAbsRes = 0.0;
-        for (size_t p = 0; p < samples.size(); ++p) {
-            const auto& pt = samples[p];
-            std::vector<double> terms = getPolynomialTerms(pt.x_norm, pt.y_norm, order);
-            
-            double fitVal = 0.0;
-            for (int i = 0; i < numTerms; ++i) {
-                fitVal += terms[i] * coeffs[i];
-            }
-
-            double residual = pt.z - fitVal;
-            double absRes = std::abs(residual);
-            sumAbsRes += absRes;
-
-            // Huber Weight Function
-            if (absRes <= huberDelta) {
-                weights[p] = 1.0;
-            } else {
-                weights[p] = huberDelta / absRes;
-            }
-        }
-        
-        if (iter == 0 || iter == maxIRLSIterations - 1) {
-            Logger::info("BackgroundExtraction", QString("    IRLS Iteration %1/8: Mean Absolute Residual = %2")
-                         .arg(iter + 1).arg(sumAbsRes / samples.size()));
-        }
-    }
-
-    // 4. Evaluate fitted background polynomial and subtract from source
-    if (progress) progress(progressStart + (progressEnd - progressStart) * 65 / 100);
-    Logger::info("BackgroundExtraction", QString("  Evaluating background model and performing subtraction..."));
-    
-    auto outBuffer = std::make_shared<ImageBuffer>(w, h);
-    float* outData = outBuffer->data();
-
-    // Cache terms mapping for rows/cols in full image
-    std::vector<double> x_norms(w);
-    for (int x = 0; x < w; ++x) x_norms[x] = (2.0 * x - w) / w;
-
-    #pragma omp parallel for
-    for (int y = 0; y < h; ++y) {
-        double y_norm = (2.0 * y - h) / h;
-        for (int x = 0; x < w; ++x) {
-            double x_norm = x_norms[x];
-            std::vector<double> terms = getPolynomialTerms(x_norm, y_norm, order);
-            
-            double bkgVal = 0.0;
-            for (int i = 0; i < numTerms; ++i) {
-                bkgVal += terms[i] * coeffs[i];
-            }
-
-            outData[y * w + x] = data[y * w + x] - static_cast<float>(bkgVal);
-        }
-    }
-
-    // 5. Shift background-subtracted channel to a safe floor (neutral background peak)
-    if (equalize) {
-        if (progress) progress(progressStart + (progressEnd - progressStart) * 85 / 100);
-        Logger::info("BackgroundExtraction", QString("  Performing background channel equalization..."));
-        
-        std::vector<float> outSorted(outData, outData + numPixels);
-        std::sort(outSorted.begin(), outSorted.end());
-        double outMedian = outSorted[numPixels / 2];
-
-        double outSumSq = 0.0;
-        for (int i = 0; i < numPixels; ++i) {
-            double diff = outData[i] - outMedian;
-            outSumSq += diff * diff;
-        }
-        double outStd = std::sqrt(outSumSq / numPixels);
-
-        // Safe floor offset
-        float offset = -outMedian + sigmaCut * outStd;
-        Logger::info("BackgroundExtraction", QString("    Equalization complete: Shifted by offset = %1 to pedestal %2")
-                     .arg(offset).arg(sigmaCut * outStd));
-        
         #pragma omp parallel for
-        for (int i = 0; i < numPixels; ++i) {
-            outData[i] += offset;
-        }
-    }
+        for (int y = 0; y < h; ++y) {
+            double y_norm = (2.0 * y - h) / h;
+            for (int x = 0; x < w; ++x) {
+                double x_norm = x_norms[x];
 
-    if (progress) progress(progressEnd);
-    return std::make_shared<GrayscaleImage>(outBuffer);
+                double bkgVal = c0 + c1 * x_norm + c2 * y_norm;
+                for (int i = 0; i < n; ++i) {
+                    double dx = x_norm - sx[i];
+                    double dy = y_norm - sy[i];
+                    double r2 = dx*dx + dy*dy;
+                    if (r2 > 0.0) {
+                        bkgVal += half_coeffs[i] * r2 * std::log(r2);
+                    }
+                }
+
+                outData[y * w + x] = data[y * w + x] - static_cast<float>(bkgVal);
+            }
+        }
+
+        if (equalize) {
+            if (progress) progress(progressStart + (progressEnd - progressStart) * 85 / 100);
+            Logger::info("BackgroundExtraction", QString("  Performing background channel equalization..."));
+
+            std::vector<float> outSorted(outData, outData + numPixels);
+            std::sort(outSorted.begin(), outSorted.end());
+            double outMedian = outSorted[numPixels / 2];
+
+            double outSumSq = 0.0;
+            for (int i = 0; i < numPixels; ++i) {
+                double diff = outData[i] - outMedian;
+                outSumSq += diff * diff;
+            }
+            double outStd = std::sqrt(outSumSq / numPixels);
+
+            float offset = -outMedian + sigmaCut * outStd;
+            Logger::info("BackgroundExtraction", QString("    Equalization complete: Shifted by offset = %1 to pedestal %2")
+                         .arg(offset).arg(sigmaCut * outStd));
+
+            #pragma omp parallel for
+            for (int i = 0; i < numPixels; ++i) {
+                outData[i] += offset;
+            }
+        }
+
+        if (progress) progress(progressEnd);
+        return std::make_shared<GrayscaleImage>(outBuffer);
+    } else {
+        // Number of polynomial terms
+        int numTerms = 0;
+        for (int i = 0; i <= order; ++i) {
+            for (int j = 0; j <= order; ++j) {
+                if (i + j <= order) numTerms++;
+            }
+        }
+
+        // 3. Solve robust polynomial fit using Iteratively Reweighted Least Squares (IRLS)
+        Logger::info("BackgroundExtraction", QString("  Solving robust 2D polynomial surface fit (order = %1, %2 terms, max IRLS iterations = 8)...").arg(order).arg(numTerms));
+        std::vector<double> coeffs(numTerms, 0.0);
+        std::vector<double> weights(samples.size(), 1.0);
+
+        const int maxIRLSIterations = 8;
+        for (int iter = 0; iter < maxIRLSIterations; ++iter) {
+            if (progress) {
+                int stepProgress = progressStart + (progressEnd - progressStart) * (20 + 5 * iter) / 100;
+                progress(stepProgress);
+            }
+
+            // Build Normal Equations: A * c = B
+            std::vector<double> A(numTerms * numTerms, 0.0);
+            std::vector<double> B(numTerms, 0.0);
+
+            // Add small ridge regularization to diagonal to guarantee positive definiteness
+            for (int i = 0; i < numTerms; ++i) {
+                A[i * numTerms + i] = 1e-6; 
+            }
+
+            for (size_t p = 0; p < samples.size(); ++p) {
+                const auto& pt = samples[p];
+                double wVal = weights[p];
+                std::vector<double> terms = getPolynomialTerms(pt.x_norm, pt.y_norm, order);
+
+                for (int i = 0; i < numTerms; ++i) {
+                    for (int j = 0; j < numTerms; ++j) {
+                        A[i * numTerms + j] += terms[i] * terms[j] * wVal;
+                    }
+                    B[i] += terms[i] * pt.z * wVal;
+                }
+            }
+
+            // Solve linear system via Cholesky
+            auto nextCoeffs = solveCholesky(A, B, numTerms);
+            if (nextCoeffs.empty()) {
+                Logger::warning("BackgroundExtraction", QString("    IRLS Iteration %1: Cholesky decomposition failed or became unstable, stopping early.").arg(iter + 1));
+                break; 
+            }
+            coeffs = nextCoeffs;
+
+            // Update residuals and weights using robust Huber loss influence
+            double sumAbsRes = 0.0;
+            for (size_t p = 0; p < samples.size(); ++p) {
+                const auto& pt = samples[p];
+                std::vector<double> terms = getPolynomialTerms(pt.x_norm, pt.y_norm, order);
+                
+                double fitVal = 0.0;
+                for (int i = 0; i < numTerms; ++i) {
+                    fitVal += terms[i] * coeffs[i];
+                }
+
+                double residual = pt.z - fitVal;
+                double absRes = std::abs(residual);
+                sumAbsRes += absRes;
+
+                // Huber Weight Function
+                if (absRes <= huberDelta) {
+                    weights[p] = 1.0;
+                } else {
+                    weights[p] = huberDelta / absRes;
+                }
+            }
+            
+            if (iter == 0 || iter == maxIRLSIterations - 1) {
+                Logger::info("BackgroundExtraction", QString("    IRLS Iteration %1/8: Mean Absolute Residual = %2")
+                             .arg(iter + 1).arg(sumAbsRes / samples.size()));
+            }
+        }
+
+        // 4. Evaluate fitted background polynomial and subtract from source
+        if (progress) progress(progressStart + (progressEnd - progressStart) * 65 / 100);
+        Logger::info("BackgroundExtraction", QString("  Evaluating background model and performing subtraction..."));
+        
+        auto outBuffer = std::make_shared<ImageBuffer>(w, h);
+        float* outData = outBuffer->data();
+
+        // Cache terms mapping for rows/cols in full image
+        std::vector<double> x_norms(w);
+        for (int x = 0; x < w; ++x) x_norms[x] = (2.0 * x - w) / w;
+
+        #pragma omp parallel for
+        for (int y = 0; y < h; ++y) {
+            double y_norm = (2.0 * y - h) / h;
+            for (int x = 0; x < w; ++x) {
+                double x_norm = x_norms[x];
+                std::vector<double> terms = getPolynomialTerms(x_norm, y_norm, order);
+                
+                double bkgVal = 0.0;
+                for (int i = 0; i < numTerms; ++i) {
+                    bkgVal += terms[i] * coeffs[i];
+                }
+
+                outData[y * w + x] = data[y * w + x] - static_cast<float>(bkgVal);
+            }
+        }
+
+        // 5. Shift background-subtracted channel to a safe floor (neutral background peak)
+        if (equalize) {
+            if (progress) progress(progressStart + (progressEnd - progressStart) * 85 / 100);
+            Logger::info("BackgroundExtraction", QString("  Performing background channel equalization..."));
+            
+            std::vector<float> outSorted(outData, outData + numPixels);
+            std::sort(outSorted.begin(), outSorted.end());
+            double outMedian = outSorted[numPixels / 2];
+
+            double outSumSq = 0.0;
+            for (int i = 0; i < numPixels; ++i) {
+                double diff = outData[i] - outMedian;
+                outSumSq += diff * diff;
+            }
+            double outStd = std::sqrt(outSumSq / numPixels);
+
+            // Safe floor offset
+            float offset = -outMedian + sigmaCut * outStd;
+            Logger::info("BackgroundExtraction", QString("    Equalization complete: Shifted by offset = %1 to pedestal %2")
+                         .arg(offset).arg(sigmaCut * outStd));
+            
+            #pragma omp parallel for
+            for (int i = 0; i < numPixels; ++i) {
+                outData[i] += offset;
+            }
+        }
+
+        if (progress) progress(progressEnd);
+        return std::make_shared<GrayscaleImage>(outBuffer);
+    }
 }
 
 RGBImagePtr BackgroundExtractor::extractRGB(RGBImagePtr src,
@@ -326,18 +548,20 @@ RGBImagePtr BackgroundExtractor::extractRGB(RGBImagePtr src,
                                             double sampleFrac,
                                             double huberDelta,
                                             bool equalize,
-                                            ProgressCallback progress) {
+                                            ProgressCallback progress,
+                                            const std::string& method,
+                                            double rbfSmoothing) {
     if (!src) return nullptr;
 
     // 1. Process each channel independently WITHOUT individual equalization
     Logger::info("BackgroundExtraction", "Processing Red channel background extraction...");
-    auto extR = extractGrayscale(src->r(), order, sigmaCut, sampleFrac, huberDelta, false, progress, 5, 33);
+    auto extR = extractGrayscale(src->r(), order, sigmaCut, sampleFrac, huberDelta, false, progress, 5, 33, method, rbfSmoothing);
     
     Logger::info("BackgroundExtraction", "Processing Green channel background extraction...");
-    auto extG = extractGrayscale(src->g(), order, sigmaCut, sampleFrac, huberDelta, false, progress, 33, 66);
+    auto extG = extractGrayscale(src->g(), order, sigmaCut, sampleFrac, huberDelta, false, progress, 33, 66, method, rbfSmoothing);
     
     Logger::info("BackgroundExtraction", "Processing Blue channel background extraction...");
-    auto extB = extractGrayscale(src->b(), order, sigmaCut, sampleFrac, huberDelta, false, progress, 66, 90);
+    auto extB = extractGrayscale(src->b(), order, sigmaCut, sampleFrac, huberDelta, false, progress, 66, 90, method, rbfSmoothing);
 
     // 2. If equalize is true, apply coordinated equalization to neutralize the background
     if (equalize) {

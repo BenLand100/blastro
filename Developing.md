@@ -114,7 +114,10 @@ BLastro implements an MDI-window-specific Undo/Redo history system and viewport 
 
 Algorithms that require user-guided region/coordinate selection (such as Background Subtraction/Extraction) must split their workflow into two phases:
 1. **Interactive Placement**: User places, drags, or clears control points represented as a persistent property of the image's data structure (`ImageBuffer`). These coordinates are drawn directly as overlays on the `ImageView` using interactive edit modes.
+   - **Viewport Navigation Coexistence**: To allow standard panning (click-and-drag) and zooming even while edit modes are open, coordinate placement must require a modifier key (e.g. **Ctrl + Left Click** to add, **Ctrl + Right Click** to remove).
+   - **Visibility States**: Control point visibility should remain generally off by default to avoid cluttering the viewport, turning on automatically only when active user interaction occurs (such as a Ctrl+click or triggering a grid generator). Visibility should turn off immediately when the algorithm successfully executes.
 2. **Algorithm Execution**: The backend algorithm consumes the coordinates stored in the active image's property to sample local pixel values and run calculations (e.g. surface fitting). Because the control points are stored on the `ImageBuffer`, they are automatically deep-copied and restored by the Undo/Redo checkpoint system, enabling the user to undo a subtraction, tweak the points on the original image, and re-apply.
+   - **Post-Execution Cleanup**: Running BGE outputs a new image buffer that contains no control points. This naturally clears the points in the active view, while the undo stack preserves the original buffer with its control points intact.
 
 ## Performance & Implementation Insights (Astro Use Case)
 
@@ -129,6 +132,7 @@ To ensure BLastro remains extremely performant and reliable under typical astron
 - **Outlier Mitigation**: Raw astronomical frames contain stars, hot pixels, and cosmic rays. Standard Least Squares fitting is highly sensitive to these spikes. Always use robust estimators (like Huber loss or RANSAC) combined with Iteratively Reweighted Least Squares (IRLS) for surface fitting.
 - **Coordinate Normalization**: When solving polynomial surfaces (e.g. background models up to order 5), raw pixel coordinates $(x, y)$ can lead to numerical overflow and matrix singularity. Normalize all coordinates to $[-1.0, 1.0]$ relative to image dimensions before building design matrices.
 - **Local Neighborhood Sampling**: When evaluating image properties at discrete coordinate points (like user-placed control points or star centroids), sample a small local region (e.g. 5x5 box average or median) to mitigate the impact of random noise or localized stellar signal.
+- **Background Subtraction Verification**: Graphical user interfaces frequently apply auto-stretches that dynamically scale pixel value ranges. As a result, a raw gradient and a neutralized background might look visually similar on-screen. To verify that subtraction occurred, compare numerical pixel values across corners or run synthetic tests (e.g. `tests/generate_gradient_fits.py` paired with `testBackgroundExtractionOnGradient()` in `tests/test_algorithms.cpp`).
 
 ### 3. PCL Module & Downloader Integration
 - **TensorFlow Runtime & Lib Preloading**: Stars removal and noise reduction PCL modules require the PixInsight TensorFlow runtime library. This is installed and loaded strictly within the configured PCL lib directory (`Preferences::instance().getPclLibFolder()`). The option to preload all libraries recursively scans the lib directory on startup to resolve symbol dependencies.

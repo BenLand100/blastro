@@ -96,11 +96,14 @@ public:
     void setBgeMode(bool enabled);
     std::vector<std::pair<double, double>> getBgeControlPoints() const;
     void setBgeControlPoints(const std::vector<std::pair<double, double>>& pts);
+    bool showBgeControlPoints() const { return m_showBgeControlPoints; }
+    void setShowBgeControlPoints(bool show, bool manual = false);
 
 signals:
     void stretchParamsChanged(double b, double w, double m);
     void mousePosChanged(int x, int y, bool isRGB, const std::vector<float>& values);
     void selectionChanged();
+    void bgeControlPointsVisibilityChanged();
 
 protected:
     void wheelEvent(QWheelEvent* event) override;
@@ -173,6 +176,8 @@ private:
 
     // BGE control points editing
     bool m_bgeMode = false;
+    bool m_showBgeControlPoints = false;
+    bool m_bgeControlPointsManuallyToggled = false;
 };
 
 } // namespace blastro

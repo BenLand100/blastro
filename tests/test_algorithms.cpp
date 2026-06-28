@@ -1119,6 +1119,148 @@ void testGhsStretching() {
     std::cout << "[+] GHS Stretching Test PASSED." << std::endl << std::endl;
 }
 
+void testBackgroundExtractionOnGradient() {
+    std::cout << "Running Background Extraction on Gradient Test..." << std::endl;
+
+    WorkspaceRegistry workspace;
+    FitsIO fits;
+
+    ImageVariant inputVar = fits.readImage("gradient_input.fits");
+    assert(std::holds_alternative<GrayscaleImagePtr>(inputVar) && "Failed to load gradient_input.fits as GrayscaleImage");
+    auto inputImg = std::get<GrayscaleImagePtr>(inputVar);
+    workspace.registerElement("input_gradient", inputImg);
+
+    // Get input properties
+    int w = inputImg->width();
+    int h = inputImg->height();
+    
+    // Print input stats
+    float valTopLeft = inputImg->buffer()->pixel(0, 0);
+    float valTopRight = inputImg->buffer()->pixel(w - 1, 0);
+    float valBottomLeft = inputImg->buffer()->pixel(0, h - 1);
+    float valBottomRight = inputImg->buffer()->pixel(w - 1, h - 1);
+    std::cout << "  Input corner values:" << std::endl;
+    std::cout << "    Top-Left:     " << valTopLeft << std::endl;
+    std::cout << "    Top-Right:    " << valTopRight << std::endl;
+    std::cout << "    Bottom-Left:  " << valBottomLeft << std::endl;
+    std::cout << "    Bottom-Right: " << valBottomRight << std::endl;
+
+    BackgroundExtractionAlgorithm bge;
+    bge.execute(workspace, {
+        {"input_name",   "input_gradient"},
+        {"output_name",  "output_neutralized"},
+        {"order",        "1"},
+        {"sigma_cut",    "3.0"},
+        {"sample_frac",  "0.05"},
+        {"huber_delta",  "5.0"},
+        {"equalize",     "true"}
+    });
+
+    auto outputVar = workspace.getElement("output_neutralized");
+    assert(std::holds_alternative<GrayscaleImagePtr>(outputVar) && "BGE output is not GrayscaleImage");
+    auto outputImg = std::get<GrayscaleImagePtr>(outputVar);
+
+    // Save the output so it can be verified/loaded by the user
+    fits.writeImage("gradient_output.fits", ImageVariant{outputImg});
+
+    // Print output stats
+    float outTopLeft = outputImg->buffer()->pixel(0, 0);
+    float outTopRight = outputImg->buffer()->pixel(w - 1, 0);
+    float outBottomLeft = outputImg->buffer()->pixel(0, h - 1);
+    float outBottomRight = outputImg->buffer()->pixel(w - 1, h - 1);
+    std::cout << "  Output corner values:" << std::endl;
+    std::cout << "    Top-Left:     " << outTopLeft << std::endl;
+    std::cout << "    Top-Right:    " << outTopRight << std::endl;
+    std::cout << "    Bottom-Left:  " << outBottomLeft << std::endl;
+    std::cout << "    Bottom-Right: " << outBottomRight << std::endl;
+
+    // Check if the gradient is removed. The difference between corners should be minimal (close to noise standard deviation ~ 0.01)
+    double diffX_in = std::abs(valTopRight - valTopLeft);
+    double diffY_in = std::abs(valBottomLeft - valTopLeft);
+    double diffX_out = std::abs(outTopRight - outTopLeft);
+    double diffY_out = std::abs(outBottomLeft - outTopLeft);
+
+    std::cout << "  Gradient comparison:" << std::endl;
+    std::cout << "    Input X Diff: " << diffX_in << " -> Output X Diff: " << diffX_out << std::endl;
+    std::cout << "    Input Y Diff: " << diffY_in << " -> Output Y Diff: " << diffY_out << std::endl;
+
+    // The gradient diff was 0.3 in X, 0.2 in Y. In the output it should be close to 0 (typically < 0.02)
+    assert(diffX_out < 0.03 && "X-gradient not removed properly!");
+    assert(diffY_out < 0.03 && "Y-gradient not removed properly!");
+
+    std::cout << "[+] Background Extraction on Gradient Test PASSED." << std::endl << std::endl;
+}
+
+void testRbfBackgroundExtraction() {
+    std::cout << "Running RBF Background Extraction Test..." << std::endl;
+
+    WorkspaceRegistry workspace;
+    FitsIO fits;
+
+    // Load the gradient input fits file generated in the previous test
+    ImageVariant inputVar = fits.readImage("gradient_input.fits");
+    assert(std::holds_alternative<GrayscaleImagePtr>(inputVar) && "Failed to load gradient_input.fits");
+    auto inputImg = std::get<GrayscaleImagePtr>(inputVar);
+    workspace.registerElement("input_gradient_rbf", inputImg);
+
+    int w = inputImg->width();
+    int h = inputImg->height();
+
+    // Set control points grid on the input image buffer
+    std::vector<std::pair<double, double>> pts;
+    int cols = 5;
+    int rows = 5;
+    double marginX = w * 0.08;
+    double marginY = h * 0.08;
+    double stepX = (w - 2 * marginX) / (cols - 1);
+    double stepY = (h - 2 * marginY) / (rows - 1);
+    for (int r = 0; r < rows; ++r) {
+        for (int c = 0; c < cols; ++c) {
+            pts.push_back({marginX + c * stepX, marginY + r * stepY});
+        }
+    }
+    inputImg->buffer()->setBgeControlPoints(pts);
+
+    BackgroundExtractionAlgorithm bge;
+    bge.execute(workspace, {
+        {"input_name",     "input_gradient_rbf"},
+        {"output_name",    "output_rbf_neutralized"},
+        {"method",         "RBF"},
+        {"rbf_smoothing",  "0.0"},
+        {"sigma_cut",      "3.0"},
+        {"sample_frac",    "0.05"},
+        {"huber_delta",    "5.0"},
+        {"equalize",       "true"}
+    });
+
+    auto outputVar = workspace.getElement("output_rbf_neutralized");
+    assert(std::holds_alternative<GrayscaleImagePtr>(outputVar) && "BGE RBF output is not GrayscaleImage");
+    auto outputImg = std::get<GrayscaleImagePtr>(outputVar);
+
+    // Print output stats
+    float outTopLeft = outputImg->buffer()->pixel(0, 0);
+    float outTopRight = outputImg->buffer()->pixel(w - 1, 0);
+    float outBottomLeft = outputImg->buffer()->pixel(0, h - 1);
+    float outBottomRight = outputImg->buffer()->pixel(w - 1, h - 1);
+    std::cout << "  RBF Output corner values:" << std::endl;
+    std::cout << "    Top-Left:     " << outTopLeft << std::endl;
+    std::cout << "    Top-Right:    " << outTopRight << std::endl;
+    std::cout << "    Bottom-Left:  " << outBottomLeft << std::endl;
+    std::cout << "    Bottom-Right: " << outBottomRight << std::endl;
+
+    double diffX_out = std::abs(outTopRight - outTopLeft);
+    double diffY_out = std::abs(outBottomLeft - outTopLeft);
+    std::cout << "  RBF Gradient comparison:" << std::endl;
+    std::cout << "    Output X Diff: " << diffX_out << std::endl;
+    std::cout << "    Output Y Diff: " << diffY_out << std::endl;
+
+    // The gradient diff was 0.3 in X, 0.2 in Y. In the output it should be close to 0 (typically < 0.02)
+    assert(diffX_out < 0.03 && "RBF X-gradient not removed properly!");
+    assert(diffY_out < 0.03 && "RBF Y-gradient not removed properly!");
+
+    std::cout << "[+] RBF Background Extraction Test PASSED." << std::endl << std::endl;
+}
+
 int main() {
     std::cout << "========================================" << std::endl;
     std::cout << "Starting Blastro Algorithm Unit Tests..." << std::endl;
@@ -1130,6 +1272,8 @@ int main() {
     testCalibrationPipeline();
     testLightFramePipeline();
     testGhsStretching();
+    testBackgroundExtractionOnGradient();
+    testRbfBackgroundExtraction();
 
     std::cout << "========================================" << std::endl;
     std::cout << "All Blastro Algorithm Unit Tests PASSED!" << std::endl;

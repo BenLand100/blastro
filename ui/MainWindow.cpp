@@ -267,6 +267,14 @@ void MainWindow::createMenus() {
     connect(m_cropAct, &QAction::triggered, this, &MainWindow::onCrop);
     m_imageMenu->addAction(m_cropAct);
 
+    m_imageMenu->addSeparator();
+
+    m_showBgeControlPointsAct = new QAction("Show Control Points", this);
+    m_showBgeControlPointsAct->setCheckable(true);
+    m_showBgeControlPointsAct->setChecked(false);
+    connect(m_showBgeControlPointsAct, &QAction::toggled, this, &MainWindow::onToggleShowBgeControlPoints);
+    m_imageMenu->addAction(m_showBgeControlPointsAct);
+
     // Disable all by default
     m_undoAct->setEnabled(false);
     m_redoAct->setEnabled(false);
@@ -276,6 +284,7 @@ void MainWindow::createMenus() {
     m_rotate90CCWAct->setEnabled(false);
     m_rotate180Act->setEnabled(false);
     m_cropAct->setEnabled(false);
+    m_showBgeControlPointsAct->setEnabled(false);
 
     m_algoMenu = menuBar()->addMenu("&Algorithms");
     
@@ -865,6 +874,11 @@ void MainWindow::executeAlgorithmSlot(const std::string& name, const std::map<st
                     if (win) {
                         win->saveUndoState();
                         win->setElement(outElem, true); // Update in-place and preserve zoom
+                        if (name == "BackgroundExtraction") {
+                            if (ImageView* iv = win->imageView()) {
+                                iv->setShowBgeControlPoints(false);
+                            }
+                        }
                     } else {
                         m_workspaceArea->removeElementView(qOutName);
                         m_workspaceArea->addElementView(qOutName, outElem);
@@ -879,6 +893,7 @@ void MainWindow::executeAlgorithmSlot(const std::string& name, const std::map<st
                 for (auto* dlg : findChildren<AlgorithmDialog*>()) {
                     dlg->refreshWorkspaceElements();
                 }
+                updateImageMenuState();
             } catch (const std::exception& e) {
                 QMessageBox::critical(this, "Display Error", 
                                      QString("Algorithm finished successfully, but failed to retrieve or display the output element:\n%1").arg(e.what()));
@@ -916,6 +931,7 @@ void MainWindow::onSubWindowActivated(QMdiSubWindow* window) {
     // Disconnect previous image view mouse tracking if any
     if (m_connectedImageView) {
         disconnect(m_connectedImageView, &ImageView::mousePosChanged, this, &MainWindow::updateStatusReadout);
+        disconnect(m_connectedImageView, &ImageView::bgeControlPointsVisibilityChanged, this, &MainWindow::updateImageMenuState);
         m_connectedImageView = nullptr;
     }
     if (m_connectedImageWindow) {
@@ -940,6 +956,7 @@ void MainWindow::onSubWindowActivated(QMdiSubWindow* window) {
             m_connectedImageView = wsWindow->imageView();
             if (m_connectedImageView) {
                 connect(m_connectedImageView, &ImageView::mousePosChanged, this, &MainWindow::updateStatusReadout);
+                connect(m_connectedImageView, &ImageView::bgeControlPointsVisibilityChanged, this, &MainWindow::updateImageMenuState);
             }
             
             WorkspaceElement elem = wsWindow->element();
@@ -1923,6 +1940,7 @@ void MainWindow::updateImageMenuState() {
         m_rotate90CCWAct->setEnabled(false);
         m_rotate180Act->setEnabled(false);
         m_cropAct->setEnabled(false);
+        m_showBgeControlPointsAct->setEnabled(false);
         return;
     }
 
@@ -1941,6 +1959,12 @@ void MainWindow::updateImageMenuState() {
         
         ImageView* iv = wsWindow->imageView();
         m_cropAct->setEnabled(isSingleImage && iv && iv->hasSelection());
+        m_showBgeControlPointsAct->setEnabled(isSingleImage && iv);
+        if (iv) {
+            m_showBgeControlPointsAct->blockSignals(true);
+            m_showBgeControlPointsAct->setChecked(iv->showBgeControlPoints());
+            m_showBgeControlPointsAct->blockSignals(false);
+        }
     } else {
         m_undoAct->setEnabled(false);
         m_redoAct->setEnabled(false);
@@ -1950,6 +1974,18 @@ void MainWindow::updateImageMenuState() {
         m_rotate90CCWAct->setEnabled(false);
         m_rotate180Act->setEnabled(false);
         m_cropAct->setEnabled(false);
+        m_showBgeControlPointsAct->setEnabled(false);
+    }
+}
+
+void MainWindow::onToggleShowBgeControlPoints(bool checked) {
+    QMdiSubWindow* activeSub = m_workspaceArea->activeSubWindow();
+    if (activeSub) {
+        if (auto* wsWindow = qobject_cast<WorkspaceImageWindow*>(activeSub->widget())) {
+            if (ImageView* iv = wsWindow->imageView()) {
+                iv->setShowBgeControlPoints(checked, true);
+            }
+        }
     }
 }
 

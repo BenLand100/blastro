@@ -502,31 +502,43 @@ void ImageView::wheelEvent(QWheelEvent* event) {
 }
 
 void ImageView::mousePressEvent(QMouseEvent* event) {
-    if (m_bgeMode && event->button() == Qt::LeftButton && !(event->modifiers() & Qt::ShiftModifier)) {
+    if (m_bgeMode && (event->button() == Qt::LeftButton || event->button() == Qt::RightButton) && (event->modifiers() & Qt::ControlModifier)) {
         QPointF scenePos = mapToScene(event->pos());
         QSize imgSz = currentImageSize();
         if (scenePos.x() >= 0 && scenePos.x() < imgSz.width() && scenePos.y() >= 0 && scenePos.y() < imgSz.height()) {
             auto pts = getBgeControlPoints();
-            bool removed = false;
-            double threshold = 12.0;
-            if (transform().m11() > 0.0) {
-                threshold = 12.0 / transform().m11();
-            }
-            for (auto it = pts.begin(); it != pts.end(); ++it) {
-                double dx = it->first - scenePos.x();
-                double dy = it->second - scenePos.y();
-                if (std::sqrt(dx*dx + dy*dy) < threshold) {
-                    pts.erase(it);
-                    removed = true;
-                    break;
-                }
-            }
-            if (!removed) {
+            if (event->button() == Qt::LeftButton) {
                 pts.push_back({scenePos.x(), scenePos.y()});
+                setBgeControlPoints(pts);
+                setShowBgeControlPoints(true, true);
+                viewport()->update();
+                event->accept();
+                return;
+            } else if (event->button() == Qt::RightButton) {
+                double threshold = 12.0;
+                if (transform().m11() > 0.0) {
+                    threshold = 12.0 / transform().m11();
+                }
+                auto nearestIt = pts.end();
+                double minDist = threshold;
+                for (auto it = pts.begin(); it != pts.end(); ++it) {
+                    double dx = it->first - scenePos.x();
+                    double dy = it->second - scenePos.y();
+                    double dist = std::sqrt(dx*dx + dy*dy);
+                    if (dist < minDist) {
+                        minDist = dist;
+                        nearestIt = it;
+                    }
+                }
+                if (nearestIt != pts.end()) {
+                    pts.erase(nearestIt);
+                    setBgeControlPoints(pts);
+                    setShowBgeControlPoints(true, true);
+                    viewport()->update();
+                }
+                event->accept();
+                return;
             }
-            setBgeControlPoints(pts);
-            event->accept();
-            return;
         }
     }
 
@@ -1037,7 +1049,21 @@ void ImageView::setStars(const std::vector<Star>& stars) {
 void ImageView::setBgeMode(bool enabled) {
     if (m_bgeMode != enabled) {
         m_bgeMode = enabled;
+        if (!enabled) {
+            m_showBgeControlPoints = false;
+        }
         viewport()->update();
+    }
+}
+
+void ImageView::setShowBgeControlPoints(bool show, bool manual) {
+    if (m_showBgeControlPoints != show) {
+        m_showBgeControlPoints = show;
+        if (manual) {
+            m_bgeControlPointsManuallyToggled = true;
+        }
+        viewport()->update();
+        emit bgeControlPointsVisibilityChanged();
     }
 }
 
@@ -1065,6 +1091,11 @@ void ImageView::setBgeControlPoints(const std::vector<std::pair<double, double>>
             if (img->g() && img->g()->buffer()) img->g()->buffer()->setBgeControlPoints(pts);
             if (img->b() && img->b()->buffer()) img->b()->buffer()->setBgeControlPoints(pts);
         }
+    }
+    if (pts.empty()) {
+        m_showBgeControlPoints = false;
+        m_bgeControlPointsManuallyToggled = false;
+        emit bgeControlPointsVisibilityChanged();
     }
     viewport()->update();
 }
@@ -1108,7 +1139,7 @@ void ImageView::drawForeground(QPainter* painter, const QRectF& rect) {
     
     // Draw BGE Control Points
     auto bgePts = getBgeControlPoints();
-    if (!bgePts.empty()) {
+    if (m_showBgeControlPoints && !bgePts.empty()) {
         painter->save();
         QPen pen(QColor("#00ffff"));
         pen.setWidth(1);

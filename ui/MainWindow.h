@@ -142,6 +142,7 @@ private slots:
     void onRotate90CCW();
     void onRotate180();
     void onCrop();
+    void onToggleShowBgeControlPoints(bool checked);
     void updateImageMenuState();
 
 private:
@@ -180,6 +181,7 @@ private:
     QAction* m_rotate90CCWAct;
     QAction* m_rotate180Act;
     QAction* m_cropAct;
+    QAction* m_showBgeControlPointsAct;
     QAction* m_openAct;
     QAction* m_openBatchAct;
     QAction* m_addToBatchAct;
