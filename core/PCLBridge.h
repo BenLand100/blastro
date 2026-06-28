@@ -110,6 +110,9 @@ public:
 
     // Dynamically load a PCL .so module
     bool loadModule(const QString& path);
+
+    // Pre-load all shared libraries in a directory recursively
+    static void preloadLibraries(const QString& libDir);
     
     // Unload the module and free resources
     void unloadModule();

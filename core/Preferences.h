@@ -37,8 +37,8 @@ public:
     std::string getPclLibraryFolder() const;
     void setPclLibraryFolder(const std::string& path);
 
-    bool getPclLoadTensorflow() const;
-    void setPclLoadTensorflow(bool load);
+    bool getPclPreloadLibDir() const;
+    void setPclPreloadLibDir(bool preload);
 
     std::string getPclTensorflowDownloadUrl() const;
     void setPclTensorflowDownloadUrl(const std::string& url);
@@ -72,7 +72,7 @@ private:
     std::string m_pclModuleFolder;
     std::string m_pclLibFolder;
     std::string m_pclLibraryFolder;
-    bool m_pclLoadTensorflow;
+    bool m_pclPreloadLibDir;
     std::string m_pclTensorflowDownloadUrl;
     std::string m_temporaryFolder;
     std::string m_intermediateFolder;

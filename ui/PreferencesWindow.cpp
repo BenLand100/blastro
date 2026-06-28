@@ -99,8 +99,8 @@ PreferencesWindow::PreferencesWindow(QWidget* parent)
     layoutLibrary->addWidget(btnBrowseLibrary);
     pclForm->addRow("PCL Library Folder (AI models):", layoutLibrary);
 
-    m_tensorflowChk = new QCheckBox("Load TensorFlow dynamically on startup", this);
-    pclForm->addRow("", m_tensorflowChk);
+    m_preloadChk = new QCheckBox("Preload all libraries in PCL lib folder on startup", this);
+    pclForm->addRow("", m_preloadChk);
 
     m_tensorflowUrlEdit = new QLineEdit(this);
     pclForm->addRow("TensorFlow Download URL:", m_tensorflowUrlEdit);
@@ -207,7 +207,7 @@ PreferencesWindow::PreferencesWindow(QWidget* parent)
     m_moduleEdit->setText(QString::fromStdString(prefs.getPclModuleFolder()));
     m_libEdit->setText(QString::fromStdString(prefs.getPclLibFolder()));
     m_libraryEdit->setText(QString::fromStdString(prefs.getPclLibraryFolder()));
-    m_tensorflowChk->setChecked(prefs.getPclLoadTensorflow());
+    m_preloadChk->setChecked(prefs.getPclPreloadLibDir());
     m_tensorflowUrlEdit->setText(QString::fromStdString(prefs.getPclTensorflowDownloadUrl()));
     m_tempEdit->setText(QString::fromStdString(prefs.getTemporaryFolder()));
     m_intermediateEdit->setText(QString::fromStdString(prefs.getIntermediateFolder()));
@@ -260,7 +260,7 @@ void PreferencesWindow::onSaveClicked() {
     prefs.setPclModuleFolder(m_moduleEdit->text().trimmed().toStdString());
     prefs.setPclLibFolder(m_libEdit->text().trimmed().toStdString());
     prefs.setPclLibraryFolder(m_libraryEdit->text().trimmed().toStdString());
-    prefs.setPclLoadTensorflow(m_tensorflowChk->isChecked());
+    prefs.setPclPreloadLibDir(m_preloadChk->isChecked());
     prefs.setPclTensorflowDownloadUrl(m_tensorflowUrlEdit->text().trimmed().toStdString());
     prefs.setTemporaryFolder(m_tempEdit->text().trimmed().toStdString());
     prefs.setIntermediateFolder(m_intermediateEdit->text().trimmed().toStdString());

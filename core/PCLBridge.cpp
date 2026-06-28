@@ -2537,6 +2537,35 @@ static bool downloadAndExtractTensorFlow() {
     return true;
 }
 
+void PCLBridge::preloadLibraries(const QString& libDir) {
+    if (libDir.isEmpty()) {
+        return;
+    }
+    QDir dir(libDir);
+    if (!dir.exists()) {
+        return;
+    }
+    qInfo() << "[PCL Bridge] Scanning and preloading libraries from:" << libDir;
+    
+    QStringList filters;
+    filters << "*.so" << "*.so.*";
+
+    QDirIterator it(libDir, filters, QDir::Files, QDirIterator::Subdirectories);
+    while (it.hasNext()) {
+        QString libPath = it.next();
+        QFileInfo fi(libPath);
+        if (fi.isSymLink() && !QFile::exists(fi.symLinkTarget())) {
+            continue;
+        }
+
+        qDebug() << "[PCL Bridge] Pre-loading library:" << libPath;
+        void* handle = dlopen(libPath.toUtf8().constData(), RTLD_LAZY | RTLD_GLOBAL);
+        if (!handle) {
+            qDebug() << "[PCL Bridge] Note: Could not dlopen" << libPath << "-" << dlerror();
+        }
+    }
+}
+
 bool PCLBridge::loadModule(const QString& path) {
     // Check if this module is already loaded to avoid duplicates
     for (const auto& mod : m_modules) {
@@ -2553,24 +2582,6 @@ bool PCLBridge::loadModule(const QString& path) {
         QString tfPath = QDir(tfLibDir).filePath("libtensorflow.so.2");
 
         bool tfFound = QFile::exists(tfPath) && QFile::exists(tfFrameworkPath);
-        if (!tfFound) {
-            QString appDir = QCoreApplication::applicationDirPath();
-            QString fallbackTF1 = appDir + "/lib/libtensorflow.so.2";
-            QString fallbackTFF1 = appDir + "/lib/libtensorflow_framework.so.2";
-            QString fallbackTF2 = appDir + "/../lib/libtensorflow.so.2";
-            QString fallbackTFF2 = appDir + "/../lib/libtensorflow_framework.so.2";
-
-            if (QFile::exists(fallbackTF1) && QFile::exists(fallbackTFF1)) {
-                tfFrameworkPath = fallbackTFF1;
-                tfPath = fallbackTF1;
-                tfFound = true;
-            } else if (QFile::exists(fallbackTF2) && QFile::exists(fallbackTFF2)) {
-                tfFrameworkPath = fallbackTFF2;
-                tfPath = fallbackTF2;
-                tfFound = true;
-            }
-        }
-
         if (!tfFound) {
             qInfo() << "[PCL Bridge] TensorFlow dependencies not found. Initiating automatic download...";
             if (downloadAndExtractTensorFlow()) {

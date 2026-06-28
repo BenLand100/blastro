@@ -133,7 +133,7 @@ MainWindow::MainWindow(QWidget* parent)
         " |____/|_____\\__,_||___/\\__|_|  \\___/ \n";
     logWindow->appendRawText(welcomeArt, "#00bcd4");
     logWindow->appendRawText(" Welcome to BLastro - Astronomical Image Processing Platform\n"
-                             " Version 0.1.0\n"
+                             " Version 0.2.0\n"
                              "----------------------------------------------------------------\n", "#a0a0a0");
 
     // Position log window near the bottom right by default
@@ -149,6 +149,9 @@ MainWindow::MainWindow(QWidget* parent)
     // Auto-load PCL modules from the PCL module folder on startup
     QTimer::singleShot(200, this, [this]() {
         Preferences& prefs = Preferences::instance();
+        if (prefs.getPclPreloadLibDir()) {
+            PCLBridge::preloadLibraries(QString::fromStdString(prefs.getPclLibFolder()));
+        }
         QString moduleFolder = QString::fromStdString(prefs.getPclModuleFolder());
         if (!moduleFolder.isEmpty() && QDir(moduleFolder).exists()) {
             QDirIterator it(moduleFolder, 

@@ -131,7 +131,7 @@ To ensure BLastro remains extremely performant and reliable under typical astron
 - **Local Neighborhood Sampling**: When evaluating image properties at discrete coordinate points (like user-placed control points or star centroids), sample a small local region (e.g. 5x5 box average or median) to mitigate the impact of random noise or localized stellar signal.
 
 ### 3. PCL Module & Downloader Integration
-- **TensorFlow Runtime Fallback**: Stars removal and noise reduction PCL modules require the PixInsight TensorFlow runtime library. If missing, configure BLastro to locate it or download it from the configured preference URL (`https://download.starnetastro.com/pixinsight/legacy/tensorflow-runtime/pixinsight_tensorflow_runtime_linux_TF_x64.zip`) and unpack it locally.
+- **TensorFlow Runtime & Lib Preloading**: Stars removal and noise reduction PCL modules require the PixInsight TensorFlow runtime library. This is installed and loaded strictly within the configured PCL lib directory (`Preferences::instance().getPclLibFolder()`). The option to preload all libraries recursively scans the lib directory on startup to resolve symbol dependencies.
 - **File Collision & Refcounting**: The package manager tracks all files extracted from update packages in `QSettings`. To prevent package uninstallation from breaking shared dependencies, track reference counts for files and skip deletion if a file is owned by another active package.
 - **Safe Extraction Scans**: Always verify the contents of download packages using dry-run zip/tar file list queries (`unzip -Z -1` or `tar -tf`) before extraction, warning the user of potential file collisions and allowing them to uninstall conflicting modules.
 

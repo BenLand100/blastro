@@ -68,7 +68,7 @@ Open **Preferences** (wrench icon or menu) and navigate to the **Update Reposito
    - AI neural network models (`.pb` files) -> `plugins/library/`
 
 ### 3. Startup & Execution
-- **TensorFlow Dynamic Preloading**: Open **Preferences** (General Settings tab) and check **Load TensorFlow dynamically on startup** so the neural network dependencies are loaded correctly.
+- **Dynamic Library Preloading**: Open **Preferences** (General Settings tab) and check **Preload all libraries in PCL lib folder on startup** so the neural network and auxiliary library dependencies are loaded correctly.
 - **Autoloading**: Restart BLastro. It recursively scans the `plugins/bin/` directory on startup, loads all installed PCL modules, and registers them directly in the **Algorithms** menu.
 
 ---
