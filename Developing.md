@@ -177,6 +177,10 @@ To ensure BLastro remains extremely performant and reliable under typical astron
 - **Bilinear Interpolation Optimization**: Avoids full-image allocations and full-image bilinear interpolation loops. Computes block background/noise grid on a 1/16th sampled subset of pixels using linear-time `std::nth_element` (100x speedup), and performs bilinear interpolation on the fly only for candidate peaks.
 - **Simplex Convergence Stability**: When running Nelder-Mead on small sub-pixel centroid offsets, initializing the simplex offset from the integer patch center `(0.0, 0.0)` rather than the sub-pixel centroid offset prevents degenerate/collapsed simplex shapes, guaranteeing convergence for all stars.
 
+### 10. Thread-Safe Workspace & Suffix Auto-generation
+- **Thread-Safe Workspace Registry**: Since algorithms are executed asynchronously inside background threads (`AlgorithmWorker`), they may register or unregister workspace elements concurrently with the main thread reading them. To prevent race conditions and segfaults, `WorkspaceRegistry` uses a `std::lock_guard<std::mutex>` to lock all read and write operations.
+- **Dynamic Suffix Auto-generation**: Rerunning preprocessing runs or final stacking passes can cause name collisions for output stacked masters (e.g. `preprocessed_lights_Ha_stacked`). To prevent overwriting and allow easy comparison of runs, the Preprocessing Pipeline checks for naming collisions and appends an increasing unique suffix (e.g. `_1`, `_2`, etc.). The wizard's completion callback automatically resolves and displays the highest suffix/most recent run.
+
 ## Build Requirements
 
 - C++17 compliant compiler

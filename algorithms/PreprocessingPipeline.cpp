@@ -694,6 +694,17 @@ void PreprocessingPipeline::execute(WorkspaceRegistry& workspace,
             });
 
             std::string finalMasterName = name + "_stacked";
+            if (workspace.contains(finalMasterName)) {
+                std::string base = finalMasterName;
+                int suffix = 1;
+                std::string candidate = base + "_" + std::to_string(suffix);
+                while (workspace.contains(candidate)) {
+                    suffix++;
+                    candidate = base + "_" + std::to_string(suffix);
+                }
+                finalMasterName = candidate;
+            }
+
             Logger::info("Preprocessing", QString("Stacking final preprocessed master light for batch %1...").arg(QString::fromStdString(name)));
             StackingAlgorithm stacker;
             runStep(stacker, {

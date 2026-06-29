@@ -24,6 +24,7 @@
 #include <string>
 #include <variant>
 #include <vector>
+#include <mutex>
 
 namespace blastro {
 
@@ -45,6 +46,7 @@ public:
 
 private:
     std::unordered_map<std::string, WorkspaceElement> m_registry;
+    mutable std::mutex m_mutex;
 };
 
 } // namespace blastro

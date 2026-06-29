@@ -1208,7 +1208,17 @@ void PreprocessingWizardDialog::onResumeStacking() {
                     prefix += "_";
                 }
                 for (const auto& filter : m_activeFilters) {
-                    std::string finalMasterName = prefix + "preprocessed_lights_" + filter.toStdString() + "_stacked";
+                    std::string baseName = prefix + "preprocessed_lights_" + filter.toStdString() + "_stacked";
+                    std::string finalMasterName = baseName;
+                    if (m_workspace.contains(baseName)) {
+                        int suffix = 1;
+                        std::string candidate = baseName + "_" + std::to_string(suffix);
+                        while (m_workspace.contains(candidate)) {
+                            finalMasterName = candidate;
+                            suffix++;
+                            candidate = baseName + "_" + std::to_string(suffix);
+                        }
+                    }
                     if (m_workspace.contains(finalMasterName)) {
                         QString qName = QString::fromStdString(finalMasterName);
                         mw->m_workspaceArea->removeElementView(qName);
