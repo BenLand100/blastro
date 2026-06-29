@@ -43,7 +43,8 @@ BatchImageWidget::BatchImageWidget(ImageBatchPtr batch, QWidget* parent)
       m_dyLabel(new QLabel("dy: -", this)),
       m_thetaLabel(new QLabel("θ: -", this)),
       m_starsLabel(new QLabel("Stars: -", this)),
-      m_filterBtn(new QPushButton("Filters", this)) {
+      m_filterBtn(new QPushButton("Filters", this)),
+      m_firstLoad(true) {
       
     // Enable keyboard focus so arrow keys and spacebar function correctly
     setFocusPolicy(Qt::StrongFocus);
@@ -232,7 +233,8 @@ void BatchImageWidget::onIndexChanged(int index) {
     
     try {
         ImageVariant img = m_batch->getImage(m_currentIndex);
-        m_imageView->setImage(img, true, true);
+        m_imageView->setImage(img, !m_firstLoad, !m_firstLoad);
+        m_firstLoad = false;
         updateBottomBarReadout();
         updateStarOverlay();
         emit frameChanged(index);

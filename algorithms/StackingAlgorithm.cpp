@@ -31,6 +31,7 @@
 #include "core/Logger.h"
 #include <QElapsedTimer>
 #include "core/Preferences.h"
+#include "PreprocessingPipeline.h"
 
 namespace blastro {
 
@@ -109,7 +110,8 @@ static GrayscaleImagePtr stackChannels(const std::vector<GrayscaleImagePtr>& cha
 
     int progressStep = std::max(1, numPixels / 20);
 
-    #pragma omp parallel
+    bool cancelled = false;
+    #pragma omp parallel shared(cancelled)
     {
         // Thread-local vectors allocated once per thread to eliminate heap allocation overhead in the hot loop!
         std::vector<float> threadPixelValues(numFrames);
@@ -119,10 +121,18 @@ static GrayscaleImagePtr stackChannels(const std::vector<GrayscaleImagePtr>& cha
 
         #pragma omp for schedule(static)
         for (int p = 0; p < numPixels; ++p) {
-            if (progressSub && (p % progressStep == 0)) {
-                #pragma omp critical
-                {
-                    progressSub(static_cast<int>(100.0 * p / numPixels));
+            if (cancelled) continue;
+
+            if (p % progressStep == 0) {
+                if (PreprocessingPipeline::isCancelled()) {
+                    cancelled = true;
+                    continue;
+                }
+                if (progressSub) {
+                    #pragma omp critical
+                    {
+                        progressSub(static_cast<int>(100.0 * p / numPixels));
+                    }
                 }
             }
 
@@ -224,6 +234,10 @@ static GrayscaleImagePtr stackChannels(const std::vector<GrayscaleImagePtr>& cha
                 outData[p] = threadActiveValues[0];
             }
         }
+    }
+
+    if (cancelled || PreprocessingPipeline::isCancelled()) {
+        throw std::runtime_error("Preprocessing cancelled by user.");
     }
 
     return std::make_shared<GrayscaleImage>(outBuffer);
@@ -346,6 +360,10 @@ void StackingAlgorithm::execute(WorkspaceRegistry& workspace,
             int patchH = std::min(patchSize, height - yStart);
 
             for (int px = 0; px < numXPatches; ++px) {
+                if (PreprocessingPipeline::isCancelled()) {
+                    throw std::runtime_error("Preprocessing cancelled by user.");
+                }
+
                 int xStart = px * patchSize;
                 int patchW = std::min(patchSize, width - xStart);
 

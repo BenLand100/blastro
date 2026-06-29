@@ -75,9 +75,7 @@ void ImageView::setImage(const ImageVariant& image, bool preserveStretch, bool p
     
     // Auto-fit to the MDI window on load, unless preserving zoom
     if (!preserveZoom) {
-        if (viewport()->width() > 100 && viewport()->height() > 100) {
-            fitToWindow();
-        } else {
+        if (!fitToWindow()) {
             m_fitOnNextResize = true;
         }
     }
@@ -459,7 +457,7 @@ void ImageView::resetZoom() {
     m_zoomFactor = 1.0;
 }
 
-void ImageView::fitToWindow() {
+bool ImageView::fitToWindow() {
     int imgW = 0, imgH = 0;
     if (std::holds_alternative<GrayscaleImagePtr>(m_currentImage)) {
         auto img = std::get<GrayscaleImagePtr>(m_currentImage);
@@ -469,11 +467,11 @@ void ImageView::fitToWindow() {
         if (img) { imgW = img->width(); imgH = img->height(); }
     }
     
-    if (imgW <= 0 || imgH <= 0) return;
+    if (imgW <= 0 || imgH <= 0) return false;
     
     int vpW = viewport()->width();
     int vpH = viewport()->height();
-    if (vpW <= 100 || vpH <= 100) return;
+    if (vpW <= 100 || vpH <= 100) return false;
     
     resetTransform();
     double scaleX = static_cast<double>(vpW) / imgW;
@@ -482,13 +480,24 @@ void ImageView::fitToWindow() {
     
     scale(factor, factor);
     m_zoomFactor = factor;
+    return true;
 }
 
 void ImageView::resizeEvent(QResizeEvent* event) {
     QGraphicsView::resizeEvent(event);
     if (m_fitOnNextResize) {
-        fitToWindow();
-        m_fitOnNextResize = false;
+        if (fitToWindow()) {
+            m_fitOnNextResize = false;
+        }
+    }
+}
+
+void ImageView::showEvent(QShowEvent* event) {
+    QGraphicsView::showEvent(event);
+    if (m_fitOnNextResize) {
+        if (fitToWindow()) {
+            m_fitOnNextResize = false;
+        }
     }
 }
 

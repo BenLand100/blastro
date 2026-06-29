@@ -84,6 +84,12 @@ AlignDialog::AlignDialog(WorkspaceRegistry& workspace, QWidget* parent)
     m_drizzleCombo->addItem("3.0x Drizzle", 3.0);
     formLayout->addRow("Drizzle Scale:", m_drizzleCombo);
 
+    // 4. Alignment Reference Mode ComboBox
+    m_refModeCombo = new QComboBox(this);
+    m_refModeCombo->addItem("Find Centermost", "average_center");
+    m_refModeCombo->addItem("Use Reference", "registration");
+    formLayout->addRow("Alignment Reference Mode:", m_refModeCombo);
+
     mainLayout->addLayout(formLayout);
 
     // Buttons Box
@@ -169,6 +175,7 @@ std::map<std::string, std::string> AlignDialog::getConfig() const {
     config["input_name"] = m_targetInputCombo->currentText().toStdString();
     config["output_name"] = m_outputName->text().trimmed().toStdString();
     config["drizzle_scale"] = std::to_string(m_drizzleCombo->currentData().toDouble());
+    config["reference_mode"] = m_refModeCombo->currentData().toString().toStdString();
     config["strip_height"] = std::to_string(m_stripHeight);
     config["threads"] = std::to_string(m_threads);
     config["evict_cache"] = m_evictCache ? "true" : "false";

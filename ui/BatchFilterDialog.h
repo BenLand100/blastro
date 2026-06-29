@@ -22,6 +22,8 @@
 #include <QDoubleSpinBox>
 #include <QLabel>
 #include <QPushButton>
+#include <map>
+#include <utility>
 #include "core/ImageBatch.h"
 #include "StatsPlotWidget.h"
 
@@ -48,6 +50,8 @@ private:
     void applyFilter();
     void updateLabels();
     void updateSpinBoxRanges();
+    void resetFilters();
+    std::pair<double, double> getAbsoluteRange(const std::string& metric);
 
     ImageBatchPtr m_batch;
     int m_currentFrameIdx;
@@ -57,6 +61,8 @@ private:
     QDoubleSpinBox* m_minSpin;
     QDoubleSpinBox* m_maxSpin;
     QLabel* m_summaryLabel;
+
+    std::map<std::string, std::pair<double, double>> m_filterRanges;
 };
 
 } // namespace blastro

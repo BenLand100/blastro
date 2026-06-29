@@ -58,8 +58,9 @@ RegisterDialog::RegisterDialog(WorkspaceRegistry& workspace, QWidget* parent)
 
     // 3. Star Detection Method
     m_methodCombo = new QComboBox(this);
-    m_methodCombo->addItem("Fast Centroid", "centroid");
-    m_methodCombo->addItem("Gaussian Profile Fit (NM Solver)", "gaussian");
+    m_methodCombo->addItem("Advanced Adaptive", "sota");
+    m_methodCombo->addItem("Basic Centroid", "centroid");
+    m_methodCombo->addItem("Standard Gaussian", "gaussian");
     formLayout->addRow("Detection Method:", m_methodCombo);
 
     // 4. SNR Threshold

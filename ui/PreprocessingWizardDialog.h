@@ -110,6 +110,7 @@ private:
     QPushButton* m_outDirBrowseBtn;
     QCheckBox* m_keepIntermediateChk;
     QDoubleSpinBox* m_drizzleScaleSpin;
+    QComboBox* m_alignRefModeCombo;
     QCheckBox* m_overwriteMastersChk;
     QLineEdit* m_outPrefixEdit;
 
@@ -142,6 +143,9 @@ private:
     std::vector<QString> m_activeFilters;
     std::string m_runningStage;
     int m_stage1StepCount = 0;
+
+    std::pair<double, double> getAbsoluteRangeForBatch(ImageBatchPtr batch, const std::string& metric);
+    std::map<std::string, std::pair<double, double>> m_filterRanges;
 };
 
 class PreprocessingWorker : public QObject {

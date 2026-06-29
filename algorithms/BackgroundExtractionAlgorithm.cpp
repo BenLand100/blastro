@@ -97,7 +97,7 @@ void BackgroundExtractionAlgorithm::execute(WorkspaceRegistry& workspace,
 
             if (!inputBatch->isFrameSelected(i)) {
                 names[i]     = inputBatch->frameName(i) + "_unselected";
-                filepaths[i] = "";
+                filepaths[i] = inputBatch->frameFilepath(i);
                 continue;
             }
 
@@ -139,8 +139,10 @@ void BackgroundExtractionAlgorithm::execute(WorkspaceRegistry& workspace,
             },
             names, filepaths);
 
-        for (int i = 0; i < count; ++i)
+        for (int i = 0; i < count; ++i) {
             outBatch->setFrameSelected(i, inputBatch->isFrameSelected(i));
+            outBatch->setFrameMetadata(i, inputBatch->frameMetadata(i));
+        }
 
         if (progress) progress(100);
         if (workspace.contains(outputName))

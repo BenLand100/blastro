@@ -29,6 +29,7 @@
 #include <QElapsedTimer>
 #include <atomic>
 #include "core/Preferences.h"
+#include "PreprocessingPipeline.h"
 
 namespace blastro {
 
@@ -49,12 +50,14 @@ void RegisterAlgorithm::execute(WorkspaceRegistry& workspace,
     std::string inputName = config.at("input_name");
     int refFrameIdx = std::stoi(config.at("ref_frame_index"));
     std::string detectionMethod = config.at("detection_method");
+    if (detectionMethod == "starfinder") {
+        detectionMethod = "sota";
+    }
     double snrMin = std::stod(config.at("snr_min"));
     double minFwhm = std::stod(config.at("min_fwhm"));
     int maxStars = std::stoi(config.at("max_stars"));
     double maxEccentricity = std::stod(config.at("max_eccentricity"));
     double matchTolerance = std::stod(config.at("match_tolerance"));
-    bool fastFit = (detectionMethod == "centroid");
 
     WorkspaceElement inputElem = workspace.getElement(inputName);
     if (!std::holds_alternative<ImageBatchPtr>(inputElem)) {
@@ -98,22 +101,35 @@ void RegisterAlgorithm::execute(WorkspaceRegistry& workspace,
         throw std::runtime_error("Failed to extract registration channel from reference frame");
     }
 
-    std::vector<Star> refStars = StarFinder::findStars(refChannel, maxStars, snrMin, fastFit, 10, minFwhm, maxEccentricity);
-    if (refStars.size() < 3) {
-        throw std::runtime_error("Failed to register reference frame: detected only " + 
-                                 std::to_string(refStars.size()) + " stars (need at least 3)");
+    // Detect all stars (up to 10,000) for statistics in SOTA mode, but slice top maxStars for matching
+    int maxStarsDetect = (detectionMethod == "sota") ? 10000 : maxStars;
+    std::vector<Star> refStars = StarFinder::findStars(refChannel, maxStarsDetect, snrMin, detectionMethod, 10, minFwhm, maxEccentricity);
+    
+    std::vector<Star> refStarsForMatching = refStars;
+    if (detectionMethod == "sota") {
+        // Sort stars descending by peak brightness
+        std::sort(refStarsForMatching.begin(), refStarsForMatching.end(), [](const Star& a, const Star& b) {
+            return a.peak > b.peak;
+        });
+        if (refStarsForMatching.size() > static_cast<size_t>(maxStars)) {
+            refStarsForMatching.resize(maxStars);
+        }
     }
 
-    Logger::success("Register", QString("Reference frame index %1 registered successfully with %2 stars.")
-                    .arg(refFrameIdx).arg(refStars.size()));
+    if (refStarsForMatching.size() < 3) {
+        throw std::runtime_error("Failed to register reference frame: detected only " + 
+                                 std::to_string(refStarsForMatching.size()) + " stars (need at least 3)");
+    }
 
-    // Compute average FWHM and SNR from reference stars
+    Logger::success("Register", QString("Reference frame index %1 registered successfully with %2 stars for matching (total detected: %3).")
+                    .arg(refFrameIdx).arg(refStarsForMatching.size()).arg(refStars.size()));
+
+    // Compute average FWHM and SNR from all detected reference stars
     double refSumFwhm = 0.0;
     double refSumSnr = 0.0;
     for (const auto& star : refStars) {
         refSumFwhm += star.fwhm;
-        double bg = std::max(1e-6, star.background);
-        refSumSnr += star.peak / bg;
+        refSumSnr += star.snr;
     }
     double refAvgFwhm = refStars.empty() ? 0.0 : (refSumFwhm / refStars.size());
     double refAvgSnr = refStars.empty() ? 0.0 : (refSumSnr / refStars.size());
@@ -133,8 +149,16 @@ void RegisterAlgorithm::execute(WorkspaceRegistry& workspace,
     // 2. Loop through all other selected frames and register them against the reference frame
     std::atomic<int> processedFrames(0);
 
-    #pragma omp parallel for
+    bool cancelled = false;
+    #pragma omp parallel for shared(cancelled)
     for (int i = 0; i < count; ++i) {
+        if (cancelled) continue;
+
+        if (PreprocessingPipeline::isCancelled()) {
+            cancelled = true;
+            continue;
+        }
+
         // Reference frame is already registered (0 offset)
         if (i == refFrameIdx) {
             if (progress) {
@@ -168,12 +192,24 @@ void RegisterAlgorithm::execute(WorkspaceRegistry& workspace,
                 continue;
             }
 
-            // Detect stars in target frame
-            std::vector<Star> targetStars = StarFinder::findStars(targetChannel, maxStars, snrMin, fastFit, 10, minFwhm, maxEccentricity);
+            // Detect stars in target frame (up to 10,000 in SOTA mode)
+            int maxStarsDetect = (detectionMethod == "sota") ? 10000 : maxStars;
+            std::vector<Star> targetStars = StarFinder::findStars(targetChannel, maxStarsDetect, snrMin, detectionMethod, 10, minFwhm, maxEccentricity);
             
-            if (targetStars.size() < 3) {
-                Logger::warning("Register", QString("Frame %1 failed: only %2 stars detected. Frame auto-deselected.")
-                                .arg(i).arg(targetStars.size()));
+            std::vector<Star> targetStarsForMatching = targetStars;
+            if (detectionMethod == "sota") {
+                // Sort stars descending by peak brightness
+                std::sort(targetStarsForMatching.begin(), targetStarsForMatching.end(), [](const Star& a, const Star& b) {
+                    return a.peak > b.peak;
+                });
+                if (targetStarsForMatching.size() > static_cast<size_t>(maxStars)) {
+                    targetStarsForMatching.resize(maxStars);
+                }
+            }
+
+            if (targetStarsForMatching.size() < 3) {
+                Logger::warning("Register", QString("Frame %1 failed: only %2 stars detected (matching subset: %3). Frame auto-deselected.")
+                                .arg(i).arg(targetStars.size()).arg(targetStarsForMatching.size()));
                 batch->setFrameSelected(i, false); // auto-deselect failed frames
                 batch->clearCache(i);
                 if (progress) {
@@ -183,17 +219,16 @@ void RegisterAlgorithm::execute(WorkspaceRegistry& workspace,
                 continue;
             }
 
-            // Match constellations to reference frame
-            auto alignRes = ConstellationMatcher::match(refStars, targetStars, 7, matchTolerance);
+            // Match constellations to reference frame using brightest subsets
+            auto alignRes = ConstellationMatcher::match(refStarsForMatching, targetStarsForMatching, 7, matchTolerance);
             
             if (alignRes.success) {
-                // Compute average FWHM and SNR from target stars
+                // Compute average FWHM and SNR from all detected target stars
                 double sumFwhm = 0.0;
                 double sumSnr = 0.0;
                 for (const auto& star : targetStars) {
                     sumFwhm += star.fwhm;
-                    double bg = std::max(1e-6, star.background);
-                    sumSnr += star.peak / bg;
+                    sumSnr += star.snr;
                 }
                 double avgFwhm = targetStars.empty() ? 0.0 : (sumFwhm / targetStars.size());
                 double avgSnr = targetStars.empty() ? 0.0 : (sumSnr / targetStars.size());
@@ -203,10 +238,10 @@ void RegisterAlgorithm::execute(WorkspaceRegistry& workspace,
                 meta.dx = alignRes.dx;
                 meta.dy = alignRes.dy;
                 meta.theta = alignRes.theta;
-                meta.starCount = alignRes.matchedStars;
+                meta.starCount = targetStars.size(); // Total detected stars count!
                 meta.fwhm = avgFwhm;
                 meta.snr = avgSnr;
-                meta.stars = targetStars;
+                meta.stars = targetStars; // All detected stars!
                 
                 batch->setFrameMetadata(i, meta);
                 
@@ -233,6 +268,10 @@ void RegisterAlgorithm::execute(WorkspaceRegistry& workspace,
             int localProcessed = ++processedFrames;
             progress(static_cast<int>(5.0 + 95.0 * localProcessed / count));
         }
+    }
+
+    if (cancelled || PreprocessingPipeline::isCancelled()) {
+        throw std::runtime_error("Preprocessing cancelled by user.");
     }
 
     if (progress) progress(100);

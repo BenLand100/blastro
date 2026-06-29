@@ -135,6 +135,7 @@ BatchFilterDialog::BatchFilterDialog(ImageBatchPtr batch, int currentFrameIdx, Q
     connect(closeBtn, &QPushButton::clicked, this, &QDialog::accept);
 
     // Initial load
+    resetFilters();
     onMetricChanged(0);
 }
 
@@ -145,14 +146,20 @@ void BatchFilterDialog::onMetricChanged(int index) {
 
     updateSpinBoxRanges();
 
+    if (m_filterRanges.find(metric) == m_filterRanges.end()) {
+        m_filterRanges[metric] = { m_plotWidget->absoluteMin(), m_plotWidget->absoluteMax() };
+    }
+    auto range = m_filterRanges[metric];
+
     // Sync spinbox values to plot's initial filters
     m_minSpin->blockSignals(true);
     m_maxSpin->blockSignals(true);
-    m_minSpin->setValue(m_plotWidget->minFilter());
-    m_maxSpin->setValue(m_plotWidget->maxFilter());
+    m_minSpin->setValue(range.first);
+    m_maxSpin->setValue(range.second);
     m_minSpin->blockSignals(false);
     m_maxSpin->blockSignals(false);
 
+    m_plotWidget->setFilterRange(range.first, range.second);
     updateLabels();
 }
 
@@ -227,19 +234,31 @@ void BatchFilterDialog::applyFilter() {
     double maxVal = m_maxSpin->value();
 
     std::string metric = m_metricCombo->currentData().toString().toStdString();
+    m_filterRanges[metric] = {minVal, maxVal};
+
     int count = m_batch->count();
 
     for (int i = 0; i < count; ++i) {
-        double v = 0.0;
         FrameMetadata meta = m_batch->frameMetadata(i);
-        if (metric == "starCount") v = meta.starCount;
-        else if (metric == "fwhm") v = meta.fwhm;
-        else if (metric == "snr") v = meta.snr;
-        else if (metric == "dx") v = meta.dx;
-        else if (metric == "dy") v = meta.dy;
-        else if (metric == "theta") v = meta.theta * 180.0 / M_PI;
+        bool match = true;
+        for (const auto& pair : m_filterRanges) {
+            std::string m = pair.first;
+            double minR = pair.second.first;
+            double maxR = pair.second.second;
+            double v = 0.0;
+            if (m == "starCount") v = meta.starCount;
+            else if (m == "fwhm") v = meta.fwhm;
+            else if (m == "snr") v = meta.snr;
+            else if (m == "dx") v = meta.dx;
+            else if (m == "dy") v = meta.dy;
+            else if (m == "theta") v = meta.theta * 180.0 / M_PI;
 
-        m_batch->setFrameSelected(i, v >= minVal && v <= maxVal);
+            if (v < minR || v > maxR) {
+                match = false;
+                break;
+            }
+        }
+        m_batch->setFrameSelected(i, match);
     }
 
     m_plotWidget->update();
@@ -249,10 +268,20 @@ void BatchFilterDialog::applyFilter() {
 
 void BatchFilterDialog::selectAll() {
     if (!m_batch) return;
+    resetFilters();
     int count = m_batch->count();
     for (int i = 0; i < count; ++i) {
         m_batch->setFrameSelected(i, true);
     }
+    std::string metric = m_metricCombo->currentData().toString().toStdString();
+    auto range = m_filterRanges[metric];
+    m_minSpin->blockSignals(true);
+    m_maxSpin->blockSignals(true);
+    m_minSpin->setValue(range.first);
+    m_maxSpin->setValue(range.second);
+    m_minSpin->blockSignals(false);
+    m_maxSpin->blockSignals(false);
+    m_plotWidget->setFilterRange(range.first, range.second);
     m_plotWidget->update();
     updateLabels();
     emit selectionChanged();
@@ -260,10 +289,20 @@ void BatchFilterDialog::selectAll() {
 
 void BatchFilterDialog::deselectAll() {
     if (!m_batch) return;
+    resetFilters();
     int count = m_batch->count();
     for (int i = 0; i < count; ++i) {
         m_batch->setFrameSelected(i, false);
     }
+    std::string metric = m_metricCombo->currentData().toString().toStdString();
+    auto range = m_filterRanges[metric];
+    m_minSpin->blockSignals(true);
+    m_maxSpin->blockSignals(true);
+    m_minSpin->setValue(range.first);
+    m_maxSpin->setValue(range.second);
+    m_minSpin->blockSignals(false);
+    m_maxSpin->blockSignals(false);
+    m_plotWidget->setFilterRange(range.first, range.second);
     m_plotWidget->update();
     updateLabels();
     emit selectionChanged();
@@ -289,6 +328,39 @@ void BatchFilterDialog::updateLabels() {
         if (m_batch->isFrameSelected(i)) selected++;
     }
     m_summaryLabel->setText(QString("Batch Filter: %1 / %2 frames selected").arg(selected).arg(count));
+}
+
+void BatchFilterDialog::resetFilters() {
+    m_filterRanges.clear();
+    std::vector<std::string> metrics = {"starCount", "fwhm", "snr", "dx", "dy", "theta"};
+    for (const auto& m : metrics) {
+        m_filterRanges[m] = getAbsoluteRange(m);
+    }
+}
+
+std::pair<double, double> BatchFilterDialog::getAbsoluteRange(const std::string& metric) {
+    if (!m_batch || m_batch->count() == 0) return {0.0, 1.0};
+    int count = m_batch->count();
+    double minVal = std::numeric_limits<double>::max();
+    double maxVal = -std::numeric_limits<double>::max();
+    for (int i = 0; i < count; ++i) {
+        FrameMetadata meta = m_batch->frameMetadata(i);
+        double v = 0.0;
+        if (metric == "starCount") v = meta.starCount;
+        else if (metric == "fwhm") v = meta.fwhm;
+        else if (metric == "snr") v = meta.snr;
+        else if (metric == "dx") v = meta.dx;
+        else if (metric == "dy") v = meta.dy;
+        else if (metric == "theta") v = meta.theta * 180.0 / M_PI;
+
+        if (v < minVal) minVal = v;
+        if (v > maxVal) maxVal = v;
+    }
+    if (minVal == maxVal) {
+        minVal -= 1.0;
+        maxVal += 1.0;
+    }
+    return {minVal, maxVal};
 }
 
 } // namespace blastro

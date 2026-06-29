@@ -77,7 +77,7 @@ public:
     void zoomIn();
     void zoomOut();
     void resetZoom();
-    void fitToWindow();
+    bool fitToWindow();
 
     void setFrameSelectedStatus(bool selected);
 
@@ -114,6 +114,7 @@ protected:
     void drawForeground(QPainter* painter, const QRectF& rect) override;
     void keyPressEvent(QKeyEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
+    void showEvent(QShowEvent* event) override;
 
 private:
     void updateView();

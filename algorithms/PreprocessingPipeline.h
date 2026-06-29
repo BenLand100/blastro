@@ -61,6 +61,7 @@ public:
     using StepProgressCallback = std::function<void(int stepIndex, int percent, double elapsedSeconds, bool finished, bool success)>;
     void setStepCallback(StepProgressCallback cb) { m_stepCallback = cb; }
     void setCancelCallback(std::function<bool()> cb) { m_cancelCallback = cb; }
+    static bool isCancelled();
 
     void execute(WorkspaceRegistry& workspace, 
                  const std::map<std::string, std::string>& config, 
@@ -80,6 +81,7 @@ public:
 private:
     StepProgressCallback m_stepCallback = nullptr;
     std::function<bool()> m_cancelCallback = nullptr;
+    static std::function<bool()> s_cancelCallback;
 };
 
 } // namespace blastro

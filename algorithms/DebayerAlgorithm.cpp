@@ -31,6 +31,7 @@
 #include <omp.h>
 #include <QElapsedTimer>
 #include "core/Preferences.h"
+#include "PreprocessingPipeline.h"
 
 namespace blastro {
 
@@ -201,6 +202,10 @@ void DebayerAlgorithm::execute(WorkspaceRegistry& workspace,
 
         // 2. Debayer each frame sequentially and save to disk
         for (int i = 0; i < count; ++i) {
+            if (PreprocessingPipeline::isCancelled()) {
+                throw std::runtime_error("Preprocessing cancelled by user.");
+            }
+
             if (progress) {
                 progress(static_cast<int>(100.0 * i / count));
             }
@@ -238,6 +243,11 @@ void DebayerAlgorithm::execute(WorkspaceRegistry& workspace,
             names,
             filepaths
         );
+
+        for (int i = 0; i < count; ++i) {
+            debayeredBatch->setFrameSelected(i, inputBatch->isFrameSelected(i));
+            debayeredBatch->setFrameMetadata(i, inputBatch->frameMetadata(i));
+        }
 
         if (progress) progress(100);
         workspace.registerElement(outputName, debayeredBatch);

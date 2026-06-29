@@ -63,16 +63,17 @@ PreprocessingWizardDialog::PreprocessingWizardDialog(WorkspaceRegistry& workspac
       m_minSpin(new QDoubleSpinBox(this)),
       m_maxSpin(new QDoubleSpinBox(this)),
       m_selectionTable(new QTableWidget(this)),
-      m_resumeBtn(new QPushButton("Execute Align & Stack", this)),
+      m_resumeBtn(new QPushButton("Execute Align && Stack", this)),
       m_outDirEdit(new QLineEdit(this)),
       m_outDirBrowseBtn(new QPushButton("Browse...", this)),
       m_keepIntermediateChk(new QCheckBox("Keep intermediate files", this)),
       m_drizzleScaleSpin(new QDoubleSpinBox(this)),
+      m_alignRefModeCombo(new QComboBox(this)),
       m_logText(new QTextEdit(this)),
       m_progressBar(new QProgressBar(this)),
       m_cancelBtn(new QPushButton("Cancel", this)),
       m_runBtn(new QPushButton("Execute Calibrate & Register", this)),
-      m_alignStackBtn(new QPushButton("Execute Align & Stack", this)),
+      m_alignStackBtn(new QPushButton("Execute Align && Stack", this)),
       m_stepsTable(new QTableWidget(this)),
       m_overwriteMastersChk(new QCheckBox("Overwrite existing master frames", this)),
       m_filterSelectCombo(new QComboBox(this)),
@@ -190,6 +191,10 @@ PreprocessingWizardDialog::PreprocessingWizardDialog(WorkspaceRegistry& workspac
     m_drizzleScaleSpin->setValue(1.0);
     m_drizzleScaleSpin->setSingleStep(0.5);
     outGroupLayout->addRow("Drizzle Alignment Scale:", m_drizzleScaleSpin);
+
+    m_alignRefModeCombo->addItem("Find Centermost", "average_center");
+    m_alignRefModeCombo->addItem("Use Reference", "registration");
+    outGroupLayout->addRow("Alignment Reference Mode:", m_alignRefModeCombo);
 
     m_keepIntermediateChk->setChecked(false);
     outGroupLayout->addRow("", m_keepIntermediateChk);
@@ -975,10 +980,12 @@ void PreprocessingWizardDialog::onRunCalibrationRegister() {
         } else {
             // Mark pending/running steps as cancelled/failed
             for (int r = 0; r < m_stepsTable->rowCount(); ++r) {
-                QString status = m_stepsTable->item(r, 1)->text();
-                if (status == "Pending" || status == "Running") {
-                    m_stepsTable->setItem(r, 1, new QTableWidgetItem(errorMsg.contains("cancelled") ? "Cancelled" : "Failed"));
-                    m_stepsTable->item(r, 1)->setForeground(QColor("#F44336"));
+                if (auto* item = m_stepsTable->item(r, 2)) {
+                    QString status = item->text();
+                    if (status == "Pending" || status == "Running") {
+                        m_stepsTable->setItem(r, 2, new QTableWidgetItem(errorMsg.contains("cancelled") ? "Cancelled" : "Failed"));
+                        m_stepsTable->item(r, 2)->setForeground(QColor("#F44336"));
+                    }
                 }
             }
 
@@ -1004,14 +1011,22 @@ void PreprocessingWizardDialog::onMetricChanged(int index) {
 
     m_plotWidget->setBatch(batch, metric);
 
+    std::string rangeKey = m_registeredLightsName + "_" + metric;
+    if (m_filterRanges.find(rangeKey) == m_filterRanges.end()) {
+        m_filterRanges[rangeKey] = { m_plotWidget->absoluteMin(), m_plotWidget->absoluteMax() };
+    }
+    auto range = m_filterRanges[rangeKey];
+
     m_minSpin->blockSignals(true);
     m_maxSpin->blockSignals(true);
     m_minSpin->setRange(m_plotWidget->absoluteMin(), m_plotWidget->absoluteMax());
     m_maxSpin->setRange(m_plotWidget->absoluteMin(), m_plotWidget->absoluteMax());
-    m_minSpin->setValue(m_plotWidget->minFilter());
-    m_maxSpin->setValue(m_plotWidget->maxFilter());
+    m_minSpin->setValue(range.first);
+    m_maxSpin->setValue(range.second);
     m_minSpin->blockSignals(false);
     m_maxSpin->blockSignals(false);
+
+    m_plotWidget->setFilterRange(range.first, range.second);
 }
 
 void PreprocessingWizardDialog::onRangeChanged(double minVal, double maxVal) {
@@ -1021,15 +1036,32 @@ void PreprocessingWizardDialog::onRangeChanged(double minVal, double maxVal) {
     auto batch = std::get<ImageBatchPtr>(m_workspace.getElement(m_registeredLightsName));
     std::string metric = m_plotWidget->currentMetric();
 
+    std::string rangeKey = m_registeredLightsName + "_" + metric;
+    m_filterRanges[rangeKey] = {minVal, maxVal};
+
     for (int i = 0; i < batch->count(); ++i) {
         auto meta = batch->frameMetadata(i);
-        double val = 0.0;
-        if (metric == "starCount") val = meta.starCount;
-        else if (metric == "fwhm") val = meta.fwhm;
-        else if (metric == "snr") val = meta.snr;
+        bool match = true;
+        std::vector<std::string> metrics = {"starCount", "fwhm", "snr"};
+        for (const auto& m : metrics) {
+            std::string key = m_registeredLightsName + "_" + m;
+            if (m_filterRanges.find(key) == m_filterRanges.end()) {
+                m_filterRanges[key] = getAbsoluteRangeForBatch(batch, m);
+            }
+            auto range = m_filterRanges[key];
+            double val = 0.0;
+            if (m == "starCount") val = meta.starCount;
+            else if (m == "fwhm") val = meta.fwhm;
+            else if (m == "snr") val = meta.snr;
 
-        bool inRange = (val >= minVal && val <= maxVal);
-        m_selectionTable->item(i, 0)->setCheckState(inRange ? Qt::Checked : Qt::Unchecked);
+            if (val < range.first || val > range.second) {
+                match = false;
+                break;
+            }
+        }
+        if (m_selectionTable->item(i, 0)) {
+            m_selectionTable->item(i, 0)->setCheckState(match ? Qt::Checked : Qt::Unchecked);
+        }
     }
 }
 
@@ -1079,6 +1111,7 @@ void PreprocessingWizardDialog::onResumeStacking() {
     config["stage"] = "align_stack";
     config["registered_light_batch_name"] = joinedNames;
     config["drizzle_scale"] = QString::number(m_drizzleScaleSpin->value()).toStdString();
+    config["align_ref_mode"] = m_alignRefModeCombo->currentData().toString().toStdString();
     config["keep_intermediate"] = m_keepIntermediateChk->isChecked() ? "true" : "false";
     config["out_dir"] = m_outDirEdit->text().toStdString();
     config["star_min_snr"] = QString::number(m_starMinSnrSpin->value()).toStdString();
@@ -1188,10 +1221,12 @@ void PreprocessingWizardDialog::onResumeStacking() {
         } else {
             // Mark pending/running steps as cancelled/failed
             for (int r = 0; r < m_stepsTable->rowCount(); ++r) {
-                QString status = m_stepsTable->item(r, 1)->text();
-                if (status == "Pending" || status == "Running") {
-                    m_stepsTable->setItem(r, 1, new QTableWidgetItem(errorMsg.contains("cancelled") ? "Cancelled" : "Failed"));
-                    m_stepsTable->item(r, 1)->setForeground(QColor("#F44336"));
+                if (auto* item = m_stepsTable->item(r, 2)) {
+                    QString status = item->text();
+                    if (status == "Pending" || status == "Running") {
+                        m_stepsTable->setItem(r, 2, new QTableWidgetItem(errorMsg.contains("cancelled") ? "Cancelled" : "Failed"));
+                        m_stepsTable->item(r, 2)->setForeground(QColor("#F44336"));
+                    }
                 }
             }
 
@@ -1203,6 +1238,8 @@ void PreprocessingWizardDialog::onResumeStacking() {
             }
         }
     });
+
+    m_activeThread->start();
 }
 
 void PreprocessingWizardDialog::saveCurrentSelectionStates() {
@@ -1234,16 +1271,7 @@ void PreprocessingWizardDialog::onFilterSelectionChanged(int index) {
     if (m_workspace.contains(m_registeredLightsName)) {
         auto batch = std::get<ImageBatchPtr>(m_workspace.getElement(m_registeredLightsName));
         
-        m_plotWidget->setBatch(batch, m_metricCombo->currentData().toString().toStdString());
-        
-        m_minSpin->blockSignals(true);
-        m_maxSpin->blockSignals(true);
-        m_minSpin->setRange(m_plotWidget->absoluteMin(), m_plotWidget->absoluteMax());
-        m_maxSpin->setRange(m_plotWidget->absoluteMin(), m_plotWidget->absoluteMax());
-        m_minSpin->setValue(m_plotWidget->minFilter());
-        m_maxSpin->setValue(m_plotWidget->maxFilter());
-        m_minSpin->blockSignals(false);
-        m_maxSpin->blockSignals(false);
+        onMetricChanged(m_metricCombo->currentIndex());
         
         // Populate selection table
         m_selectionTable->setRowCount(0);
@@ -1251,17 +1279,57 @@ void PreprocessingWizardDialog::onFilterSelectionChanged(int index) {
             m_selectionTable->insertRow(i);
             
             QTableWidgetItem* checkItem = new QTableWidgetItem();
-            checkItem->setCheckState(batch->isFrameSelected(i) ? Qt::Checked : Qt::Unchecked);
+            bool match = true;
+            std::vector<std::string> metrics = {"starCount", "fwhm", "snr"};
+            auto meta = batch->frameMetadata(i);
+            for (const auto& m : metrics) {
+                std::string key = m_registeredLightsName + "_" + m;
+                if (m_filterRanges.find(key) == m_filterRanges.end()) {
+                    m_filterRanges[key] = getAbsoluteRangeForBatch(batch, m);
+                }
+                auto range = m_filterRanges[key];
+                double val = 0.0;
+                if (m == "starCount") val = meta.starCount;
+                else if (m == "fwhm") val = meta.fwhm;
+                else if (m == "snr") val = meta.snr;
+
+                if (val < range.first || val > range.second) {
+                    match = false;
+                    break;
+                }
+            }
+            checkItem->setCheckState(match ? Qt::Checked : Qt::Unchecked);
             m_selectionTable->setItem(i, 0, checkItem);
             
             m_selectionTable->setItem(i, 1, new QTableWidgetItem(QString::fromStdString(batch->frameName(i))));
             
-            auto meta = batch->frameMetadata(i);
             m_selectionTable->setItem(i, 2, new QTableWidgetItem(QString::number(meta.starCount)));
             m_selectionTable->setItem(i, 3, new QTableWidgetItem(QString::number(meta.fwhm, 'f', 2)));
             m_selectionTable->setItem(i, 4, new QTableWidgetItem(QString::number(meta.snr, 'f', 2)));
         }
     }
+}
+
+std::pair<double, double> PreprocessingWizardDialog::getAbsoluteRangeForBatch(ImageBatchPtr batch, const std::string& metric) {
+    if (!batch || batch->count() == 0) return {0.0, 1.0};
+    int count = batch->count();
+    double minVal = std::numeric_limits<double>::max();
+    double maxVal = -std::numeric_limits<double>::max();
+    for (int i = 0; i < count; ++i) {
+        auto meta = batch->frameMetadata(i);
+        double v = 0.0;
+        if (metric == "starCount") v = meta.starCount;
+        else if (metric == "fwhm") v = meta.fwhm;
+        else if (metric == "snr") v = meta.snr;
+
+        if (v < minVal) minVal = v;
+        if (v > maxVal) maxVal = v;
+    }
+    if (minVal == maxVal) {
+        minVal -= 1.0;
+        maxVal += 1.0;
+    }
+    return {minVal, maxVal};
 }
 
 void PreprocessingWizardDialog::onSpinBoxChanged() {
@@ -1394,6 +1462,8 @@ void PreprocessingWizardDialog::updateStepsPlan(const std::string& dummyStage) {
 
     // Stage 2
     config["stage"] = "align_stack";
+    config["drizzle_scale"] = QString::number(m_drizzleScaleSpin->value()).toStdString();
+    config["align_ref_mode"] = m_alignRefModeCombo->currentData().toString().toStdString();
     std::string prefix = m_outPrefixEdit->text().toStdString();
     if (!prefix.empty() && prefix.back() != '_') {
         prefix += "_";

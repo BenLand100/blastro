@@ -19,6 +19,7 @@
 #pragma once
 #include "core/GrayscaleImage.h"
 #include <vector>
+#include <string>
 
 namespace blastro {
 
@@ -29,16 +30,17 @@ struct Star {
     double peak = 0.0;
     double background = 0.0;
     double eccentricity = 0.0;
+    double snr = 0.0;
 };
 
 class StarFinder {
 public:
     // Finds stars in a grayscale image.
-    // If fastFit is true, it uses centroiding. If false, it fits a 2D Gaussian using Nelder-Mead.
+    // Methods: "centroid" (fast centroid), "gaussian" (global threshold + Gaussian fit), "sota" (local block-based max search + hybrid fit)
     static std::vector<Star> findStars(GrayscaleImagePtr img,
                                        int maxStars = 250,
                                        double snrMin = 5.0,
-                                       bool fastFit = false,
+                                       const std::string& method = "sota",
                                        int patchRadius = 10,
                                        double minFwhm = 2.0,
                                        double maxEccentricity = 0.85);

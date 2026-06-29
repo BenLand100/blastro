@@ -33,6 +33,15 @@
 
 namespace blastro {
 
+std::function<bool()> PreprocessingPipeline::s_cancelCallback = nullptr;
+
+bool PreprocessingPipeline::isCancelled() {
+    if (s_cancelCallback) {
+        return s_cancelCallback();
+    }
+    return false;
+}
+
 static std::vector<std::string> splitString(const std::string& str, char delim) {
     std::vector<std::string> tokens;
     std::stringstream ss(str);
@@ -127,6 +136,16 @@ std::vector<PreprocessingGroup> PreprocessingPipeline::groupFiles(
 void PreprocessingPipeline::execute(WorkspaceRegistry& workspace, 
                                      const std::map<std::string, std::string>& config, 
                                      ProgressCallback progress) {
+    struct CancelScope {
+        CancelScope(std::function<bool()> cb) {
+            s_cancelCallback = cb;
+        }
+        ~CancelScope() {
+            s_cancelCallback = nullptr;
+        }
+    };
+    CancelScope cancelScope(m_cancelCallback);
+
     std::string stage = config.count("stage") ? config.at("stage") : "calibrate_register";
     std::string outDir = config.count("out_dir") ? config.at("out_dir") : ".";
     double drizzleScale = config.count("drizzle_scale") ? std::stod(config.at("drizzle_scale")) : 1.0;
@@ -664,11 +683,13 @@ void PreprocessingPipeline::execute(WorkspaceRegistry& workspace,
 
             std::string alignedBatchName = name + "_aligned";
             Logger::info("Preprocessing", QString("Aligning light frames to reference for batch %1...").arg(QString::fromStdString(name)));
+            std::string alignRefMode = config.count("align_ref_mode") ? config.at("align_ref_mode") : "average_center";
             AlignAlgorithm aligner;
             runStep(aligner, {
                 {"input_name", name},
                 {"output_name", alignedBatchName},
                 {"drizzle_scale", std::to_string(drizzleScale)},
+                {"reference_mode", alignRefMode},
                 {"evict_cache", "true"}
             });
 

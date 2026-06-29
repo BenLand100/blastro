@@ -32,6 +32,7 @@
 #include <QElapsedTimer>
 #include <omp.h>
 #include "core/Preferences.h"
+#include "PreprocessingPipeline.h"
 
 namespace blastro {
 
@@ -276,8 +277,16 @@ void CalibrationAlgorithm::execute(WorkspaceRegistry& workspace,
         std::atomic<int> completedFrames(0);
         std::mutex progressMutex;
 
-        #pragma omp parallel for num_threads(parallelFrames) schedule(dynamic)
+        bool cancelled = false;
+        #pragma omp parallel for num_threads(parallelFrames) schedule(dynamic) shared(cancelled)
         for (int i = 0; i < count; ++i) {
+            if (cancelled) continue;
+
+            if (PreprocessingPipeline::isCancelled()) {
+                cancelled = true;
+                continue;
+            }
+
             QElapsedTimer frameTimer;
             frameTimer.start();
             
@@ -324,6 +333,10 @@ void CalibrationAlgorithm::execute(WorkspaceRegistry& workspace,
             }
         }
 
+        if (cancelled || PreprocessingPipeline::isCancelled()) {
+            throw std::runtime_error("Preprocessing cancelled by user.");
+        }
+
         // Return a disk-backed ImageBatch pointing to the temporary FITS files
         auto calibBatch = std::make_shared<ImageBatch>(
             count,
@@ -334,6 +347,11 @@ void CalibrationAlgorithm::execute(WorkspaceRegistry& workspace,
             names,
             filepaths
         );
+
+        for (int i = 0; i < count; ++i) {
+            calibBatch->setFrameSelected(i, inputBatch->isFrameSelected(i));
+            calibBatch->setFrameMetadata(i, inputBatch->frameMetadata(i));
+        }
 
         if (progress) progress(100);
         workspace.registerElement(outputName, calibBatch);

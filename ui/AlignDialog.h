@@ -43,6 +43,7 @@ private:
     QLineEdit* m_outputName;
     QString m_outputPattern;
     QComboBox* m_drizzleCombo;
+    QComboBox* m_refModeCombo;
 
     // Advanced Preferences
     int m_stripHeight = 256;

@@ -76,6 +76,7 @@ private:
     QLabel* m_thetaLabel;
     QLabel* m_starsLabel;
     QPushButton* m_filterBtn;
+    bool m_firstLoad;
 };
 
 } // namespace blastro

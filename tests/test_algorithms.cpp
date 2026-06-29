@@ -78,8 +78,8 @@ void testGaussianStarFitting() {
         }
     }
 
-    // 1. Test Nelder-Mead 2D Gaussian fitting (fastFit = false)
-    std::vector<Star> stars = StarFinder::findStars(img, 10, 3.0, false, 10, 1.5, 0.85);
+    // 1. Test Nelder-Mead 2D Gaussian fitting (method = "gaussian")
+    std::vector<Star> stars = StarFinder::findStars(img, 10, 3.0, "gaussian", 10, 1.5, 0.85);
 
     if (stars.empty()) {
         std::cerr << "[-] Error: Nelder-Mead star finder returned 0 stars" << std::endl;
@@ -97,8 +97,8 @@ void testGaussianStarFitting() {
     assert(approxEqual(foundStar.peak, truePeak, 0.1));
     assert(approxEqual(foundStar.background, trueBg, 0.05));
 
-    // 2. Test fast centroiding (fastFit = true)
-    std::vector<Star> fastStars = StarFinder::findStars(img, 10, 3.0, true, 10, 1.5, 0.85);
+    // 2. Test fast centroiding (method = "centroid")
+    std::vector<Star> fastStars = StarFinder::findStars(img, 10, 3.0, "centroid", 10, 1.5, 0.85);
     if (fastStars.empty()) {
         std::cerr << "[-] Error: Centroid star finder returned 0 stars" << std::endl;
         std::exit(1);
@@ -107,6 +107,19 @@ void testGaussianStarFitting() {
     std::cout << "[+] Centroid Star found at (" << fastStar.x << ", " << fastStar.y << ")" << std::endl;
     assert(approxEqual(fastStar.x, trueX, 0.3));
     assert(approxEqual(fastStar.y, trueY, 0.3));
+
+    // 3. Test SOTA star finder (method = "sota")
+    std::vector<Star> sotaStars = StarFinder::findStars(img, 10, 3.0, "sota", 10, 1.5, 0.85);
+    if (sotaStars.empty()) {
+        std::cerr << "[-] Error: SOTA star finder returned 0 stars" << std::endl;
+        std::exit(1);
+    }
+    Star sotaStar = sotaStars[0];
+    std::cout << "[+] SOTA Star found at (" << sotaStar.x << ", " << sotaStar.y 
+              << "), FWHM: " << sotaStar.fwhm << ", Peak: " << sotaStar.peak 
+              << ", Bg: " << sotaStar.background << std::endl;
+    assert(approxEqual(sotaStar.x, trueX, 0.15));
+    assert(approxEqual(sotaStar.y, trueY, 0.15));
 
     std::cout << "[+] Gaussian Star Fitting Test PASSED." << std::endl << std::endl;
 }
@@ -970,6 +983,7 @@ void testLightFramePipeline() {
         {"input_name",   "bge_light_batch"},
         {"output_name",  "aligned_batch"},
         {"drizzle_scale","1.0"},
+        {"reference_mode","registration"},
         {"threads",      "4"},
         {"evict_cache",  "true"}
     });
@@ -980,6 +994,31 @@ void testLightFramePipeline() {
             alignedBatch->setFrameSelected(i, true);
     }
     workspace.registerElement("aligned_batch", alignedBatch);
+
+    // Test the "average_center" alignment mode separately to verify offset adjustments
+    std::cout << "  [align] Testing 'average_center' reference mode..." << std::endl;
+    AlignAlgorithm centermostAligner;
+    centermostAligner.execute(workspace, {
+        {"input_name",   "bge_light_batch"},
+        {"output_name",  "aligned_batch_centermost"},
+        {"drizzle_scale","1.0"},
+        {"reference_mode","average_center"},
+        {"threads",      "4"},
+        {"evict_cache",  "true"}
+    });
+    auto centermostBatch = std::get<ImageBatchPtr>(workspace.getElement("aligned_batch_centermost"));
+    int zeroOffsetCount = 0;
+    for (int i = 0; i < N_LIGHT; ++i) {
+        if (centermostBatch->isFrameSelected(i)) {
+            auto meta = centermostBatch->frameMetadata(i);
+            if (std::abs(meta.dx) < 1e-7 && std::abs(meta.dy) < 1e-7 && std::abs(meta.theta) < 1e-7) {
+                zeroOffsetCount++;
+            }
+        }
+    }
+    assert(zeroOffsetCount == 1 && "Average center mode did not set exactly one reference frame offset to zero");
+    workspace.unregisterElement("aligned_batch_centermost");
+    std::cout << "  [align] 'average_center' reference mode test PASSED." << std::endl;
 
     // -----------------------------------------------------------------------
     // 14. Stack aligned frames
@@ -1010,7 +1049,7 @@ void testLightFramePipeline() {
         stacked,
         /*maxStars=*/20,
         /*snrMin=*/3.0,
-        /*fastFit=*/true,
+        /*method=*/"sota",
         /*patchRadius=*/12,
         /*minFwhm=*/1.5,
         /*maxEccentricity=*/0.90
