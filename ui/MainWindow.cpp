@@ -831,6 +831,21 @@ void MainWindow::executeAlgorithmSlot(const std::string& name, const std::map<st
         return;
     }
 
+    std::map<std::string, std::string> resolvedConfig = config;
+    if (resolvedConfig.count("output_name")) {
+        std::string outName = resolvedConfig.at("output_name");
+        if (m_workspace.contains(outName)) {
+            std::string base = outName;
+            int suffix = 1;
+            std::string candidate = base + "_" + std::to_string(suffix);
+            while (m_workspace.contains(candidate)) {
+                suffix++;
+                candidate = base + "_" + std::to_string(suffix);
+            }
+            resolvedConfig["output_name"] = candidate;
+        }
+    }
+
     // Disable menu bar and inner widgets of non-log MDI subwindows to prevent concurrent modifications,
     // while keeping the main window and LogWindow responsive and interactive.
     setProcessingState(true);
@@ -844,7 +859,7 @@ void MainWindow::executeAlgorithmSlot(const std::string& name, const std::map<st
 
     // Create background thread and worker
     QThread* thread = new QThread(this);
-    AlgorithmWorker* worker = new AlgorithmWorker(name, config, m_workspace);
+    AlgorithmWorker* worker = new AlgorithmWorker(name, resolvedConfig, m_workspace);
     worker->moveToThread(thread);
 
     // Wire up progress updates
@@ -852,7 +867,7 @@ void MainWindow::executeAlgorithmSlot(const std::string& name, const std::map<st
 
     // Wire up thread start and finish
     connect(thread, &QThread::started, worker, &AlgorithmWorker::run);
-    connect(worker, &AlgorithmWorker::finished, this, [this, thread, worker, name, config](bool success, const QString& errorMsg) {
+    connect(worker, &AlgorithmWorker::finished, this, [this, thread, worker, name, resolvedConfig](bool success, const QString& errorMsg) {
         // Stop thread event loop and wait for completion
         thread->quit();
         thread->wait();
@@ -871,16 +886,16 @@ void MainWindow::executeAlgorithmSlot(const std::string& name, const std::map<st
 
         if (success) {
             try {
-                if (config.count("input_name")) {
-                    QString qInputName = QString::fromStdString(config.at("input_name"));
+                if (resolvedConfig.count("input_name")) {
+                    QString qInputName = QString::fromStdString(resolvedConfig.at("input_name"));
                     WorkspaceImageWindow* win = m_workspaceArea->getImageWindow(qInputName);
                     if (win) {
                         win->notifyImageUpdated();
                     }
                 }
 
-                if (config.count("output_name")) {
-                    std::string outName = config.at("output_name");
+                if (resolvedConfig.count("output_name")) {
+                    std::string outName = resolvedConfig.at("output_name");
                     WorkspaceElement outElem = m_workspace.getElement(outName);
 
                     QString qOutName = QString::fromStdString(outName);
