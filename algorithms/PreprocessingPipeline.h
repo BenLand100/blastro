@@ -82,6 +82,12 @@ private:
     StepProgressCallback m_stepCallback = nullptr;
     std::function<bool()> m_cancelCallback = nullptr;
     static std::function<bool()> s_cancelCallback;
+
+    void relocateBatchFiles(WorkspaceRegistry& workspace,
+                            const std::string& batchName,
+                            const std::string& subDirName,
+                            const std::string& outDir,
+                            bool moveInsteadOfCopy);
 };
 
 } // namespace blastro

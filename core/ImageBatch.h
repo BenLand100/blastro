@@ -58,6 +58,7 @@ public:
 
     std::string frameFilepath(int index) const;
     void setFrameFilepath(int index, const std::string& path);
+    void setFrameLoader(int index, FrameLoader loader);
     void addFrame(const std::string& name, const std::string& filepath, FrameLoader loader);
 
     // Memory management: clear cached frames from RAM

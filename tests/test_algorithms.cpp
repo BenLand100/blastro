@@ -1162,11 +1162,41 @@ void testGhsStretching() {
     std::cout << "[+] GHS Stretching Test PASSED." << std::endl << std::endl;
 }
 
+GrayscaleImagePtr generateGradientImage() {
+    int w = 512;
+    int h = 512;
+    auto img = std::make_shared<GrayscaleImage>(w, h);
+    auto buffer = img->buffer();
+
+    std::mt19937 gen(42);
+    std::normal_distribution<float> dist(0.0f, 0.01f);
+
+    for (int y = 0; y < h; ++y) {
+        for (int x = 0; x < w; ++x) {
+            float grad = 0.1f + 0.3f * (static_cast<float>(x) / (w - 1)) + 0.2f * (static_cast<float>(y) / (h - 1));
+            float noise = dist(gen);
+            float dx1 = x - 150.0f;
+            float dy1 = y - 200.0f;
+            float star1 = 1.0f * std::exp(-(dx1 * dx1 + dy1 * dy1) / (2.0f * 5.0f * 5.0f));
+            float dx2 = x - 350.0f;
+            float dy2 = y - 300.0f;
+            float star2 = 1.5f * std::exp(-(dx2 * dx2 + dy2 * dy2) / (2.0f * 7.0f * 7.0f));
+
+            buffer->setPixel(x, y, grad + noise + star1 + star2);
+        }
+    }
+    return img;
+}
+
 void testBackgroundExtractionOnGradient() {
     std::cout << "Running Background Extraction on Gradient Test..." << std::endl;
 
     WorkspaceRegistry workspace;
     FitsIO fits;
+
+    // Generate gradient input on the fly
+    auto gradientImg = generateGradientImage();
+    fits.writeImage("gradient_input.fits", ImageVariant{gradientImg});
 
     ImageVariant inputVar = fits.readImage("gradient_input.fits");
     assert(std::holds_alternative<GrayscaleImagePtr>(inputVar) && "Failed to load gradient_input.fits as GrayscaleImage");
@@ -1375,7 +1405,7 @@ void testPreprocessingPipeline() {
     PreprocessingPipeline pipeline;
     std::map<std::string, std::string> config = {
         {"stage", "calibrate_register"},
-        {"mode", "dark_current"},
+        {"strict_dark", "false"},
         {"exp_tolerance", "0.5"},
         {"debayer", "false"},
         {"out_dir", tempDir},
@@ -1428,6 +1458,106 @@ void testPreprocessingPipeline() {
     QDir(QString::fromStdString(tempDir)).removeRecursively();
 }
 
+void testPreprocessingCalibrationSelection() {
+    std::cout << "Running Preprocessing Calibration Selection Test..." << std::endl;
+
+    std::string tempDir = TempDirectory::createTempDir("selection_test");
+    assert(!tempDir.empty() && "Failed to create temp directory");
+
+    std::string biasFile = tempDir + "/bias_001.fits";
+    std::string darkFile10s = tempDir + "/dark_10s.fits";
+    std::string darkFile2s = tempDir + "/dark_2s.fits";
+    std::string flatFile = tempDir + "/flat_001.fits";
+    std::string lightFile = tempDir + "/light_001.fits";
+
+    createDummyFitsWithHeader(biasFile, "BIAS", 0.0, "None", false);
+    createDummyFitsWithHeader(darkFile10s, "DARK", 10.0, "None", false);
+    createDummyFitsWithHeader(darkFile2s, "DARK", 2.0, "None", false);
+    createDummyFitsWithHeader(flatFile, "FLAT", 2.0, "Ha", false);
+    createDummyFitsWithHeader(lightFile, "LIGHT", 10.0, "Ha", true);
+
+    // Scenario 1: strict_dark = false (loose matching)
+    // Flat (2.0s) should match 2s dark (which is <= 2s + tolerance).
+    // Light (10.0s) should match 10s dark (which is <= 10s + tolerance).
+    {
+        WorkspaceRegistry workspace;
+        PreprocessingPipeline pipeline;
+        std::map<std::string, std::string> config = {
+            {"stage", "calibrate_register"},
+            {"strict_dark", "false"},
+            {"exp_tolerance", "0.5"},
+            {"debayer", "false"},
+            {"out_dir", tempDir},
+            {"bias_files", biasFile},
+            {"dark_files", darkFile10s + ";" + darkFile2s},
+            {"flat_files", flatFile},
+            {"light_files", lightFile},
+            {"keep_intermediate", "true"}
+        };
+        pipeline.execute(workspace, config);
+        
+        assert(workspace.contains("master_bias"));
+        assert(workspace.contains("master_dark_10s"));
+        assert(workspace.contains("master_dark_2s"));
+    }
+
+    // Scenario 2: strict_dark = true
+    // When strict_dark is true, flat (2s) should match 2s dark strictly.
+    // If we only provide 10s dark and bias:
+    // Flat (2s) should match bias (since 10s dark does not match 2s flat).
+    // Light (10s) should match 10s dark.
+    {
+        WorkspaceRegistry workspace;
+        PreprocessingPipeline pipeline;
+        std::map<std::string, std::string> config = {
+            {"stage", "calibrate_register"},
+            {"strict_dark", "true"},
+            {"exp_tolerance", "0.5"},
+            {"debayer", "false"},
+            {"out_dir", tempDir},
+            {"bias_files", biasFile},
+            {"dark_files", darkFile10s},
+            {"flat_files", flatFile},
+            {"light_files", lightFile},
+            {"keep_intermediate", "true"}
+        };
+        pipeline.execute(workspace, config);
+        
+        assert(workspace.contains("master_bias"));
+        assert(workspace.contains("master_dark_10s"));
+    }
+
+    // Scenario 3: Loose flat gain matching
+    // Flat has gain 300.0. Light has gain 100.0.
+    // They should still match and complete calibration.
+    {
+        std::string flatFile300g = tempDir + "/flat_300g.fits";
+        createDummyFitsWithHeader(flatFile300g, "FLAT", 2.0, "Ha", false, 300.0);
+
+        WorkspaceRegistry workspace;
+        PreprocessingPipeline pipeline;
+        std::map<std::string, std::string> config = {
+            {"stage", "calibrate_register"},
+            {"strict_dark", "false"},
+            {"exp_tolerance", "0.5"},
+            {"debayer", "false"},
+            {"out_dir", tempDir},
+            {"bias_files", biasFile},
+            {"dark_files", darkFile10s},
+            {"flat_files", flatFile300g},
+            {"light_files", lightFile},
+            {"keep_intermediate", "true"}
+        };
+        pipeline.execute(workspace, config);
+
+        assert(workspace.contains("master_flat_g300_Ha"));
+        assert(workspace.contains("preprocessed_lights_Ha"));
+    }
+
+    std::cout << "[+] Preprocessing Calibration Selection Test PASSED." << std::endl << std::endl;
+    QDir(QString::fromStdString(tempDir)).removeRecursively();
+}
+
 int main() {
     std::cout << "========================================" << std::endl;
     std::cout << "Starting Blastro Algorithm Unit Tests..." << std::endl;
@@ -1442,6 +1572,7 @@ int main() {
     testBackgroundExtractionOnGradient();
     testRbfBackgroundExtraction();
     testPreprocessingPipeline();
+    testPreprocessingCalibrationSelection();
 
     std::cout << "========================================" << std::endl;
     std::cout << "All Blastro Algorithm Unit Tests PASSED!" << std::endl;

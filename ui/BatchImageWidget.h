@@ -41,6 +41,7 @@ public:
     ImageView* imageView() const { return m_imageView; }
     void addFrame(const std::string& name, const std::string& filepath, ImageVariant image);
     void notifyBatchUpdated();
+    void setCurrentIndex(int index);
 
 signals:
     void frameChanged(int index);

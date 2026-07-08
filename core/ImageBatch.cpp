@@ -117,6 +117,14 @@ void ImageBatch::setFrameFilepath(int index, const std::string& path) {
     m_filepaths[index] = path;
 }
 
+void ImageBatch::setFrameLoader(int index, FrameLoader loader) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if (index < 0 || index >= m_count) {
+        throw std::out_of_range("Batch index out of range");
+    }
+    m_loaders[index] = loader;
+}
+
 void ImageBatch::addFrame(const std::string& name, const std::string& filepath, FrameLoader loader) {
     std::lock_guard<std::mutex> lock(m_mutex);
     m_count++;

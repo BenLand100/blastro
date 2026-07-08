@@ -21,6 +21,8 @@
 #include <QTabWidget>
 #include <QTableWidget>
 #include <QTreeWidget>
+#include <QTableWidgetItem>
+#include <QTreeWidgetItem>
 #include <QComboBox>
 #include <QDoubleSpinBox>
 #include <QThread>
@@ -61,6 +63,11 @@ private slots:
     void onStepProgressUpdated(int stepIndex, int percent, double elapsed);
     void onStepFinished(int stepIndex, bool success, double elapsed);
     void onFilterSelectionChanged(int index);
+    void recomputeColumnWidths();
+    void onFileDoubleClicked(QTableWidgetItem* item);
+    void onTreeItemDoubleClicked(QTreeWidgetItem* item, int column);
+    void onSelectionCellDoubleClicked(int row, int column);
+    void onSelectionTableItemChanged(QTableWidgetItem* item);
 
 private:
     void addFilesList(const QStringList& filepaths);
@@ -69,6 +76,8 @@ private:
     int getTabIndex(const QString& label) const;
     void updateStepsPlan(const std::string& stage = "calibrate_register");
     void saveCurrentSelectionStates();
+    void openFileAsImage(const QString& filepath);
+    void notifyBatchViewsUpdated();
 
     WorkspaceRegistry& m_workspace;
 
@@ -82,7 +91,7 @@ private:
     QPushButton* m_clearBtn;
 
     // Control Tab
-    QComboBox* m_modeCombo;
+    QCheckBox* m_strictDarkChk;
     QDoubleSpinBox* m_expToleranceSpin;
     QCheckBox* m_debayerChk;
     QComboBox* m_bayerPatternCombo;
@@ -112,10 +121,11 @@ private:
     QDoubleSpinBox* m_drizzleScaleSpin;
     QComboBox* m_alignRefModeCombo;
     QCheckBox* m_overwriteMastersChk;
+    QCheckBox* m_openCalibStacksChk;
+    QCheckBox* m_openLightMastersChk;
     QLineEdit* m_outPrefixEdit;
 
     // Progress Tab
-    QTextEdit* m_logText;
     QProgressBar* m_progressBar;
     QPushButton* m_cancelBtn;
     QPushButton* m_runBtn;
@@ -146,6 +156,9 @@ private:
 
     std::pair<double, double> getAbsoluteRangeForBatch(ImageBatchPtr batch, const std::string& metric);
     std::map<std::string, std::pair<double, double>> m_filterRanges;
+protected:
+    void resizeEvent(QResizeEvent* event) override;
+    void changeEvent(QEvent* event) override;
 };
 
 class PreprocessingWorker : public QObject {

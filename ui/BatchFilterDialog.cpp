@@ -118,6 +118,8 @@ BatchFilterDialog::BatchFilterDialog(ImageBatchPtr batch, int currentFrameIdx, Q
     connect(m_plotWidget, &StatsPlotWidget::rangeChanged, this, &BatchFilterDialog::onRangeChanged);
     connect(m_plotWidget, &StatsPlotWidget::pointClicked, this, [this](int index) {
         if (m_batch && index >= 0 && index < m_batch->count()) {
+            FrameMetadata meta = m_batch->frameMetadata(index);
+            if (!meta.registered) return;
             bool currentSelected = m_batch->isFrameSelected(index);
             m_batch->setFrameSelected(index, !currentSelected);
             m_plotWidget->update();
@@ -241,21 +243,25 @@ void BatchFilterDialog::applyFilter() {
     for (int i = 0; i < count; ++i) {
         FrameMetadata meta = m_batch->frameMetadata(i);
         bool match = true;
-        for (const auto& pair : m_filterRanges) {
-            std::string m = pair.first;
-            double minR = pair.second.first;
-            double maxR = pair.second.second;
-            double v = 0.0;
-            if (m == "starCount") v = meta.starCount;
-            else if (m == "fwhm") v = meta.fwhm;
-            else if (m == "snr") v = meta.snr;
-            else if (m == "dx") v = meta.dx;
-            else if (m == "dy") v = meta.dy;
-            else if (m == "theta") v = meta.theta * 180.0 / M_PI;
+        if (!meta.registered) {
+            match = false;
+        } else {
+            for (const auto& pair : m_filterRanges) {
+                std::string m = pair.first;
+                double minR = pair.second.first;
+                double maxR = pair.second.second;
+                double v = 0.0;
+                if (m == "starCount") v = meta.starCount;
+                else if (m == "fwhm") v = meta.fwhm;
+                else if (m == "snr") v = meta.snr;
+                else if (m == "dx") v = meta.dx;
+                else if (m == "dy") v = meta.dy;
+                else if (m == "theta") v = meta.theta * 180.0 / M_PI;
 
-            if (v < minR || v > maxR) {
-                match = false;
-                break;
+                if (v < minR || v > maxR) {
+                    match = false;
+                    break;
+                }
             }
         }
         m_batch->setFrameSelected(i, match);
@@ -271,7 +277,8 @@ void BatchFilterDialog::selectAll() {
     resetFilters();
     int count = m_batch->count();
     for (int i = 0; i < count; ++i) {
-        m_batch->setFrameSelected(i, true);
+        FrameMetadata meta = m_batch->frameMetadata(i);
+        m_batch->setFrameSelected(i, meta.registered);
     }
     std::string metric = m_metricCombo->currentData().toString().toStdString();
     auto range = m_filterRanges[metric];
@@ -312,8 +319,13 @@ void BatchFilterDialog::invertSelection() {
     if (!m_batch) return;
     int count = m_batch->count();
     for (int i = 0; i < count; ++i) {
-        bool current = m_batch->isFrameSelected(i);
-        m_batch->setFrameSelected(i, !current);
+        FrameMetadata meta = m_batch->frameMetadata(i);
+        if (!meta.registered) {
+            m_batch->setFrameSelected(i, false);
+        } else {
+            bool current = m_batch->isFrameSelected(i);
+            m_batch->setFrameSelected(i, !current);
+        }
     }
     m_plotWidget->update();
     updateLabels();

@@ -176,6 +176,13 @@ BatchImageWidget::BatchImageWidget(ImageBatchPtr batch, QWidget* parent)
     });
     
     connect(m_checkBox, &QCheckBox::toggled, this, [this](bool checked) {
+        FrameMetadata meta = m_batch->frameMetadata(m_currentIndex);
+        if (!meta.registered && checked) {
+            m_checkBox->blockSignals(true);
+            m_checkBox->setChecked(false);
+            m_checkBox->blockSignals(false);
+            return;
+        }
         m_batch->setFrameSelected(m_currentIndex, checked);
         m_imageView->setFrameSelectedStatus(checked);
         updateComboBoxItems();
@@ -225,6 +232,7 @@ void BatchImageWidget::onIndexChanged(int index) {
     
     m_checkBox->blockSignals(true);
     m_checkBox->setChecked(m_batch->isFrameSelected(index));
+    m_checkBox->setEnabled(m_batch->frameMetadata(index).registered);
     m_checkBox->blockSignals(false);
     
     m_imageView->setFrameSelectedStatus(m_batch->isFrameSelected(index));
@@ -374,6 +382,10 @@ void BatchImageWidget::notifyBatchUpdated() {
     updateComboBoxItems();
     updateBottomBarReadout();
     onIndexChanged(m_currentIndex);
+}
+
+void BatchImageWidget::setCurrentIndex(int index) {
+    onIndexChanged(index);
 }
 
 } // namespace blastro

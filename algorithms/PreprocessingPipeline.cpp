@@ -26,8 +26,10 @@
 #include "core/TempDirectory.h"
 #include <QFileInfo>
 #include <QDir>
+#include <QFile>
 #include <QElapsedTimer>
 #include <algorithm>
+#include <set>
 #include <cmath>
 #include <sstream>
 
@@ -148,6 +150,18 @@ void PreprocessingPipeline::execute(WorkspaceRegistry& workspace,
 
     std::string stage = config.count("stage") ? config.at("stage") : "calibrate_register";
     std::string outDir = config.count("out_dir") ? config.at("out_dir") : ".";
+
+    // Ensure output directory exists
+    QDir dir(QString::fromStdString(outDir));
+    if (!dir.exists()) {
+        if (dir.mkpath(".")) {
+            Logger::info("Preprocessing", QString("Created output directory: %1").arg(QString::fromStdString(outDir)));
+        } else {
+            Logger::error("Preprocessing", QString("Failed to create output directory: %1").arg(QString::fromStdString(outDir)));
+            throw std::runtime_error("Failed to create output directory: " + outDir);
+        }
+    }
+
     double drizzleScale = config.count("drizzle_scale") ? std::stod(config.at("drizzle_scale")) : 1.0;
     bool keepIntermediate = config.count("keep_intermediate") ? (config.at("keep_intermediate") == "true") : false;
     bool overwriteMasters = config.count("overwrite_masters") ? (config.at("overwrite_masters") == "true") : false;
@@ -201,7 +215,7 @@ void PreprocessingPipeline::execute(WorkspaceRegistry& workspace,
     if (stage == "calibrate_register") {
         Logger::header("Preprocessing", "Starting Calibration & Registration Stage");
 
-        std::string mode = config.count("mode") ? config.at("mode") : "dark_current";
+        bool strictDark = config.count("strict_dark") ? (config.at("strict_dark") == "true") : false;
         double expTolerance = config.count("exp_tolerance") ? std::stod(config.at("exp_tolerance")) : 0.5;
         bool debayer = config.count("debayer") ? (config.at("debayer") == "true") : false;
         std::string bayerPattern = config.count("bayer_pattern") ? config.at("bayer_pattern") : "RGGB";
@@ -275,7 +289,11 @@ void PreprocessingPipeline::execute(WorkspaceRegistry& workspace,
             }
             if (includeExposure) {
                 if (!key.empty()) key += "_";
-                key += std::to_string(static_cast<int>(g.exposure)) + "s";
+                if (g.exposure < 1.0) {
+                    key += std::to_string(static_cast<int>(std::round(g.exposure * 1000.0))) + "ms";
+                } else {
+                    key += std::to_string(static_cast<int>(std::round(g.exposure))) + "s";
+                }
             }
             return key;
         };
@@ -411,19 +429,34 @@ void PreprocessingPipeline::execute(WorkspaceRegistry& workspace,
                     std::string matchBiasKey = std::to_string(g.binningX) + "_" + std::to_string(g.binningY) + "_" + std::to_string(g.width) + "_" + std::to_string(g.height) + "_g" + std::to_string(static_cast<int>(g.gain));
                     std::string biasMaster = masterBiasNames.count(matchBiasKey) ? masterBiasNames[matchBiasKey] : "";
 
-                    // Look for Flat Dark of matching exposure if in dark_current mode
                     std::string darkMaster = "";
-                    if (mode == "dark_current") {
-                        for (const auto& pair : masterDarkNames) {
-                            if (pair.first.find(matchBiasKey) == 0) { // Same dimensions/binning/gain
-                                // Check if exposure time matches flat exposure
-                                double darkExp = std::stod(splitString(pair.first, '_').back());
-                                if (std::abs(darkExp - g.exposure) <= expTolerance) {
+                    double bestDarkExp = -1.0;
+                    for (const auto& pair : masterDarkNames) {
+                        if (pair.first.find(matchBiasKey) == 0) { // Same dimensions/binning/gain
+                            double darkExp = std::stod(splitString(pair.first, '_').back());
+                            
+                            bool match = false;
+                            if (strictDark) {
+                                match = (std::abs(darkExp - g.exposure) <= expTolerance);
+                            } else {
+                                match = (darkExp <= g.exposure + expTolerance);
+                            }
+                            
+                            if (match) {
+                                if (darkExp > bestDarkExp) {
+                                    bestDarkExp = darkExp;
                                     darkMaster = pair.second;
-                                    break;
                                 }
                             }
                         }
+                    }
+
+                    std::string finalDark = "";
+                    std::string finalBias = "";
+                    if (!darkMaster.empty()) {
+                        finalDark = darkMaster;
+                    } else if (!biasMaster.empty()) {
+                        finalBias = biasMaster;
                     }
 
                     auto batch = fits.readBatch(g.filepaths);
@@ -446,8 +479,8 @@ void PreprocessingPipeline::execute(WorkspaceRegistry& workspace,
                         calibrator.execute(workspace, {
                             {"input_name", tempBatchName},
                             {"output_name", calibBatchName},
-                            {"bias_name", darkMaster.empty() ? biasMaster : ""},
-                            {"dark_name", darkMaster},
+                            {"bias_name", finalBias},
+                            {"dark_name", finalDark},
                             {"flat_name", ""} // No flat for flats
                         }, [this, &stepTimer, &progress, currentStepIndex, totalSteps](int pct) {
                             if (m_stepCallback) {
@@ -463,6 +496,9 @@ void PreprocessingPipeline::execute(WorkspaceRegistry& workspace,
                         }
                         if (progress) {
                             progress((currentStepIndex + 1) * 100 / totalSteps);
+                        }
+                        if (keepIntermediate) {
+                            relocateBatchFiles(workspace, calibBatchName, "flat_calib", outDir, true);
                         }
                         currentStepIndex++;
                     } catch (...) {
@@ -516,7 +552,9 @@ void PreprocessingPipeline::execute(WorkspaceRegistry& workspace,
                     }
 
                     workspace.unregisterElement(tempBatchName);
-                    workspace.unregisterElement(calibBatchName);
+                    if (!keepIntermediate) {
+                        workspace.unregisterElement(calibBatchName);
+                    }
 
                     auto masterElem = workspace.getElement(masterName);
                     masterFlatNames[key] = masterName;
@@ -536,22 +574,34 @@ void PreprocessingPipeline::execute(WorkspaceRegistry& workspace,
                 std::string matchBiasKey = std::to_string(g.binningX) + "_" + std::to_string(g.binningY) + "_" + std::to_string(g.width) + "_" + std::to_string(g.height) + "_g" + std::to_string(static_cast<int>(g.gain));
                 std::string biasMaster = masterBiasNames.count(matchBiasKey) ? masterBiasNames[matchBiasKey] : "";
 
-                // Find closest dark master
                 std::string darkMaster = "";
-                double minExpDiff = 1e9;
+                double bestDarkExp = -1.0;
                 for (const auto& pair : masterDarkNames) {
                     if (pair.first.find(matchBiasKey) == 0) {
                         double darkExp = std::stod(splitString(pair.first, '_').back());
-                        double diff = std::abs(darkExp - g.exposure);
-                        if (diff < minExpDiff) {
-                            minExpDiff = diff;
-                            darkMaster = pair.second;
+                        
+                        bool match = false;
+                        if (strictDark) {
+                            match = (std::abs(darkExp - g.exposure) <= expTolerance);
+                        } else {
+                            match = (darkExp <= g.exposure + expTolerance);
+                        }
+                        
+                        if (match) {
+                            if (darkExp > bestDarkExp) {
+                                bestDarkExp = darkExp;
+                                darkMaster = pair.second;
+                            }
                         }
                     }
                 }
 
-                if (mode == "zero_dark_current") {
-                    darkMaster = "";
+                std::string finalDark = "";
+                std::string finalBias = "";
+                if (!darkMaster.empty()) {
+                    finalDark = darkMaster;
+                } else if (!biasMaster.empty()) {
+                    finalBias = biasMaster;
                 }
 
                 // Find matching master flat
@@ -559,6 +609,17 @@ void PreprocessingPipeline::execute(WorkspaceRegistry& workspace,
                 std::string matchFlatKey = matchBiasKey + "_" + g.filter;
                 if (masterFlatNames.count(matchFlatKey)) {
                     flatMaster = masterFlatNames[matchFlatKey];
+                } else {
+                    std::string keyPrefix = std::to_string(g.binningX) + "_" + std::to_string(g.binningY) + "_" + std::to_string(g.width) + "_" + std::to_string(g.height) + "_g";
+                    std::string keySuffix = "_" + g.filter;
+                    for (const auto& pair : masterFlatNames) {
+                        if (pair.first.find(keyPrefix) == 0 && 
+                            pair.first.length() >= keySuffix.length() &&
+                            pair.first.compare(pair.first.length() - keySuffix.length(), keySuffix.length(), keySuffix) == 0) {
+                            flatMaster = pair.second;
+                            break;
+                        }
+                    }
                 }
 
                 auto batch = fits.readBatch(g.filepaths);
@@ -569,12 +630,15 @@ void PreprocessingPipeline::execute(WorkspaceRegistry& workspace,
                 runStep(calibrator, {
                     {"input_name", tempBatchName},
                     {"output_name", calibBatchName},
-                    {"bias_name", darkMaster.empty() ? biasMaster : ""},
-                    {"dark_name", darkMaster},
+                    {"bias_name", finalBias},
+                    {"dark_name", finalDark},
                     {"flat_name", flatMaster}
                 });
 
                 workspace.unregisterElement(tempBatchName);
+                if (keepIntermediate) {
+                    relocateBatchFiles(workspace, calibBatchName, "light_calib", outDir, true);
+                }
 
                 std::string registerInputName = calibBatchName;
 
@@ -590,7 +654,9 @@ void PreprocessingPipeline::execute(WorkspaceRegistry& workspace,
                         {"method", debayerMethod},
                         {"green_equalize", config.count("green_equalize") ? config.at("green_equalize") : "false"}
                     });
-                    if (!keepIntermediate) {
+                    if (keepIntermediate) {
+                        relocateBatchFiles(workspace, debayerBatchName, "light_calib", outDir, true);
+                    } else {
                         workspace.unregisterElement(calibBatchName);
                     }
                     registerInputName = debayerBatchName;
@@ -692,6 +758,10 @@ void PreprocessingPipeline::execute(WorkspaceRegistry& workspace,
                 {"reference_mode", alignRefMode},
                 {"evict_cache", "true"}
             });
+
+            if (keepIntermediate) {
+                relocateBatchFiles(workspace, alignedBatchName, "light_align", outDir, true);
+            }
 
             std::string finalMasterName = name + "_stacked";
             if (workspace.contains(finalMasterName)) {
@@ -806,7 +876,11 @@ std::vector<std::string> PreprocessingPipeline::getPlannedSteps(const std::map<s
             }
             if (includeExposure) {
                 if (!key.empty()) key += "_";
-                key += std::to_string(static_cast<int>(g.exposure)) + "s";
+                if (g.exposure < 1.0) {
+                    key += std::to_string(static_cast<int>(std::round(g.exposure * 1000.0))) + "ms";
+                } else {
+                    key += std::to_string(static_cast<int>(std::round(g.exposure))) + "s";
+                }
             }
             return key;
         };
@@ -862,6 +936,62 @@ std::vector<std::string> PreprocessingPipeline::getPlannedSteps(const std::map<s
     }
 
     return steps;
+}
+
+void PreprocessingPipeline::relocateBatchFiles(WorkspaceRegistry& workspace,
+                                               const std::string& batchName,
+                                               const std::string& subDirName,
+                                               const std::string& outDir,
+                                               bool moveInsteadOfCopy) {
+    if (!workspace.contains(batchName)) return;
+    auto batch = std::get<ImageBatchPtr>(workspace.getElement(batchName));
+    
+    QDir baseDir(QString::fromStdString(outDir));
+    QDir targetDir(baseDir.absoluteFilePath(QString::fromStdString(subDirName)));
+    if (!targetDir.exists()) {
+        targetDir.mkpath(".");
+    }
+    
+    std::set<std::string> processedOldPaths;
+    for (int i = 0; i < batch->count(); ++i) {
+        std::string oldPath = batch->frameFilepath(i);
+        if (oldPath.empty()) continue;
+        
+        QFileInfo oldInfo(QString::fromStdString(oldPath));
+        QString newPath = targetDir.absoluteFilePath(oldInfo.fileName());
+        std::string newPathStr = newPath.toStdString();
+        
+        if (processedOldPaths.count(oldPath)) {
+            batch->setFrameFilepath(i, newPathStr);
+            batch->setFrameLoader(i, [newPathStr]() { FitsIO reader; return reader.readImage(newPathStr); });
+            continue;
+        }
+        processedOldPaths.insert(oldPath);
+        
+        if (moveInsteadOfCopy) {
+            if (QFile::exists(newPath)) {
+                QFile::remove(newPath);
+            }
+            if (QFile::rename(QString::fromStdString(oldPath), newPath)) {
+                batch->setFrameFilepath(i, newPathStr);
+                batch->setFrameLoader(i, [newPathStr]() { FitsIO reader; return reader.readImage(newPathStr); });
+            } else {
+                if (QFile::copy(QString::fromStdString(oldPath), newPath)) {
+                    QFile::remove(QString::fromStdString(oldPath));
+                    batch->setFrameFilepath(i, newPathStr);
+                    batch->setFrameLoader(i, [newPathStr]() { FitsIO reader; return reader.readImage(newPathStr); });
+                }
+            }
+        } else {
+            if (QFile::exists(newPath)) {
+                QFile::remove(newPath);
+            }
+            if (QFile::copy(QString::fromStdString(oldPath), newPath)) {
+                batch->setFrameFilepath(i, newPathStr);
+                batch->setFrameLoader(i, [newPathStr]() { FitsIO reader; return reader.readImage(newPathStr); });
+            }
+        }
+    }
 }
 
 } // namespace blastro

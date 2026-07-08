@@ -18,6 +18,9 @@
 
 #include "PreprocessingWizardDialog.h"
 #include "MainWindow.h"
+#include "WorkspaceImageWindow.h"
+#include "BatchImageWidget.h"
+#include <QEvent>
 #include "algorithms/PreprocessingPipeline.h"
 #include "core/Logger.h"
 #include <QVBoxLayout>
@@ -36,8 +39,21 @@
 #include <QListView>
 #include <QTreeView>
 #include <QSplitter>
+#include <QStyledItemDelegate>
+#include <QStyleOptionViewItem>
+#include <QResizeEvent>
 
 namespace blastro {
+
+class LeftElideDelegate : public QStyledItemDelegate {
+public:
+    using QStyledItemDelegate::QStyledItemDelegate;
+protected:
+    void initStyleOption(QStyleOptionViewItem* option, const QModelIndex& index) const override {
+        QStyledItemDelegate::initStyleOption(option, index);
+        option->textElideMode = Qt::ElideLeft;
+    }
+};
 
 PreprocessingWizardDialog::PreprocessingWizardDialog(WorkspaceRegistry& workspace, QWidget* parent)
     : QDialog(parent),
@@ -48,7 +64,7 @@ PreprocessingWizardDialog::PreprocessingWizardDialog(WorkspaceRegistry& workspac
       m_addDirBtn(new QPushButton("Add Directories", this)),
       m_removeBtn(new QPushButton("Remove Selected", this)),
       m_clearBtn(new QPushButton("Clear All", this)),
-      m_modeCombo(new QComboBox(this)),
+      m_strictDarkChk(new QCheckBox(this)),
       m_expToleranceSpin(new QDoubleSpinBox(this)),
       m_debayerChk(new QCheckBox("Debayer Raw Lights", this)),
       m_bayerPatternCombo(new QComboBox(this)),
@@ -69,13 +85,14 @@ PreprocessingWizardDialog::PreprocessingWizardDialog(WorkspaceRegistry& workspac
       m_keepIntermediateChk(new QCheckBox("Keep intermediate files", this)),
       m_drizzleScaleSpin(new QDoubleSpinBox(this)),
       m_alignRefModeCombo(new QComboBox(this)),
-      m_logText(new QTextEdit(this)),
       m_progressBar(new QProgressBar(this)),
       m_cancelBtn(new QPushButton("Cancel", this)),
       m_runBtn(new QPushButton("Execute Calibrate & Register", this)),
       m_alignStackBtn(new QPushButton("Execute Align && Stack", this)),
       m_stepsTable(new QTableWidget(this)),
       m_overwriteMastersChk(new QCheckBox("Overwrite existing master frames", this)),
+      m_openCalibStacksChk(new QCheckBox("Open Calibration Stacks", this)),
+      m_openLightMastersChk(new QCheckBox("Open Light Masters", this)),
       m_filterSelectCombo(new QComboBox(this)),
       m_outPrefixEdit(new QLineEdit(this)) {
 
@@ -130,6 +147,7 @@ PreprocessingWizardDialog::PreprocessingWizardDialog(WorkspaceRegistry& workspac
     m_filesTable->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
     m_filesTable->setSelectionBehavior(QAbstractItemView::SelectRows);
     m_filesTable->setSortingEnabled(true);
+    m_filesTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
     filesLayout->addWidget(m_filesTable, 1);
 
     QHBoxLayout* fileBtns = new QHBoxLayout();
@@ -146,9 +164,8 @@ PreprocessingWizardDialog::PreprocessingWizardDialog(WorkspaceRegistry& workspac
     controlLayout->setContentsMargins(15, 15, 15, 15);
     controlLayout->setSpacing(12);
 
-    m_modeCombo->addItem("Dark Current Mode", "dark_current");
-    m_modeCombo->addItem("Zero Dark Current Mode", "zero_dark_current");
-    controlLayout->addRow("Preprocessing Mode:", m_modeCombo);
+    m_strictDarkChk->setChecked(false);
+    controlLayout->addRow("Strict Dark Exposure:", m_strictDarkChk);
 
     m_expToleranceSpin->setRange(0.1, 10.0);
     m_expToleranceSpin->setValue(0.5);
@@ -202,6 +219,12 @@ PreprocessingWizardDialog::PreprocessingWizardDialog(WorkspaceRegistry& workspac
     m_overwriteMastersChk->setChecked(false);
     outGroupLayout->addRow("", m_overwriteMastersChk);
 
+    m_openCalibStacksChk->setChecked(true);
+    outGroupLayout->addRow("", m_openCalibStacksChk);
+
+    m_openLightMastersChk->setChecked(true);
+    outGroupLayout->addRow("", m_openLightMastersChk);
+
     controlLayout->addRow(outGroup);
 
     m_tabs->addTab(controlTab, "Control");
@@ -210,6 +233,7 @@ PreprocessingWizardDialog::PreprocessingWizardDialog(WorkspaceRegistry& workspac
     QWidget* groupsTab = new QWidget(this);
     QVBoxLayout* groupsLayout = new QVBoxLayout(groupsTab);
     m_previewTree->setColumnCount(6);
+    m_previewTree->setItemDelegateForColumn(0, new LeftElideDelegate(this));
     m_previewTree->setHeaderLabels({"Grouping Structure", "Count", "Filter", "Exposure", "Gain", "Binning"});
     m_previewTree->header()->setSectionResizeMode(QHeaderView::Interactive);
     m_previewTree->header()->setStretchLastSection(false);
@@ -222,6 +246,7 @@ PreprocessingWizardDialog::PreprocessingWizardDialog(WorkspaceRegistry& workspac
     QWidget* processTab = new QWidget(this);
     QVBoxLayout* processLayout = new QVBoxLayout(processTab);
     m_processTree->setColumnCount(6);
+    m_processTree->setItemDelegateForColumn(0, new LeftElideDelegate(this));
     m_processTree->setHeaderLabels({"Process Flow", "Count", "Filter", "Exposure", "Gain", "Binning"});
     m_processTree->header()->setSectionResizeMode(QHeaderView::Interactive);
     m_processTree->header()->setStretchLastSection(false);
@@ -264,6 +289,10 @@ PreprocessingWizardDialog::PreprocessingWizardDialog(WorkspaceRegistry& workspac
     m_selectionTable->setColumnCount(5);
     m_selectionTable->setHorizontalHeaderLabels({"Use", "Frame Name", "Star Count", "FWHM", "SNR"});
     m_selectionTable->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
+    m_selectionTable->setSelectionBehavior(QAbstractItemView::SelectRows);
+    m_selectionTable->setSelectionMode(QAbstractItemView::SingleSelection);
+    connect(m_selectionTable, &QTableWidget::cellDoubleClicked, this, &PreprocessingWizardDialog::onSelectionCellDoubleClicked);
+    connect(m_selectionTable, &QTableWidget::itemChanged, this, &PreprocessingWizardDialog::onSelectionTableItemChanged);
     selectLayout->addWidget(m_selectionTable, 1);
 
     m_resumeBtn->setEnabled(false);
@@ -273,22 +302,13 @@ PreprocessingWizardDialog::PreprocessingWizardDialog(WorkspaceRegistry& workspac
     QWidget* progressTab = new QWidget(this);
     QVBoxLayout* progressLayout = new QVBoxLayout(progressTab);
 
-    QSplitter* splitter = new QSplitter(Qt::Vertical, progressTab);
-
     m_stepsTable->setColumnCount(5);
     m_stepsTable->setHorizontalHeaderLabels({"Planned Step", "Stage", "Status", "Progress", "Elapsed"});
     m_stepsTable->horizontalHeader()->setSectionResizeMode(QHeaderView::Interactive);
     m_stepsTable->horizontalHeader()->setStretchLastSection(true);
     m_stepsTable->setSelectionMode(QAbstractItemView::NoSelection);
     m_stepsTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
-    splitter->addWidget(m_stepsTable);
-
-    m_logText->setReadOnly(true);
-    splitter->addWidget(m_logText);
-
-    splitter->setStretchFactor(0, 1);
-    splitter->setStretchFactor(1, 1);
-    progressLayout->addWidget(splitter, 1);
+    progressLayout->addWidget(m_stepsTable, 1);
 
     progressLayout->addWidget(m_progressBar);
 
@@ -321,7 +341,7 @@ PreprocessingWizardDialog::PreprocessingWizardDialog(WorkspaceRegistry& workspac
     connect(m_minSpin, qOverload<double>(&QDoubleSpinBox::valueChanged), this, &PreprocessingWizardDialog::onSpinBoxChanged);
     connect(m_maxSpin, qOverload<double>(&QDoubleSpinBox::valueChanged), this, &PreprocessingWizardDialog::onSpinBoxChanged);
     connect(m_outPrefixEdit, &QLineEdit::textChanged, this, &PreprocessingWizardDialog::updatePreview);
-    connect(m_modeCombo, qOverload<int>(&QComboBox::currentIndexChanged), this, &PreprocessingWizardDialog::updatePreview);
+    connect(m_strictDarkChk, &QCheckBox::checkStateChanged, this, &PreprocessingWizardDialog::updatePreview);
     connect(m_expToleranceSpin, qOverload<double>(&QDoubleSpinBox::valueChanged), this, &PreprocessingWizardDialog::updatePreview);
     connect(m_debayerChk, &QCheckBox::checkStateChanged, this, &PreprocessingWizardDialog::updatePreview);
     connect(m_plotWidget, &StatsPlotWidget::rangeChanged, this, [this](double minVal, double maxVal) {
@@ -334,6 +354,13 @@ PreprocessingWizardDialog::PreprocessingWizardDialog(WorkspaceRegistry& workspac
         onRangeChanged(minVal, maxVal);
     });
     connect(m_filterSelectCombo, qOverload<int>(&QComboBox::currentIndexChanged), this, &PreprocessingWizardDialog::onFilterSelectionChanged);
+    connect(m_previewTree, &QTreeWidget::itemExpanded, this, &PreprocessingWizardDialog::recomputeColumnWidths);
+    connect(m_previewTree, &QTreeWidget::itemCollapsed, this, &PreprocessingWizardDialog::recomputeColumnWidths);
+    connect(m_processTree, &QTreeWidget::itemExpanded, this, &PreprocessingWizardDialog::recomputeColumnWidths);
+    connect(m_processTree, &QTreeWidget::itemCollapsed, this, &PreprocessingWizardDialog::recomputeColumnWidths);
+    connect(m_filesTable, &QTableWidget::itemDoubleClicked, this, &PreprocessingWizardDialog::onFileDoubleClicked);
+    connect(m_previewTree, &QTreeWidget::itemDoubleClicked, this, &PreprocessingWizardDialog::onTreeItemDoubleClicked);
+    connect(m_processTree, &QTreeWidget::itemDoubleClicked, this, &PreprocessingWizardDialog::onTreeItemDoubleClicked);
 
     // Default output directory to current path
     m_outDirEdit->setText(QDir::currentPath());
@@ -434,6 +461,7 @@ void PreprocessingWizardDialog::addFilesList(const QStringList& filepaths) {
 
         m_filesTable->setItem(i, 0, new QTableWidgetItem(relPath));
         m_filesTable->item(i, 0)->setToolTip(f.filepath);
+        m_filesTable->item(i, 0)->setData(Qt::UserRole, f.filepath);
 
         m_filesTable->setItem(i, 1, new QTableWidgetItem(f.imageType));
         m_filesTable->setItem(i, 2, new QTableWidgetItem(f.filter));
@@ -619,6 +647,8 @@ void PreprocessingWizardDialog::updatePreview() {
                 relPath = relPath.mid(commonBase.length());
             }
             child->setText(0, relPath);
+            child->setData(0, Qt::UserRole, QString::fromStdString(f));
+            child->setToolTip(0, QString::fromStdString(f));
         }
     };
 
@@ -645,12 +675,52 @@ void PreprocessingWizardDialog::updatePreview() {
                 relPath = relPath.mid(commonBase.length());
             }
             child->setText(0, relPath);
+            child->setData(0, Qt::UserRole, QString::fromStdString(f));
+            child->setToolTip(0, QString::fromStdString(f));
         }
     }
     m_previewTree->collapseAll();
 
     // 2. Populate Process Tree (Dependency flow) and collect equations
     QStringList formulas;
+
+    auto findBestDark = [&](const PreprocessingGroup& rawGroup) -> const PreprocessingGroup* {
+        const PreprocessingGroup* bestDark = nullptr;
+        double bestDarkExp = -1.0;
+        bool strict = m_strictDarkChk->isChecked();
+        double tol = m_expToleranceSpin->value();
+        for (const auto& g : groups) {
+            if (g.type != "Dark") continue;
+            if (g.binningX != rawGroup.binningX || g.binningY != rawGroup.binningY || g.width != rawGroup.width || g.height != rawGroup.height) continue;
+            if (static_cast<int>(g.gain) != static_cast<int>(rawGroup.gain)) continue;
+            
+            bool match = false;
+            if (strict) {
+                match = (std::abs(g.exposure - rawGroup.exposure) <= tol);
+            } else {
+                match = (g.exposure <= rawGroup.exposure + tol);
+            }
+            
+            if (match) {
+                if (g.exposure > bestDarkExp) {
+                    bestDarkExp = g.exposure;
+                    bestDark = &g;
+                }
+            }
+        }
+        return bestDark;
+    };
+
+    auto findBias = [&](const PreprocessingGroup& rawGroup) -> const PreprocessingGroup* {
+        for (const auto& g : groups) {
+            if (g.type != "Bias") continue;
+            if (g.binningX != rawGroup.binningX || g.binningY != rawGroup.binningY || g.width != rawGroup.width || g.height != rawGroup.height) continue;
+            if (static_cast<int>(g.gain) != static_cast<int>(rawGroup.gain)) continue;
+            return &g;
+        }
+        return nullptr;
+    };
+
     for (const auto& lg : groups) {
         if (lg.type != "Light") continue;
 
@@ -663,11 +733,15 @@ void PreprocessingWizardDialog::updatePreview() {
         lightNode->setText(5, QString("%1x%2").arg(lg.binningX).arg(lg.binningY));
 
         // Check matching Calibration masters
+        const PreprocessingGroup* matchedDark = findBestDark(lg);
+        const PreprocessingGroup* matchedBias = findBias(lg);
         const PreprocessingGroup* darkMatch = nullptr;
-        if (m_modeCombo->currentData().toString() == "dark_current") {
-            darkMatch = findGroup("Dark", lg.binningX, lg.binningY, lg.width, lg.height, lg.gain, "", lg.exposure);
+        const PreprocessingGroup* biasMatch = nullptr;
+        if (matchedDark) {
+            darkMatch = matchedDark;
+        } else if (matchedBias) {
+            biasMatch = matchedBias;
         }
-        const PreprocessingGroup* biasMatch = findGroup("Bias", lg.binningX, lg.binningY, lg.width, lg.height, lg.gain, "");
 
         QString equation;
         if (darkMatch) {
@@ -713,6 +787,15 @@ void PreprocessingWizardDialog::updatePreview() {
 
         // Nested Master Flat
         const PreprocessingGroup* flatMatch = findGroup("Flat", lg.binningX, lg.binningY, lg.width, lg.height, lg.gain, lg.filter);
+        if (!flatMatch) {
+            for (const auto& g : groups) {
+                if (g.type != "Flat") continue;
+                if (g.binningX != lg.binningX || g.binningY != lg.binningY || g.width != lg.width || g.height != lg.height) continue;
+                if (g.filter != lg.filter) continue;
+                flatMatch = &g;
+                break;
+            }
+        }
         if (flatMatch) {
             QTreeWidgetItem* flatNode = new QTreeWidgetItem(lightNode);
             flatNode->setText(0, "▣ Master Flat");
@@ -722,15 +805,19 @@ void PreprocessingWizardDialog::updatePreview() {
             flatNode->setText(4, QString::number(flatMatch->gain));
             flatNode->setText(5, QString("%1x%2").arg(flatMatch->binningX).arg(flatMatch->binningY));
 
+            const PreprocessingGroup* matchedFlatDark = findBestDark(*flatMatch);
+            const PreprocessingGroup* matchedFlatBias = findBias(*flatMatch);
             const PreprocessingGroup* flatDarkMatch = nullptr;
-            if (m_modeCombo->currentData().toString() == "dark_current") {
-                flatDarkMatch = findGroup("Dark", flatMatch->binningX, flatMatch->binningY, flatMatch->width, flatMatch->height, flatMatch->gain, "", flatMatch->exposure);
+            const PreprocessingGroup* flatBiasMatch = nullptr;
+            if (matchedFlatDark) {
+                flatDarkMatch = matchedFlatDark;
+            } else if (matchedFlatBias) {
+                flatBiasMatch = matchedFlatBias;
             }
-            const PreprocessingGroup* flatBiasMatch = findGroup("Bias", flatMatch->binningX, flatMatch->binningY, flatMatch->width, flatMatch->height, flatMatch->gain, "");
 
             QString flatEq;
             if (flatDarkMatch) {
-                flatEq = "Calibrated_Flat = Flat - Master_Flat_Dark";
+                flatEq = "Calibrated_Flat = Flat - Master_Dark";
             } else if (flatBiasMatch) {
                 flatEq = "Calibrated_Flat = Flat - Master_Bias";
             } else {
@@ -748,7 +835,7 @@ void PreprocessingWizardDialog::updatePreview() {
             // Flat dependencies
             if (flatDarkMatch) {
                 QTreeWidgetItem* fdNode = new QTreeWidgetItem(flatNode);
-                fdNode->setText(0, "⧇ Master Flat-Dark");
+                fdNode->setText(0, "⧇ Master Dark");
                 fdNode->setText(1, QString::number(flatDarkMatch->filepaths.size()));
                 fdNode->setText(2, "");
                 fdNode->setText(3, QString("%1s").arg(flatDarkMatch->exposure));
@@ -775,16 +862,34 @@ void PreprocessingWizardDialog::updatePreview() {
     m_previewTree->setSortingEnabled(true);
     m_processTree->setSortingEnabled(true);
 
-    // Auto-fit starting sizes to contents, keep interactive, enable horizontal scrolling
+    recomputeColumnWidths();
+    updateStepsPlan("calibrate_register");
+}
+
+void PreprocessingWizardDialog::recomputeColumnWidths() {
+    int maxW = this->width() / 2;
+    if (maxW < 100) maxW = 400;
+    
     for (int i = 0; i < 6; ++i) {
         m_previewTree->resizeColumnToContents(i);
         m_processTree->resizeColumnToContents(i);
     }
-    updateStepsPlan("calibrate_register");
+    
+    if (m_previewTree->columnWidth(0) > maxW) {
+        m_previewTree->setColumnWidth(0, maxW);
+    }
+    if (m_processTree->columnWidth(0) > maxW) {
+        m_processTree->setColumnWidth(0, maxW);
+    }
+}
+
+void PreprocessingWizardDialog::resizeEvent(QResizeEvent* event) {
+    QDialog::resizeEvent(event);
+    recomputeColumnWidths();
 }
 
 void PreprocessingWizardDialog::logMessage(const QString& msg) {
-    m_logText->append(msg);
+    Logger::info("Preprocessing", msg);
 }
 
 void PreprocessingWizardDialog::onRunCalibrationRegister() {
@@ -800,7 +905,6 @@ void PreprocessingWizardDialog::onRunCalibrationRegister() {
 
     m_tabs->setCurrentIndex(getTabIndex("Execute"));
     m_progressBar->setValue(0);
-    m_logText->clear();
     logMessage("[PPW] Starting calibration and registration pipeline...");
 
     std::vector<std::string> bias, dark, flat, light;
@@ -823,7 +927,7 @@ void PreprocessingWizardDialog::onRunCalibrationRegister() {
     // Build configuration
     std::map<std::string, std::string> config;
     config["stage"] = "calibrate_register";
-    config["mode"] = m_modeCombo->currentData().toString().toStdString();
+    config["strict_dark"] = m_strictDarkChk->isChecked() ? "true" : "false";
     config["exp_tolerance"] = QString::number(m_expToleranceSpin->value()).toStdString();
     config["debayer"] = m_debayerChk->isChecked() ? "true" : "false";
     config["bayer_pattern"] = m_bayerPatternCombo->currentText().toStdString();
@@ -951,12 +1055,14 @@ void PreprocessingWizardDialog::onRunCalibrationRegister() {
             m_filterSelectCombo->blockSignals(false);
 
             // Open master calibration frames in workspace layout for inspection
-            if (auto* mw = qobject_cast<MainWindow*>(mainWin)) {
-                for (const auto& name : m_workspace.elementNames()) {
-                    if (name.find("master_bias_") != std::string::npos || name.find("master_dark_") != std::string::npos || name.find("master_flat_") != std::string::npos) {
-                        QString qName = QString::fromStdString(name);
-                        mw->m_workspaceArea->removeElementView(qName);
-                        mw->m_workspaceArea->addElementView(qName, m_workspace.getElement(name));
+            if (m_openCalibStacksChk->isChecked()) {
+                if (auto* mw = qobject_cast<MainWindow*>(mainWin)) {
+                    for (const auto& name : m_workspace.elementNames()) {
+                        if (name.find("master_bias_") != std::string::npos || name.find("master_dark_") != std::string::npos || name.find("master_flat_") != std::string::npos) {
+                            QString qName = QString::fromStdString(name);
+                            mw->m_workspaceArea->removeElementView(qName);
+                            mw->m_workspaceArea->addElementView(qName, m_workspace.getElement(name));
+                        }
                     }
                 }
             }
@@ -1039,30 +1145,48 @@ void PreprocessingWizardDialog::onRangeChanged(double minVal, double maxVal) {
     std::string rangeKey = m_registeredLightsName + "_" + metric;
     m_filterRanges[rangeKey] = {minVal, maxVal};
 
+    m_selectionTable->blockSignals(true);
     for (int i = 0; i < batch->count(); ++i) {
         auto meta = batch->frameMetadata(i);
         bool match = true;
-        std::vector<std::string> metrics = {"starCount", "fwhm", "snr"};
-        for (const auto& m : metrics) {
-            std::string key = m_registeredLightsName + "_" + m;
-            if (m_filterRanges.find(key) == m_filterRanges.end()) {
-                m_filterRanges[key] = getAbsoluteRangeForBatch(batch, m);
-            }
-            auto range = m_filterRanges[key];
-            double val = 0.0;
-            if (m == "starCount") val = meta.starCount;
-            else if (m == "fwhm") val = meta.fwhm;
-            else if (m == "snr") val = meta.snr;
+        if (!meta.registered) {
+            match = false;
+        } else {
+            std::vector<std::string> metrics = {"starCount", "fwhm", "snr"};
+            for (const auto& m : metrics) {
+                std::string key = m_registeredLightsName + "_" + m;
+                if (m_filterRanges.find(key) == m_filterRanges.end()) {
+                    m_filterRanges[key] = getAbsoluteRangeForBatch(batch, m);
+                }
+                auto range = m_filterRanges[key];
+                double val = 0.0;
+                if (m == "starCount") val = meta.starCount;
+                else if (m == "fwhm") val = meta.fwhm;
+                else if (m == "snr") val = meta.snr;
 
-            if (val < range.first || val > range.second) {
-                match = false;
-                break;
+                if (val < range.first || val > range.second) {
+                    match = false;
+                    break;
+                }
             }
         }
+        
+        batch->setFrameSelected(i, match);
+        
         if (m_selectionTable->item(i, 0)) {
-            m_selectionTable->item(i, 0)->setCheckState(match ? Qt::Checked : Qt::Unchecked);
+            QTableWidgetItem* checkItem = m_selectionTable->item(i, 0);
+            if (!meta.registered) {
+                checkItem->setCheckState(Qt::Unchecked);
+                checkItem->setFlags(Qt::ItemIsSelectable);
+            } else {
+                checkItem->setCheckState(match ? Qt::Checked : Qt::Unchecked);
+                checkItem->setFlags(Qt::ItemIsSelectable | Qt::ItemIsEnabled | Qt::ItemIsUserCheckable);
+            }
         }
     }
+    m_selectionTable->blockSignals(false);
+
+    notifyBatchViewsUpdated();
 }
 
 void PreprocessingWizardDialog::onResumeStacking() {
@@ -1219,7 +1343,7 @@ void PreprocessingWizardDialog::onResumeStacking() {
                             candidate = baseName + "_" + std::to_string(suffix);
                         }
                     }
-                    if (m_workspace.contains(finalMasterName)) {
+                    if (m_openLightMastersChk->isChecked() && m_workspace.contains(finalMasterName)) {
                         QString qName = QString::fromStdString(finalMasterName);
                         mw->m_workspaceArea->removeElementView(qName);
                         mw->m_workspaceArea->addElementView(qName, m_workspace.getElement(finalMasterName));
@@ -1227,7 +1351,6 @@ void PreprocessingWizardDialog::onResumeStacking() {
                 }
             }
             QMessageBox::information(this, "PPW", "Preprocessing complete! Stacked master image(s) have been loaded into the workspace.");
-            close();
         } else {
             // Mark pending/running steps as cancelled/failed
             for (int r = 0; r < m_stepsTable->rowCount(); ++r) {
@@ -1285,6 +1408,7 @@ void PreprocessingWizardDialog::onFilterSelectionChanged(int index) {
         
         // Populate selection table
         m_selectionTable->setRowCount(0);
+        m_selectionTable->blockSignals(true);
         for (int i = 0; i < batch->count(); ++i) {
             m_selectionTable->insertRow(i);
             
@@ -1292,31 +1416,52 @@ void PreprocessingWizardDialog::onFilterSelectionChanged(int index) {
             bool match = true;
             std::vector<std::string> metrics = {"starCount", "fwhm", "snr"};
             auto meta = batch->frameMetadata(i);
-            for (const auto& m : metrics) {
-                std::string key = m_registeredLightsName + "_" + m;
-                if (m_filterRanges.find(key) == m_filterRanges.end()) {
-                    m_filterRanges[key] = getAbsoluteRangeForBatch(batch, m);
-                }
-                auto range = m_filterRanges[key];
-                double val = 0.0;
-                if (m == "starCount") val = meta.starCount;
-                else if (m == "fwhm") val = meta.fwhm;
-                else if (m == "snr") val = meta.snr;
+            if (!meta.registered) {
+                match = false;
+            } else {
+                for (const auto& m : metrics) {
+                    std::string key = m_registeredLightsName + "_" + m;
+                    if (m_filterRanges.find(key) == m_filterRanges.end()) {
+                        m_filterRanges[key] = getAbsoluteRangeForBatch(batch, m);
+                    }
+                    auto range = m_filterRanges[key];
+                    double val = 0.0;
+                    if (m == "starCount") val = meta.starCount;
+                    else if (m == "fwhm") val = meta.fwhm;
+                    else if (m == "snr") val = meta.snr;
 
-                if (val < range.first || val > range.second) {
-                    match = false;
-                    break;
+                    if (val < range.first || val > range.second) {
+                        match = false;
+                        break;
+                    }
                 }
             }
-            checkItem->setCheckState(match ? Qt::Checked : Qt::Unchecked);
+            if (!meta.registered) {
+                checkItem->setCheckState(Qt::Unchecked);
+                checkItem->setFlags(Qt::ItemIsSelectable);
+            } else {
+                checkItem->setCheckState(match ? Qt::Checked : Qt::Unchecked);
+                checkItem->setFlags(Qt::ItemIsSelectable | Qt::ItemIsEnabled | Qt::ItemIsUserCheckable);
+            }
             m_selectionTable->setItem(i, 0, checkItem);
             
-            m_selectionTable->setItem(i, 1, new QTableWidgetItem(QString::fromStdString(batch->frameName(i))));
+            QTableWidgetItem* nameItem = new QTableWidgetItem(QString::fromStdString(batch->frameName(i)));
+            nameItem->setFlags(Qt::ItemIsSelectable | Qt::ItemIsEnabled);
+            m_selectionTable->setItem(i, 1, nameItem);
             
-            m_selectionTable->setItem(i, 2, new QTableWidgetItem(QString::number(meta.starCount)));
-            m_selectionTable->setItem(i, 3, new QTableWidgetItem(QString::number(meta.fwhm, 'f', 2)));
-            m_selectionTable->setItem(i, 4, new QTableWidgetItem(QString::number(meta.snr, 'f', 2)));
+            QTableWidgetItem* starCountItem = new QTableWidgetItem(QString::number(meta.starCount));
+            starCountItem->setFlags(Qt::ItemIsSelectable | Qt::ItemIsEnabled);
+            m_selectionTable->setItem(i, 2, starCountItem);
+            
+            QTableWidgetItem* fwhmItem = new QTableWidgetItem(QString::number(meta.fwhm, 'f', 2));
+            fwhmItem->setFlags(Qt::ItemIsSelectable | Qt::ItemIsEnabled);
+            m_selectionTable->setItem(i, 3, fwhmItem);
+            
+            QTableWidgetItem* snrItem = new QTableWidgetItem(QString::number(meta.snr, 'f', 2));
+            snrItem->setFlags(Qt::ItemIsSelectable | Qt::ItemIsEnabled);
+            m_selectionTable->setItem(i, 4, snrItem);
         }
+        m_selectionTable->blockSignals(false);
     }
 }
 
@@ -1360,7 +1505,9 @@ QMdiArea* PreprocessingWizardDialog::findMdiArea() const {
 void PreprocessingWizardDialog::onCancel() {
     if (m_activeWorker) {
         logMessage("[PPW] Cancellation requested by user...");
-        QMetaObject::invokeMethod(m_activeWorker, "cancel");
+        if (auto* worker = qobject_cast<PreprocessingWorker*>(m_activeWorker)) {
+            worker->cancel();
+        }
         m_cancelBtn->setEnabled(false);
     }
 }
@@ -1438,7 +1585,7 @@ void PreprocessingWizardDialog::updateStepsPlan(const std::string& dummyStage) {
     m_stepsTable->setRowCount(0);
     
     std::map<std::string, std::string> config;
-    config["mode"] = m_modeCombo->currentData().toString().toStdString();
+    config["strict_dark"] = m_strictDarkChk->isChecked() ? "true" : "false";
     config["exp_tolerance"] = QString::number(m_expToleranceSpin->value()).toStdString();
     config["debayer"] = m_debayerChk->isChecked() ? "true" : "false";
     
@@ -1552,6 +1699,136 @@ void PreprocessingWizardDialog::onStepFinished(int stepIndex, bool success, doub
     }
     m_stepsTable->setItem(row, 4, new QTableWidgetItem(QString("%1s").arg(elapsed, 0, 'f', 1)));
     m_stepsTable->item(row, 4)->setForeground(QColor("#a9b7c6"));
+}
+
+void PreprocessingWizardDialog::onFileDoubleClicked(QTableWidgetItem* item) {
+    if (!item) return;
+    int row = item->row();
+    QTableWidgetItem* pathItem = m_filesTable->item(row, 0);
+    if (pathItem) {
+        QString filepath = pathItem->data(Qt::UserRole).toString();
+        if (filepath.isEmpty()) {
+            filepath = pathItem->toolTip();
+        }
+        openFileAsImage(filepath);
+    }
+}
+
+void PreprocessingWizardDialog::onTreeItemDoubleClicked(QTreeWidgetItem* item, int column) {
+    if (!item) return;
+    QString filepath = item->data(0, Qt::UserRole).toString();
+    if (filepath.isEmpty()) {
+        filepath = item->toolTip(0);
+    }
+    openFileAsImage(filepath);
+}
+
+void PreprocessingWizardDialog::openFileAsImage(const QString& filepath) {
+    if (filepath.isEmpty()) return;
+    QFileInfo info(filepath);
+    if (!info.exists() || !info.isFile()) {
+        logMessage(QString("[PPW] Cannot open file: %1 (does not exist or is not a file)").arg(filepath));
+        return;
+    }
+    QMainWindow* mainWin = nullptr;
+    QWidget* w = parentWidget();
+    while (w) {
+        if (auto* mw = qobject_cast<QMainWindow*>(w)) {
+            mainWin = mw;
+            break;
+        }
+        w = w->parentWidget();
+    }
+    if (auto* mw = qobject_cast<MainWindow*>(mainWin)) {
+        mw->loadImageDirectly(filepath, info.fileName());
+    }
+}
+
+void PreprocessingWizardDialog::onSelectionCellDoubleClicked(int row, int column) {
+    Q_UNUSED(column);
+    if (!m_workspace.contains(m_registeredLightsName)) return;
+    auto batch = std::get<ImageBatchPtr>(m_workspace.getElement(m_registeredLightsName));
+    if (row < 0 || row >= batch->count()) return;
+
+    saveCurrentSelectionStates();
+
+    QMainWindow* mainWin = nullptr;
+    QWidget* w = parentWidget();
+    while (w) {
+        if (auto* mw = qobject_cast<QMainWindow*>(w)) {
+            mainWin = mw;
+            break;
+        }
+        w = w->parentWidget();
+    }
+    
+    if (auto* mw = qobject_cast<MainWindow*>(mainWin)) {
+        QString batchName = QString::fromStdString(m_registeredLightsName);
+        
+        QMdiSubWindow* subWin = mw->m_workspaceArea->addElementView(batchName, batch);
+        if (subWin) {
+            subWin->setFocus();
+            if (auto* win = qobject_cast<WorkspaceImageWindow*>(subWin->widget())) {
+                if (auto* bw = qobject_cast<BatchImageWidget*>(win->viewportWidget())) {
+                    bw->setCurrentIndex(row);
+                }
+            }
+        }
+    }
+}
+
+void PreprocessingWizardDialog::onSelectionTableItemChanged(QTableWidgetItem* item) {
+    if (item->column() != 0) return;
+    if (m_registeredLightsName.empty() || !m_workspace.contains(m_registeredLightsName)) return;
+    auto batch = std::get<ImageBatchPtr>(m_workspace.getElement(m_registeredLightsName));
+    int row = item->row();
+    if (row < 0 || row >= batch->count()) return;
+    
+    bool checked = (item->checkState() == Qt::Checked);
+    batch->setFrameSelected(row, checked);
+    
+    notifyBatchViewsUpdated();
+}
+
+void PreprocessingWizardDialog::notifyBatchViewsUpdated() {
+    if (m_registeredLightsName.empty() || !m_workspace.contains(m_registeredLightsName)) return;
+    auto batch = std::get<ImageBatchPtr>(m_workspace.getElement(m_registeredLightsName));
+    QMainWindow* mainWin = nullptr;
+    QWidget* w = parentWidget();
+    while (w) {
+        if (auto* mw = qobject_cast<QMainWindow*>(w)) {
+            mainWin = mw;
+            break;
+        }
+        w = w->parentWidget();
+    }
+    if (mainWin) {
+        for (auto* bw : mainWin->findChildren<BatchImageWidget*>()) {
+            if (bw->batch() == batch) {
+                bw->notifyBatchUpdated();
+            }
+        }
+    }
+}
+
+void PreprocessingWizardDialog::changeEvent(QEvent* event) {
+    if (event->type() == QEvent::ActivationChange) {
+        if (isActiveWindow()) {
+            if (!m_registeredLightsName.empty() && m_workspace.contains(m_registeredLightsName)) {
+                auto batch = std::get<ImageBatchPtr>(m_workspace.getElement(m_registeredLightsName));
+                m_selectionTable->blockSignals(true);
+                for (int i = 0; i < batch->count(); ++i) {
+                    if (m_selectionTable->item(i, 0)) {
+                        bool selected = batch->isFrameSelected(i);
+                        m_selectionTable->item(i, 0)->setCheckState(selected ? Qt::Checked : Qt::Unchecked);
+                    }
+                }
+                m_selectionTable->blockSignals(false);
+                m_plotWidget->update();
+            }
+        }
+    }
+    QDialog::changeEvent(event);
 }
 
 } // namespace blastro

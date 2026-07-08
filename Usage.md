@@ -67,3 +67,15 @@ The **Background Extraction** algorithm removes background gradients (such as sk
 - **Verification / Visualization**: Since the image viewer automatically stretches previews to center the background at a specific grey level, the background before and after extraction might visually look similar. To verify the extraction:
   1. Inspect the pixel values at different areas (e.g. corners) before and after subtraction to see if the values have been neutralized.
   2. Notice the improvement in target contrast (nebulae/galaxies) when a fresh auto-stretch is applied, as the dynamic range is no longer dominated by the gradient.
+
+---
+
+## 6. Preprocessing Wizard (PPW)
+
+The **Preprocessing Wizard** calibrates, registers, aligns, and stacks light frames with their corresponding calibration master frames.
+
+- **Staged Workflow**: Execution is divided into Stage 1 (Calibration & Registration) and Stage 2 (Alignment & Stacking), allowing you to review registered frames and adjust filtering constraints between stages.
+- **Output Settings (Control Tab)**:
+  - **Open Calibration Stacks**: When checked (default), automatically opens the stacked master calibration frames (bias, dark, flat) in the workspace for inspection after Stage 1 completes.
+  - **Open Light Masters**: When checked (default), automatically opens the final stacked light master image(s) after Stage 2 completes.
+  - **Keep Intermediate Files**: When checked, generated intermediate files (calibrated flats, calibrated/debayered lights, and aligned lights) are moved from temporary storage into structured subfolders (`flat_calib`, `light_calib`, `light_align`) inside your output directory. Raw bias/darks are stacked directly and temporary frames unregistered to conserve space.
