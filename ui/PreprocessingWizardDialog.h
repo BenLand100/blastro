@@ -35,6 +35,9 @@
 #include <QPushButton>
 #include <QMdiArea>
 #include <QLabel>
+#include <QScrollArea>
+#include <QToolButton>
+#include <QFrame>
 #include "core/WorkspaceRegistry.h"
 #include "core/ImageBatch.h"
 #include "StatsPlotWidget.h"
@@ -90,14 +93,48 @@ private:
     QPushButton* m_removeBtn;
     QPushButton* m_clearBtn;
 
-    // Control Tab
+    // Control Tab — Output Settings section
+    QLineEdit* m_outDirEdit;
+    QPushButton* m_outDirBrowseBtn;
+    QLineEdit* m_outPrefixEdit;
+    QCheckBox* m_keepIntermediateChk;
+    QCheckBox* m_overwriteMastersChk;
+    QCheckBox* m_openCalibStacksChk;
+    QCheckBox* m_openLightMastersChk;
+
+    // Control Tab — Grouping section
     QCheckBox* m_strictDarkChk;
     QDoubleSpinBox* m_expToleranceSpin;
     QCheckBox* m_debayerChk;
     QComboBox* m_bayerPatternCombo;
     QComboBox* m_debayerMethodCombo;
+
+    // Control Tab — Bias / Dark Stacking section
+    QComboBox* m_biasDarkStackMethodCombo;
+    QComboBox* m_biasDarkRejectionCombo;
+    QDoubleSpinBox* m_biasDarkSigmaLowSpin;
+    QDoubleSpinBox* m_biasDarkSigmaHighSpin;
+
+    // Control Tab — Flat Stacking section
+    QComboBox* m_flatStackMethodCombo;
+    QComboBox* m_flatRejectionCombo;
+    QDoubleSpinBox* m_flatSigmaLowSpin;
+    QDoubleSpinBox* m_flatSigmaHighSpin;
+
+    // Control Tab — Registration (Star Finding) section
     QDoubleSpinBox* m_starMinSnrSpin;
     QDoubleSpinBox* m_starMinFwhmSpin;
+
+    // Control Tab — Alignment section
+    QComboBox* m_alignRefModeCombo;
+    QDoubleSpinBox* m_drizzleScaleSpin;
+
+    // Control Tab — Light Stacking section
+    QComboBox* m_lightStackMethodCombo;
+    QComboBox* m_lightRejectionCombo;
+    QDoubleSpinBox* m_lightSigmaLowSpin;
+    QDoubleSpinBox* m_lightSigmaHighSpin;
+    QComboBox* m_lightWeightCombo;
 
     // Groups & Process Tabs
     QTreeWidget* m_previewTree;
@@ -113,17 +150,6 @@ private:
     QTableWidget* m_selectionTable;
     QPushButton* m_resumeBtn;
     QComboBox* m_filterSelectCombo;
-
-    // Output Tab
-    QLineEdit* m_outDirEdit;
-    QPushButton* m_outDirBrowseBtn;
-    QCheckBox* m_keepIntermediateChk;
-    QDoubleSpinBox* m_drizzleScaleSpin;
-    QComboBox* m_alignRefModeCombo;
-    QCheckBox* m_overwriteMastersChk;
-    QCheckBox* m_openCalibStacksChk;
-    QCheckBox* m_openLightMastersChk;
-    QLineEdit* m_outPrefixEdit;
 
     // Progress Tab
     QProgressBar* m_progressBar;

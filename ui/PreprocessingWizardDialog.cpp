@@ -64,13 +64,43 @@ PreprocessingWizardDialog::PreprocessingWizardDialog(WorkspaceRegistry& workspac
       m_addDirBtn(new QPushButton("Add Directories", this)),
       m_removeBtn(new QPushButton("Remove Selected", this)),
       m_clearBtn(new QPushButton("Clear All", this)),
+      // Output Settings
+      m_outDirEdit(new QLineEdit(this)),
+      m_outDirBrowseBtn(new QPushButton("Browse...", this)),
+      m_outPrefixEdit(new QLineEdit(this)),
+      m_keepIntermediateChk(new QCheckBox("Keep intermediate files", this)),
+      m_overwriteMastersChk(new QCheckBox("Overwrite existing master frames", this)),
+      m_openCalibStacksChk(new QCheckBox("Open calibration stacks in workspace", this)),
+      m_openLightMastersChk(new QCheckBox("Open light masters in workspace", this)),
+      // Grouping
       m_strictDarkChk(new QCheckBox(this)),
       m_expToleranceSpin(new QDoubleSpinBox(this)),
-      m_debayerChk(new QCheckBox("Debayer Raw Lights", this)),
+      m_debayerChk(new QCheckBox("Debayer raw lights (OSC)", this)),
       m_bayerPatternCombo(new QComboBox(this)),
       m_debayerMethodCombo(new QComboBox(this)),
+      // Bias/Dark Stacking
+      m_biasDarkStackMethodCombo(new QComboBox(this)),
+      m_biasDarkRejectionCombo(new QComboBox(this)),
+      m_biasDarkSigmaLowSpin(new QDoubleSpinBox(this)),
+      m_biasDarkSigmaHighSpin(new QDoubleSpinBox(this)),
+      // Flat Stacking
+      m_flatStackMethodCombo(new QComboBox(this)),
+      m_flatRejectionCombo(new QComboBox(this)),
+      m_flatSigmaLowSpin(new QDoubleSpinBox(this)),
+      m_flatSigmaHighSpin(new QDoubleSpinBox(this)),
+      // Registration
       m_starMinSnrSpin(new QDoubleSpinBox(this)),
       m_starMinFwhmSpin(new QDoubleSpinBox(this)),
+      // Alignment
+      m_alignRefModeCombo(new QComboBox(this)),
+      m_drizzleScaleSpin(new QDoubleSpinBox(this)),
+      // Light Stacking
+      m_lightStackMethodCombo(new QComboBox(this)),
+      m_lightRejectionCombo(new QComboBox(this)),
+      m_lightSigmaLowSpin(new QDoubleSpinBox(this)),
+      m_lightSigmaHighSpin(new QDoubleSpinBox(this)),
+      m_lightWeightCombo(new QComboBox(this)),
+      // Other
       m_previewTree(new QTreeWidget(this)),
       m_processTree(new QTreeWidget(this)),
       m_processFormulaText(new QTextEdit(this)),
@@ -80,21 +110,12 @@ PreprocessingWizardDialog::PreprocessingWizardDialog(WorkspaceRegistry& workspac
       m_maxSpin(new QDoubleSpinBox(this)),
       m_selectionTable(new QTableWidget(this)),
       m_resumeBtn(new QPushButton("Execute Align && Stack", this)),
-      m_outDirEdit(new QLineEdit(this)),
-      m_outDirBrowseBtn(new QPushButton("Browse...", this)),
-      m_keepIntermediateChk(new QCheckBox("Keep intermediate files", this)),
-      m_drizzleScaleSpin(new QDoubleSpinBox(this)),
-      m_alignRefModeCombo(new QComboBox(this)),
+      m_filterSelectCombo(new QComboBox(this)),
       m_progressBar(new QProgressBar(this)),
       m_cancelBtn(new QPushButton("Cancel", this)),
-      m_runBtn(new QPushButton("Execute Calibrate & Register", this)),
+      m_runBtn(new QPushButton("Execute Calibrate && Register", this)),
       m_alignStackBtn(new QPushButton("Execute Align && Stack", this)),
-      m_stepsTable(new QTableWidget(this)),
-      m_overwriteMastersChk(new QCheckBox("Overwrite existing master frames", this)),
-      m_openCalibStacksChk(new QCheckBox("Open Calibration Stacks", this)),
-      m_openLightMastersChk(new QCheckBox("Open Light Masters", this)),
-      m_filterSelectCombo(new QComboBox(this)),
-      m_outPrefixEdit(new QLineEdit(this)) {
+      m_stepsTable(new QTableWidget(this)) {
 
     setObjectName("PreprocessingWizardDialog");
     setWindowTitle("Preprocessing Wizard (PPW)");
@@ -158,76 +179,256 @@ PreprocessingWizardDialog::PreprocessingWizardDialog(WorkspaceRegistry& workspac
     filesLayout->addLayout(fileBtns);
     m_tabs->addTab(filesTab, "Files");
 
-    // 2. Control Tab
+    // 2. Control Tab — collapsible-section design inside a QScrollArea
     QWidget* controlTab = new QWidget(this);
-    QFormLayout* controlLayout = new QFormLayout(controlTab);
-    controlLayout->setContentsMargins(15, 15, 15, 15);
-    controlLayout->setSpacing(12);
+    QVBoxLayout* controlTabOuterLayout = new QVBoxLayout(controlTab);
+    controlTabOuterLayout->setContentsMargins(0, 0, 0, 0);
+    controlTabOuterLayout->setSpacing(0);
 
-    m_strictDarkChk->setChecked(false);
-    controlLayout->addRow("Strict Dark Exposure:", m_strictDarkChk);
+    QScrollArea* controlScroll = new QScrollArea(controlTab);
+    controlScroll->setWidgetResizable(true);
+    controlScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    controlScroll->setFrameShape(QFrame::NoFrame);
 
-    m_expToleranceSpin->setRange(0.1, 10.0);
-    m_expToleranceSpin->setValue(0.5);
-    m_expToleranceSpin->setSingleStep(0.1);
-    m_expToleranceSpin->setSuffix(" s");
-    controlLayout->addRow("Exposure Matching Tolerance:", m_expToleranceSpin);
+    QWidget* controlScrollContent = new QWidget();
+    QVBoxLayout* controlLayout = new QVBoxLayout(controlScrollContent);
+    controlLayout->setContentsMargins(12, 10, 12, 10);
+    controlLayout->setSpacing(6);
 
-    controlLayout->addRow("", m_debayerChk);
+    // Helper lambda to build a collapsible section
+    // Returns {headerBtn, contentWidget, contentLayout}
+    auto makeSectionHeader = [&](const QString& title, bool expanded) -> std::tuple<QPushButton*, QWidget*, QFormLayout*> {
+        QPushButton* hdr = new QPushButton(
+            (expanded ? "▼  " : "▶  ") + title, controlScrollContent);
+        hdr->setCheckable(true);
+        hdr->setChecked(expanded);
+        hdr->setStyleSheet("QPushButton { text-align: left; }");
+        hdr->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
 
-    m_bayerPatternCombo->addItems({"RGGB", "BGGR", "GRBG", "GBRG"});
-    controlLayout->addRow("OSC Bayer Pattern:", m_bayerPatternCombo);
+        QWidget* body = new QWidget(controlScrollContent);
+        body->setVisible(expanded);
+        QFormLayout* form = new QFormLayout(body);
+        form->setContentsMargins(14, 10, 14, 10);
+        form->setSpacing(9);
+        form->setLabelAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        form->setFormAlignment(Qt::AlignLeft | Qt::AlignTop);
 
-    m_debayerMethodCombo->addItems({"bilinear", "vng"});
-    controlLayout->addRow("Debayer Method:", m_debayerMethodCombo);
+        QObject::connect(hdr, &QPushButton::toggled, body, [hdr, body](bool checked) {
+            body->setVisible(checked);
+            hdr->setText((checked ? "▼  " : "▶  ") + hdr->text().mid(3));
+        });
 
-    m_starMinSnrSpin->setRange(1.0, 100.0);
-    m_starMinSnrSpin->setValue(4.0);
-    m_starMinSnrSpin->setSingleStep(0.5);
-    controlLayout->addRow("Star Detection Min SNR:", m_starMinSnrSpin);
+        return {hdr, body, form};
+    };
 
-    m_starMinFwhmSpin->setRange(0.5, 10.0);
-    m_starMinFwhmSpin->setValue(1.5);
-    m_starMinFwhmSpin->setSingleStep(0.1);
-    controlLayout->addRow("Star Detection Min FWHM:", m_starMinFwhmSpin);
+    // Helper lambda to build a stacking sub-form (method + rejection + sigma)
+    // Returns the combo pointers via out-params
+    auto addStackingRows = [&](QFormLayout* form,
+                               QComboBox* methodCombo,
+                               QComboBox* rejCombo,
+                               QDoubleSpinBox* sigLowSpin,
+                               QDoubleSpinBox* sigHighSpin,
+                               const QString& defaultMethod,
+                               const QString& defaultRej,
+                               double sigLow, double sigHigh)
+    {
+        methodCombo->addItem("Average (Mean)", "average");
+        methodCombo->addItem("Median", "median");
+        if (defaultMethod == "average") methodCombo->setCurrentIndex(0);
+        else if (defaultMethod == "median") methodCombo->setCurrentIndex(1);
+        form->addRow("Stacking Method:", methodCombo);
 
-    // Output Settings Group Box placed in Control Tab
-    QGroupBox* outGroup = new QGroupBox("Output Settings", controlTab);
-    QFormLayout* outGroupLayout = new QFormLayout(outGroup);
-    outGroupLayout->setContentsMargins(10, 10, 10, 10);
-    outGroupLayout->setSpacing(8);
+        rejCombo->addItem("Sigma Clipping", "sigmaclip");
+        rejCombo->addItem("Winsorized Sigma Clipping", "winsorized");
+        rejCombo->addItem("No Rejection", "none");
+        if (defaultRej == "sigmaclip") rejCombo->setCurrentIndex(0);
+        else if (defaultRej == "winsorized") rejCombo->setCurrentIndex(1);
+        else rejCombo->setCurrentIndex(2);
+        form->addRow("Rejection:", rejCombo);
 
-    outGroupLayout->addRow("Output Prefix:", m_outPrefixEdit);
+        sigLowSpin->setRange(0.5, 10.0);
+        sigLowSpin->setSingleStep(0.5);
+        sigLowSpin->setValue(sigLow);
+        sigLowSpin->setDecimals(1);
 
-    QHBoxLayout* outDirLayout = new QHBoxLayout();
-    outDirLayout->addWidget(m_outDirEdit, 1);
-    outDirLayout->addWidget(m_outDirBrowseBtn);
-    outGroupLayout->addRow("Output Directory:", outDirLayout);
+        sigHighSpin->setRange(0.5, 10.0);
+        sigHighSpin->setSingleStep(0.5);
+        sigHighSpin->setValue(sigHigh);
+        sigHighSpin->setDecimals(1);
 
-    m_drizzleScaleSpin->setRange(1.0, 3.0);
-    m_drizzleScaleSpin->setValue(1.0);
-    m_drizzleScaleSpin->setSingleStep(0.5);
-    outGroupLayout->addRow("Drizzle Alignment Scale:", m_drizzleScaleSpin);
+        QWidget* sigRow = new QWidget();
+        QHBoxLayout* sigLayout = new QHBoxLayout(sigRow);
+        sigLayout->setContentsMargins(0, 0, 0, 0);
+        sigLayout->setSpacing(6);
+        sigLayout->addWidget(sigLowSpin);
+        sigLayout->addWidget(new QLabel("  /  "));
+        sigLayout->addWidget(sigHighSpin);
+        sigLayout->addStretch(1);
+        form->addRow("σ Low / High:", sigRow);
 
-    m_alignRefModeCombo->addItem("Find Centermost", "average_center");
-    m_alignRefModeCombo->addItem("Use Reference", "registration");
-    outGroupLayout->addRow("Alignment Reference Mode:", m_alignRefModeCombo);
+        // Toggle sigma row enabled state based on rejection
+        auto updateSigmaEnabled = [sigLowSpin, sigHighSpin, rejCombo]() {
+            bool enabled = (rejCombo->currentData().toString() != "none");
+            sigLowSpin->setEnabled(enabled);
+            sigHighSpin->setEnabled(enabled);
+        };
+        updateSigmaEnabled();
+        QObject::connect(rejCombo, qOverload<int>(&QComboBox::currentIndexChanged), [updateSigmaEnabled](int) {
+            updateSigmaEnabled();
+        });
+    };
 
-    m_keepIntermediateChk->setChecked(false);
-    outGroupLayout->addRow("", m_keepIntermediateChk);
+    // ── Section 1: Output Settings (expanded by default) ──────────────────────
+    {
+        auto [hdr, body, form] = makeSectionHeader("Output Settings", true);
+        controlLayout->addWidget(hdr);
+        controlLayout->addWidget(body);
 
-    m_overwriteMastersChk->setChecked(false);
-    outGroupLayout->addRow("", m_overwriteMastersChk);
+        form->addRow("Output Prefix:", m_outPrefixEdit);
 
-    m_openCalibStacksChk->setChecked(true);
-    outGroupLayout->addRow("", m_openCalibStacksChk);
+        QWidget* dirRow = new QWidget();
+        QHBoxLayout* dirLay = new QHBoxLayout(dirRow);
+        dirLay->setContentsMargins(0, 0, 0, 0);
+        dirLay->setSpacing(6);
+        dirLay->addWidget(m_outDirEdit, 1);
+        dirLay->addWidget(m_outDirBrowseBtn);
+        form->addRow("Output Directory:", dirRow);
 
-    m_openLightMastersChk->setChecked(true);
-    outGroupLayout->addRow("", m_openLightMastersChk);
+        m_keepIntermediateChk->setChecked(false);
+        form->addRow("", m_keepIntermediateChk);
 
-    controlLayout->addRow(outGroup);
+        m_overwriteMastersChk->setChecked(false);
+        form->addRow("", m_overwriteMastersChk);
 
+        m_openCalibStacksChk->setChecked(true);
+        form->addRow("", m_openCalibStacksChk);
+
+        m_openLightMastersChk->setChecked(true);
+        form->addRow("", m_openLightMastersChk);
+    }
+
+    controlLayout->addSpacing(4);
+
+    // ── Section 2: Grouping (expanded by default) ─────────────────────────────
+    {
+        auto [hdr, body, form] = makeSectionHeader("Grouping", true);
+        controlLayout->addWidget(hdr);
+        controlLayout->addWidget(body);
+
+        m_strictDarkChk->setChecked(false);
+        form->addRow("Strict Dark Exposure Matching:", m_strictDarkChk);
+
+        m_expToleranceSpin->setRange(0.1, 60.0);
+        m_expToleranceSpin->setValue(0.5);
+        m_expToleranceSpin->setSingleStep(0.1);
+        m_expToleranceSpin->setSuffix(" s");
+        m_expToleranceSpin->setDecimals(1);
+        form->addRow("Exposure Tolerance:", m_expToleranceSpin);
+
+        form->addRow("", m_debayerChk);
+
+        m_bayerPatternCombo->addItems({"RGGB", "BGGR", "GRBG", "GBRG"});
+        form->addRow("Bayer Pattern:", m_bayerPatternCombo);
+
+        m_debayerMethodCombo->addItems({"bilinear", "vng"});
+        form->addRow("Debayer Method:", m_debayerMethodCombo);
+    }
+
+    controlLayout->addSpacing(4);
+
+    // ── Section 3: Bias / Dark Stacking Settings (collapsed) ─────────────────
+    {
+        auto [hdr, body, form] = makeSectionHeader("Bias / Dark Stacking Settings", false);
+        controlLayout->addWidget(hdr);
+        controlLayout->addWidget(body);
+
+        addStackingRows(form,
+            m_biasDarkStackMethodCombo, m_biasDarkRejectionCombo,
+            m_biasDarkSigmaLowSpin,     m_biasDarkSigmaHighSpin,
+            "average", "sigmaclip", 3.0, 3.0);
+    }
+
+    controlLayout->addSpacing(4);
+
+    // ── Section 4: Flat Stacking Settings (collapsed) ────────────────────────
+    {
+        auto [hdr, body, form] = makeSectionHeader("Flat Stacking Settings", false);
+        controlLayout->addWidget(hdr);
+        controlLayout->addWidget(body);
+
+        addStackingRows(form,
+            m_flatStackMethodCombo, m_flatRejectionCombo,
+            m_flatSigmaLowSpin,     m_flatSigmaHighSpin,
+            "average", "sigmaclip", 3.0, 3.0);
+    }
+
+    controlLayout->addSpacing(4);
+
+    // ── Section 5: Registration Settings / Star Finding (collapsed) ──────────
+    {
+        auto [hdr, body, form] = makeSectionHeader("Registration Settings", false);
+        controlLayout->addWidget(hdr);
+        controlLayout->addWidget(body);
+
+        m_starMinSnrSpin->setRange(1.0, 100.0);
+        m_starMinSnrSpin->setValue(4.0);
+        m_starMinSnrSpin->setSingleStep(0.5);
+        m_starMinSnrSpin->setDecimals(1);
+        form->addRow("Minimum Star SNR:", m_starMinSnrSpin);
+
+        m_starMinFwhmSpin->setRange(0.5, 20.0);
+        m_starMinFwhmSpin->setValue(1.5);
+        m_starMinFwhmSpin->setSingleStep(0.5);
+        m_starMinFwhmSpin->setDecimals(1);
+        m_starMinFwhmSpin->setSuffix(" px");
+        form->addRow("Minimum Star FWHM:", m_starMinFwhmSpin);
+    }
+
+    controlLayout->addSpacing(4);
+
+    // ── Section 6: Alignment Settings (collapsed) ────────────────────────────
+    {
+        auto [hdr, body, form] = makeSectionHeader("Alignment Settings", false);
+        controlLayout->addWidget(hdr);
+        controlLayout->addWidget(body);
+
+        m_alignRefModeCombo->addItem("Find Centermost Frame", "average_center");
+        m_alignRefModeCombo->addItem("Use Registration Reference", "registration");
+        form->addRow("Reference Mode:", m_alignRefModeCombo);
+
+        m_drizzleScaleSpin->setRange(1.0, 3.0);
+        m_drizzleScaleSpin->setValue(1.0);
+        m_drizzleScaleSpin->setSingleStep(0.5);
+        m_drizzleScaleSpin->setDecimals(1);
+        m_drizzleScaleSpin->setSuffix("×");
+        form->addRow("Drizzle Scale:", m_drizzleScaleSpin);
+    }
+
+    controlLayout->addSpacing(4);
+
+    // ── Section 7: Light Stacking Settings (expanded by default) ─────────────
+    {
+        auto [hdr, body, form] = makeSectionHeader("Light Stacking Settings", true);
+        controlLayout->addWidget(hdr);
+        controlLayout->addWidget(body);
+
+        addStackingRows(form,
+            m_lightStackMethodCombo, m_lightRejectionCombo,
+            m_lightSigmaLowSpin,     m_lightSigmaHighSpin,
+            "average", "winsorized", 3.0, 3.0);
+
+        m_lightWeightCombo->addItem("Equal Weights", "none");
+        m_lightWeightCombo->addItem("SNR-based Weighting", "snr");
+        m_lightWeightCombo->addItem("FWHM-based Weighting", "fwhm");
+        form->addRow("Frame Weighting:", m_lightWeightCombo);
+    }
+
+    controlLayout->addStretch(1);
+    controlScroll->setWidget(controlScrollContent);
+    controlTabOuterLayout->addWidget(controlScroll);
     m_tabs->addTab(controlTab, "Control");
+
+
 
     // 3. Groups Tab
     QWidget* groupsTab = new QWidget(this);
@@ -937,6 +1138,16 @@ void PreprocessingWizardDialog::onRunCalibrationRegister() {
     config["star_min_snr"] = QString::number(m_starMinSnrSpin->value()).toStdString();
     config["star_min_fwhm"] = QString::number(m_starMinFwhmSpin->value()).toStdString();
     config["out_prefix"] = m_outPrefixEdit->text().toStdString();
+    // Bias/Dark stacking settings
+    config["bias_dark_stack_method"] = m_biasDarkStackMethodCombo->currentData().toString().toStdString();
+    config["bias_dark_rejection"]    = m_biasDarkRejectionCombo->currentData().toString().toStdString();
+    config["bias_dark_sigma_low"]    = QString::number(m_biasDarkSigmaLowSpin->value()).toStdString();
+    config["bias_dark_sigma_high"]   = QString::number(m_biasDarkSigmaHighSpin->value()).toStdString();
+    // Flat stacking settings
+    config["flat_stack_method"]  = m_flatStackMethodCombo->currentData().toString().toStdString();
+    config["flat_rejection"]     = m_flatRejectionCombo->currentData().toString().toStdString();
+    config["flat_sigma_low"]     = QString::number(m_flatSigmaLowSpin->value()).toStdString();
+    config["flat_sigma_high"]    = QString::number(m_flatSigmaHighSpin->value()).toStdString();
 
     auto joinPaths = [](const std::vector<std::string>& paths) -> std::string {
         std::string res;
@@ -1241,6 +1452,12 @@ void PreprocessingWizardDialog::onResumeStacking() {
     config["star_min_snr"] = QString::number(m_starMinSnrSpin->value()).toStdString();
     config["star_min_fwhm"] = QString::number(m_starMinFwhmSpin->value()).toStdString();
     config["out_prefix"] = m_outPrefixEdit->text().toStdString();
+    // Light stacking settings
+    config["light_stack_method"] = m_lightStackMethodCombo->currentData().toString().toStdString();
+    config["light_rejection"]    = m_lightRejectionCombo->currentData().toString().toStdString();
+    config["light_sigma_low"]    = QString::number(m_lightSigmaLowSpin->value()).toStdString();
+    config["light_sigma_high"]   = QString::number(m_lightSigmaHighSpin->value()).toStdString();
+    config["light_weight_method"]= m_lightWeightCombo->currentData().toString().toStdString();
 
     m_progressBar->setRange(0, 0);
 

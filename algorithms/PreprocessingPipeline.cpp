@@ -334,10 +334,10 @@ void PreprocessingPipeline::execute(WorkspaceRegistry& workspace,
                     runStep(stacker, {
                         {"input_name", tempBatchName},
                         {"output_name", masterName},
-                        {"method", "average"},
-                        {"rejection", "sigmaclip"},
-                        {"sigma_low", "3.0"},
-                        {"sigma_high", "3.0"},
+                        {"method", config.count("bias_dark_stack_method") ? config.at("bias_dark_stack_method") : "average"},
+                        {"rejection", config.count("bias_dark_rejection") ? config.at("bias_dark_rejection") : "sigmaclip"},
+                        {"sigma_low", config.count("bias_dark_sigma_low") ? config.at("bias_dark_sigma_low") : "3.0"},
+                        {"sigma_high", config.count("bias_dark_sigma_high") ? config.at("bias_dark_sigma_high") : "3.0"},
                         {"quantile_low", "0.2"},
                         {"quantile_high", "0.2"}
                     });
@@ -383,10 +383,10 @@ void PreprocessingPipeline::execute(WorkspaceRegistry& workspace,
                     runStep(stacker, {
                         {"input_name", tempBatchName},
                         {"output_name", masterName},
-                        {"method", "average"},
-                        {"rejection", "sigmaclip"},
-                        {"sigma_low", "3.0"},
-                        {"sigma_high", "3.0"},
+                        {"method", config.count("bias_dark_stack_method") ? config.at("bias_dark_stack_method") : "average"},
+                        {"rejection", config.count("bias_dark_rejection") ? config.at("bias_dark_rejection") : "sigmaclip"},
+                        {"sigma_low", config.count("bias_dark_sigma_low") ? config.at("bias_dark_sigma_low") : "3.0"},
+                        {"sigma_high", config.count("bias_dark_sigma_high") ? config.at("bias_dark_sigma_high") : "3.0"},
                         {"quantile_low", "0.2"},
                         {"quantile_high", "0.2"}
                     });
@@ -522,10 +522,10 @@ void PreprocessingPipeline::execute(WorkspaceRegistry& workspace,
                         stacker.execute(workspace, {
                             {"input_name", calibBatchName},
                             {"output_name", masterName},
-                            {"method", "average"},
-                            {"rejection", "sigmaclip"},
-                            {"sigma_low", "3.0"},
-                            {"sigma_high", "3.0"},
+                            {"method", config.count("flat_stack_method") ? config.at("flat_stack_method") : "average"},
+                            {"rejection", config.count("flat_rejection") ? config.at("flat_rejection") : "sigmaclip"},
+                            {"sigma_low", config.count("flat_sigma_low") ? config.at("flat_sigma_low") : "3.0"},
+                            {"sigma_high", config.count("flat_sigma_high") ? config.at("flat_sigma_high") : "3.0"},
                             {"quantile_low", "0.2"},
                             {"quantile_high", "0.2"}
                         }, [this, &stepTimer, &progress, currentStepIndex, totalSteps](int pct) {
@@ -780,12 +780,13 @@ void PreprocessingPipeline::execute(WorkspaceRegistry& workspace,
             runStep(stacker, {
                 {"input_name", alignedBatchName},
                 {"output_name", finalMasterName},
-                {"method", "average"},
-                {"rejection", "winsorized"},
-                {"sigma_low", "3.0"},
-                {"sigma_high", "3.0"},
+                {"method", config.count("light_stack_method") ? config.at("light_stack_method") : "average"},
+                {"rejection", config.count("light_rejection") ? config.at("light_rejection") : "winsorized"},
+                {"sigma_low", config.count("light_sigma_low") ? config.at("light_sigma_low") : "3.0"},
+                {"sigma_high", config.count("light_sigma_high") ? config.at("light_sigma_high") : "3.0"},
                 {"quantile_low", "0.2"},
-                {"quantile_high", "0.2"}
+                {"quantile_high", "0.2"},
+                {"weight_method", config.count("light_weight_method") ? config.at("light_weight_method") : "none"}
             });
 
             if (!keepIntermediate) {
