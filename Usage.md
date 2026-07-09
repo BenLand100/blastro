@@ -79,3 +79,22 @@ The **Preprocessing Wizard** calibrates, registers, aligns, and stacks light fra
   - **Open Calibration Stacks**: When checked (default), automatically opens the stacked master calibration frames (bias, dark, flat) in the workspace for inspection after Stage 1 completes.
   - **Open Light Masters**: When checked (default), automatically opens the final stacked light master image(s) after Stage 2 completes.
   - **Keep Intermediate Files**: When checked, generated intermediate files (calibrated flats, calibrated/debayered lights, and aligned lights) are moved from temporary storage into structured subfolders (`flat_calib`, `light_calib`, `light_align`) inside your output directory. Raw bias/darks are stacked directly and temporary frames unregistered to conserve space.
+
+---
+
+## 7. Project Management & Session Persistence
+
+BLastro provides tools to save your workspace progress and automatically remember your tool window configuration.
+
+### Project Save / Load
+- **Saving a Project**: Select **File -> Save Project** or **Save Project As**. A project is stored as a directory containing a `project.json` metadata file (describing MDI window layout, open tool windows, and image parameters) and any workspace files.
+- **Copying References**: When saving a project, you can opt to copy all referenced images/batches from their external locations directly into the project directory to make the project folder self-contained and portable.
+- **Intermediate Outputs**: Wizard outputs and temporary directories are automatically created inside `{CWD}/process`. Opening or saving a project updates the application's working directory (`CWD`), redirecting intermediate files to the project's folder.
+
+### Session Auto-Restore & Startup Options
+By default, closing BLastro saves your tool window layout, dialog parameter settings, and main window geometry to `~/.config/blastro/last_session.json` to restore it on the next launch.
+
+You can customize startup behavior via CLI flags:
+- **`--no-restore`**: Bypasses loading the last session for a clean startup workspace.
+- **`--project <path>`**: Automatically opens the specified project directory at startup.
+- **`--session <path>`**: Recovers layout/dialog configurations from a specific custom session JSON file.
