@@ -41,6 +41,7 @@
 #include "core/WorkspaceRegistry.h"
 #include "core/ImageBatch.h"
 #include "StatsPlotWidget.h"
+#include <QJsonObject>
 
 namespace blastro {
 
@@ -49,6 +50,13 @@ class PreprocessingWizardDialog : public QDialog {
 public:
     PreprocessingWizardDialog(WorkspaceRegistry& workspace, QWidget* parent = nullptr);
     ~PreprocessingWizardDialog() override = default;
+
+    // Project / session persistence (Control tab settings only)
+    QJsonObject serializeControlState() const;
+    void restoreControlState(const QJsonObject& obj);
+
+    // Called when CWD changes (project open/save) to refresh the resolved process dir label
+    void updateProcessDirLabel();
 
 private slots:
     void onAddFiles();
@@ -94,8 +102,7 @@ private:
     QPushButton* m_clearBtn;
 
     // Control Tab — Output Settings section
-    QLineEdit* m_outDirEdit;
-    QPushButton* m_outDirBrowseBtn;
+    QLabel* m_processDirLabel;  // Read-only; shows {CWD}/{processFolderName}
     QLineEdit* m_outPrefixEdit;
     QCheckBox* m_keepIntermediateChk;
     QCheckBox* m_overwriteMastersChk;

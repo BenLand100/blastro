@@ -17,6 +17,7 @@
  */
 
 #include "AlignDialog.h"
+#include <QJsonObject>
 #include "core/Preferences.h"
 #include <QVBoxLayout>
 #include <QFormLayout>
@@ -40,6 +41,7 @@ AlignDialog::AlignDialog(WorkspaceRegistry& workspace, QWidget* parent)
     m_outputPattern = "{input}_aligned";
 
     QVBoxLayout* mainLayout = new QVBoxLayout(this);
+    mainLayout->setSizeConstraint(QLayout::SetFixedSize);
     mainLayout->setContentsMargins(15, 15, 15, 15);
     mainLayout->setSpacing(12);
 
@@ -196,6 +198,38 @@ void AlignDialog::refreshWorkspaceElements() {
     if (idx >= 0) {
         m_targetInputCombo->setCurrentIndex(idx);
     }
+}
+
+QJsonObject AlignDialog::serializeState() const {
+    QJsonObject obj;
+    obj["drizzle_scale"] = m_drizzleCombo->currentData().toDouble();
+    obj["reference_mode"] = m_refModeCombo->currentData().toString();
+    obj["strip_height"] = m_stripHeight;
+    obj["threads"] = m_threads;
+    obj["evict_cache"] = m_evictCache;
+    return obj;
+}
+
+void AlignDialog::restoreState(const QJsonObject& obj) {
+    if (obj.contains("drizzle_scale")) {
+        double scale = obj["drizzle_scale"].toDouble();
+        for (int i = 0; i < m_drizzleCombo->count(); ++i) {
+            if (qAbs(m_drizzleCombo->itemData(i).toDouble() - scale) < 0.01) {
+                m_drizzleCombo->setCurrentIndex(i);
+                break;
+            }
+        }
+    }
+    if (obj.contains("reference_mode")) {
+        int idx = m_refModeCombo->findData(obj["reference_mode"].toString());
+        if (idx >= 0) m_refModeCombo->setCurrentIndex(idx);
+    }
+    if (obj.contains("strip_height"))
+        m_stripHeight = obj["strip_height"].toInt();
+    if (obj.contains("threads"))
+        m_threads = obj["threads"].toInt();
+    if (obj.contains("evict_cache"))
+        m_evictCache = obj["evict_cache"].toBool();
 }
 
 } // namespace blastro

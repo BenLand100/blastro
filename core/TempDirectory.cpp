@@ -31,9 +31,9 @@ std::mutex TempDirectory::s_mutex;
 std::string TempDirectory::createTempDir(const std::string& prefix) {
     std::lock_guard<std::mutex> lock(s_mutex);
     
-    // Create base folder from the configured Intermediate Folder
-    std::string baseFolder = Preferences::instance().getIntermediateFolder();
-    QDir baseDir(QString::fromStdString(baseFolder));
+    // Create base folder from the configured Process Folder Name relative to CWD
+    QString processFolder = QDir::current().filePath(QString::fromStdString(Preferences::instance().getProcessFolderName()));
+    QDir baseDir(processFolder);
     if (!baseDir.exists()) {
         baseDir.mkpath(".");
     }

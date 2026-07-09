@@ -34,6 +34,8 @@ public:
 
     std::map<std::string, std::string> getConfig() const override;
     std::string algorithmName() const override { return "PixelMath"; }
+    QJsonObject serializeState() const override;
+    void restoreState(const QJsonObject& obj) override;
     void refreshWorkspaceElements() override;
 
 private slots:

@@ -17,6 +17,7 @@
  */
 
 #include "BackgroundExtractionDialog.h"
+#include <QJsonObject>
 #include "algorithms/BackgroundExtractor.h"
 #include "core/GrayscaleImage.h"
 #include "core/RGBImage.h"
@@ -148,6 +149,7 @@ BackgroundExtractionDialog::BackgroundExtractionDialog(WorkspaceRegistry& worksp
     resize(380, 300);
 
     QVBoxLayout* mainLayout = new QVBoxLayout(this);
+    mainLayout->setSizeConstraint(QLayout::SetFixedSize);
     mainLayout->setContentsMargins(15, 15, 15, 15);
     mainLayout->setSpacing(12);
 
@@ -533,6 +535,38 @@ void BackgroundExtractionDialog::disableAllBgeModes() {
             }
         }
     }
+}
+
+QJsonObject BackgroundExtractionDialog::serializeState() const {
+    QJsonObject obj;
+    obj["method_index"] = m_methodCombo->currentIndex();
+    obj["order"] = m_orderSpin->value();
+    obj["rbf_smoothing"] = m_rbfSmoothingSpin->value();
+    obj["sigma_cut"] = m_sigmaSpin->value();
+    obj["equalize"] = m_equalizeChk->isChecked();
+    obj["sample_frac"] = m_sampleFrac;
+    obj["huber_delta"] = m_huberDelta;
+    obj["threads"] = m_threads;
+    return obj;
+}
+
+void BackgroundExtractionDialog::restoreState(const QJsonObject& obj) {
+    if (obj.contains("method_index"))
+        m_methodCombo->setCurrentIndex(obj["method_index"].toInt());
+    if (obj.contains("order"))
+        m_orderSpin->setValue(obj["order"].toInt());
+    if (obj.contains("rbf_smoothing"))
+        m_rbfSmoothingSpin->setValue(obj["rbf_smoothing"].toDouble());
+    if (obj.contains("sigma_cut"))
+        m_sigmaSpin->setValue(obj["sigma_cut"].toDouble());
+    if (obj.contains("equalize"))
+        m_equalizeChk->setChecked(obj["equalize"].toBool());
+    if (obj.contains("sample_frac"))
+        m_sampleFrac = obj["sample_frac"].toDouble();
+    if (obj.contains("huber_delta"))
+        m_huberDelta = obj["huber_delta"].toDouble();
+    if (obj.contains("threads"))
+        m_threads = obj["threads"].toInt();
 }
 
 } // namespace blastro

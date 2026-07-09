@@ -21,6 +21,7 @@
 #include "WorkspaceArea.h"
 #include "ImageView.h"
 #include "core/PCLBridge.h"
+#include "core/ProjectSerializer.h"
 #include <QMainWindow>
 #include <QMenuBar>
 #include <QMenu>
@@ -33,6 +34,18 @@
 #include <QObject>
 #include <memory>
 #include <unordered_map>
+
+// Forward declarations for persistent algorithm dialogs
+namespace blastro {
+class StretchingDialog;
+class BackgroundExtractionDialog;
+class StackingDialog;
+class RegisterDialog;
+class AlignDialog;
+class DebayerDialog;
+class CalibrationDialog;
+class PixelMathDialog;
+}
 
 namespace blastro {
 
@@ -86,12 +99,31 @@ private:
 
 class PreprocessingWizardDialog;
 
+/// Options parsed from the command line and passed to MainWindow::applyStartupOptions().
+struct StartupOptions {
+    bool noRestore  = false;   ///< --no-restore : skip loading last_session.json
+    QString projectPath;       ///< --project <path> : open this project on launch
+    QString sessionPath;       ///< --session <path> : load this specific session file
+};
+
 class MainWindow : public QMainWindow {
     Q_OBJECT
     friend class PreprocessingWizardDialog;
 public:
     explicit MainWindow(QWidget* parent = nullptr);
     ~MainWindow() override = default;
+
+    /// Called (once, after show()) to apply command-line startup options.
+    void applyStartupOptions(const StartupOptions& opts);
+
+    /// Open a project by directory path. Sets CWD, loads workspace, restores state.
+    bool openProject(const QString& projectDir);
+
+    /// Save current project (requires m_projectPath to be set).
+    bool saveProject();
+
+    /// Save project to a new directory (Save As…).
+    bool saveProjectAs(const QString& projectDir);
 
     void loadAndShowPlugin(const QString& path);
     QMdiSubWindow* createPluginSubWindow(QWidget* widget, const QString& title);
@@ -123,6 +155,15 @@ private slots:
     void updateStatusReadout(int x, int y, bool isRGB, const std::vector<float>& values);
     
     void executeAlgorithmSlot(const std::string& name, const std::map<std::string, std::string>& config);
+
+    // Project / session
+    void onNewProject();
+    void onOpenProject();
+    void onSaveProject();
+    void onSaveProjectAs();
+
+    // Batch reload (invoked via QMetaObject by ProjectSerializer)
+    Q_INVOKABLE void loadBatchPaths(const QStringList& paths, const QString& name);
     
     // Plugins
     void onLoadPCLModule();
@@ -153,9 +194,16 @@ private:
     void createMenus();
     void addImageToWorkspace(const QString& name, const WorkspaceElement& element);
 
+    /// Build a DialogSet pointing to all persistent dialog members.
+    DialogSet buildDialogSet() const;
+
+    /// Returns the default session file path (in app config dir).
+    static QString defaultSessionPath();
+
     WorkspaceRegistry m_workspace;
     WorkspaceArea* m_workspaceArea;
     int m_imageCounter;
+    QString m_projectPath;  ///< Directory of the currently open project (empty = none)
     QLabel* m_statusReadout = nullptr;
     QLabel* m_statusLabel = nullptr;
     ImageView* m_connectedImageView = nullptr;
@@ -169,6 +217,28 @@ private:
 
     void addPCLProcessToMenu(const QString& processId);
     void openPCLInterface(const QString& processId);
+
+    // Persistent algorithm dialogs (owned by MainWindow)
+    StretchingDialog*          m_stretchingDlg  = nullptr;
+    BackgroundExtractionDialog* m_bgeDlg        = nullptr;
+    StackingDialog*            m_stackingDlg    = nullptr;
+    RegisterDialog*            m_registerDlg    = nullptr;
+    AlignDialog*               m_alignDlg       = nullptr;
+    DebayerDialog*             m_debayerDlg     = nullptr;
+    CalibrationDialog*         m_calibrationDlg = nullptr;
+    PixelMathDialog*           m_pixelMathDlg   = nullptr;
+    PreprocessingWizardDialog* m_ppwDlg         = nullptr;
+
+    // Persistent algorithm dialog subwindows
+    QMdiSubWindow*             m_stretchingSub  = nullptr;
+    QMdiSubWindow*             m_bgeSub         = nullptr;
+    QMdiSubWindow*             m_stackingSub    = nullptr;
+    QMdiSubWindow*             m_registerSub    = nullptr;
+    QMdiSubWindow*             m_alignSub       = nullptr;
+    QMdiSubWindow*             m_debayerSub     = nullptr;
+    QMdiSubWindow*             m_calibrationSub = nullptr;
+    QMdiSubWindow*             m_pixelMathSub   = nullptr;
+    QMdiSubWindow*             m_ppwSub         = nullptr;
 
     // Menus
     QMenu* m_fileMenu;
@@ -200,9 +270,13 @@ private:
     QAction* m_alignAct;
     QAction* m_backgroundAct;
     QAction* m_stretchAct;
-    QAction* m_loadPluginAct = nullptr;
+    QAction* m_newProjectAct    = nullptr;
+    QAction* m_openProjectAct   = nullptr;
+    QAction* m_saveProjectAct   = nullptr;
+    QAction* m_saveProjectAsAct = nullptr;
+    QAction* m_loadPluginAct    = nullptr;
     QAction* m_checkForUpdatesAct = nullptr;
-    QAction* m_pclSeparatorBelow = nullptr;
+    QAction* m_pclSeparatorBelow  = nullptr;
 };
 
 } // namespace blastro

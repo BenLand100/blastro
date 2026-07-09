@@ -19,6 +19,7 @@
 #pragma once
 #include "core/WorkspaceRegistry.h"
 #include <QWidget>
+#include <QJsonObject>
 #include <map>
 #include <string>
 
@@ -33,6 +34,10 @@ public:
     virtual std::map<std::string, std::string> getConfig() const = 0;
     virtual std::string algorithmName() const = 0;
     virtual void refreshWorkspaceElements() {}
+
+    // Project / session persistence
+    virtual QJsonObject serializeState() const { return {}; }
+    virtual void restoreState(const QJsonObject&) {}
 
 public slots:
     void onClose();

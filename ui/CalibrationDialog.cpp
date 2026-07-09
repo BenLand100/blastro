@@ -17,6 +17,7 @@
  */
 
 #include "CalibrationDialog.h"
+#include <QJsonObject>
 #include <QVBoxLayout>
 #include <QFormLayout>
 #include <QHBoxLayout>
@@ -33,6 +34,7 @@ CalibrationDialog::CalibrationDialog(WorkspaceRegistry& workspace, QWidget* pare
 
 
     QVBoxLayout* mainLayout = new QVBoxLayout(this);
+    mainLayout->setSizeConstraint(QLayout::SetFixedSize);
     mainLayout->setContentsMargins(15, 15, 15, 15);
     mainLayout->setSpacing(12);
 
@@ -168,6 +170,30 @@ void CalibrationDialog::refreshWorkspaceElements() {
     int idx = m_targetInputCombo->findText(curTarget);
     if (idx >= 0) {
         m_targetInputCombo->setCurrentIndex(idx);
+    }
+}
+
+QJsonObject CalibrationDialog::serializeState() const {
+    QJsonObject obj;
+    obj["bias_name"] = m_biasCombo->currentData().toString();
+    obj["dark_name"] = m_darkCombo->currentData().toString();
+    obj["flat_name"] = m_flatCombo->currentData().toString();
+    return obj;
+}
+
+void CalibrationDialog::restoreState(const QJsonObject& obj) {
+    // Restore calibration master selections if the named elements exist in workspace
+    if (obj.contains("bias_name")) {
+        int idx = m_biasCombo->findData(obj["bias_name"].toString());
+        if (idx >= 0) m_biasCombo->setCurrentIndex(idx);
+    }
+    if (obj.contains("dark_name")) {
+        int idx = m_darkCombo->findData(obj["dark_name"].toString());
+        if (idx >= 0) m_darkCombo->setCurrentIndex(idx);
+    }
+    if (obj.contains("flat_name")) {
+        int idx = m_flatCombo->findData(obj["flat_name"].toString());
+        if (idx >= 0) m_flatCombo->setCurrentIndex(idx);
     }
 }
 

@@ -23,6 +23,7 @@
 #include <QEvent>
 #include "algorithms/PreprocessingPipeline.h"
 #include "core/Logger.h"
+#include "core/Preferences.h"
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QFormLayout>
@@ -65,8 +66,7 @@ PreprocessingWizardDialog::PreprocessingWizardDialog(WorkspaceRegistry& workspac
       m_removeBtn(new QPushButton("Remove Selected", this)),
       m_clearBtn(new QPushButton("Clear All", this)),
       // Output Settings
-      m_outDirEdit(new QLineEdit(this)),
-      m_outDirBrowseBtn(new QPushButton("Browse...", this)),
+      m_processDirLabel(new QLabel(this)),
       m_outPrefixEdit(new QLineEdit(this)),
       m_keepIntermediateChk(new QCheckBox("Keep intermediate files", this)),
       m_overwriteMastersChk(new QCheckBox("Overwrite existing master frames", this)),
@@ -286,13 +286,10 @@ PreprocessingWizardDialog::PreprocessingWizardDialog(WorkspaceRegistry& workspac
 
         form->addRow("Output Prefix:", m_outPrefixEdit);
 
-        QWidget* dirRow = new QWidget();
-        QHBoxLayout* dirLay = new QHBoxLayout(dirRow);
-        dirLay->setContentsMargins(0, 0, 0, 0);
-        dirLay->setSpacing(6);
-        dirLay->addWidget(m_outDirEdit, 1);
-        dirLay->addWidget(m_outDirBrowseBtn);
-        form->addRow("Output Directory:", dirRow);
+        m_processDirLabel->setStyleSheet("color: #aaa; font-size: 10px;");
+        m_processDirLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
+        updateProcessDirLabel();
+        form->addRow("Process Folder:", m_processDirLabel);
 
         m_keepIntermediateChk->setChecked(false);
         form->addRow("", m_keepIntermediateChk);
@@ -531,12 +528,6 @@ PreprocessingWizardDialog::PreprocessingWizardDialog(WorkspaceRegistry& workspac
     connect(m_alignStackBtn, &QPushButton::clicked, this, &PreprocessingWizardDialog::onResumeStacking);
     connect(m_resumeBtn, &QPushButton::clicked, this, &PreprocessingWizardDialog::onResumeStacking);
     connect(m_cancelBtn, &QPushButton::clicked, this, &PreprocessingWizardDialog::onCancel);
-    connect(m_outDirBrowseBtn, &QPushButton::clicked, this, [this]() {
-        QString dir = QFileDialog::getExistingDirectory(this, "Select Output Directory", m_outDirEdit->text());
-        if (!dir.isEmpty()) {
-            m_outDirEdit->setText(dir);
-        }
-    });
 
     connect(m_metricCombo, qOverload<int>(&QComboBox::currentIndexChanged), this, &PreprocessingWizardDialog::onMetricChanged);
     connect(m_minSpin, qOverload<double>(&QDoubleSpinBox::valueChanged), this, &PreprocessingWizardDialog::onSpinBoxChanged);
@@ -562,9 +553,7 @@ PreprocessingWizardDialog::PreprocessingWizardDialog(WorkspaceRegistry& workspac
     connect(m_filesTable, &QTableWidget::itemDoubleClicked, this, &PreprocessingWizardDialog::onFileDoubleClicked);
     connect(m_previewTree, &QTreeWidget::itemDoubleClicked, this, &PreprocessingWizardDialog::onTreeItemDoubleClicked);
     connect(m_processTree, &QTreeWidget::itemDoubleClicked, this, &PreprocessingWizardDialog::onTreeItemDoubleClicked);
-
-    // Default output directory to current path
-    m_outDirEdit->setText(QDir::currentPath());
+    // (Process folder is derived from CWD + preferences, no default needed here)
 }
 
 void PreprocessingWizardDialog::onAddFiles() {
@@ -709,7 +698,7 @@ void PreprocessingWizardDialog::updatePreview() {
 
     if (m_stagedFiles.empty()) {
         m_outPrefixEdit->clear();
-        m_outDirEdit->setText(QDir::currentPath());
+        // outDir is now derived from CWD + process folder name from preferences
         return;
     }
 
@@ -785,10 +774,8 @@ void PreprocessingWizardDialog::updatePreview() {
         m_outPrefixEdit->blockSignals(false);
     }
 
-    if (m_outDirEdit->text().isEmpty() || m_outDirEdit->text() == QDir::currentPath() || m_outDirEdit->text().endsWith("/master")) {
-        m_outDirEdit->blockSignals(true);
-        m_outDirEdit->setText(QDir::currentPath() + "/" + m_outPrefixEdit->text());
-        m_outDirEdit->blockSignals(false);
+    if (m_outPrefixEdit->text().isEmpty()) {
+        // (out_dir now derived from CWD+prefs; nothing to auto-update here)
     }
 
     // Find common base path
@@ -1133,7 +1120,8 @@ void PreprocessingWizardDialog::onRunCalibrationRegister() {
     config["debayer"] = m_debayerChk->isChecked() ? "true" : "false";
     config["bayer_pattern"] = m_bayerPatternCombo->currentText().toStdString();
     config["debayer_method"] = m_debayerMethodCombo->currentText().toStdString();
-    config["out_dir"] = m_outDirEdit->text().toStdString();
+    config["out_dir"] = QDir::current().filePath(
+        QString::fromStdString(Preferences::instance().getProcessFolderName())).toStdString();
     config["keep_intermediate"] = m_keepIntermediateChk->isChecked() ? "true" : "false";
     config["star_min_snr"] = QString::number(m_starMinSnrSpin->value()).toStdString();
     config["star_min_fwhm"] = QString::number(m_starMinFwhmSpin->value()).toStdString();
@@ -1448,7 +1436,8 @@ void PreprocessingWizardDialog::onResumeStacking() {
     config["drizzle_scale"] = QString::number(m_drizzleScaleSpin->value()).toStdString();
     config["align_ref_mode"] = m_alignRefModeCombo->currentData().toString().toStdString();
     config["keep_intermediate"] = m_keepIntermediateChk->isChecked() ? "true" : "false";
-    config["out_dir"] = m_outDirEdit->text().toStdString();
+    config["out_dir"] = QDir::current().filePath(
+        QString::fromStdString(Preferences::instance().getProcessFolderName())).toStdString();
     config["star_min_snr"] = QString::number(m_starMinSnrSpin->value()).toStdString();
     config["star_min_fwhm"] = QString::number(m_starMinFwhmSpin->value()).toStdString();
     config["out_prefix"] = m_outPrefixEdit->text().toStdString();
@@ -2046,6 +2035,91 @@ void PreprocessingWizardDialog::changeEvent(QEvent* event) {
         }
     }
     QDialog::changeEvent(event);
+}
+
+void PreprocessingWizardDialog::updateProcessDirLabel() {
+    QString folderName = QString::fromStdString(Preferences::instance().getProcessFolderName());
+    QString resolved = QDir::current().filePath(folderName);
+    m_processDirLabel->setText(resolved);
+    m_processDirLabel->setToolTip(resolved);
+}
+
+QJsonObject PreprocessingWizardDialog::serializeControlState() const {
+    QJsonObject obj;
+    obj["out_prefix"] = m_outPrefixEdit->text();
+    obj["keep_intermediate"] = m_keepIntermediateChk->isChecked();
+    obj["overwrite_masters"] = m_overwriteMastersChk->isChecked();
+    obj["open_calib_stacks"] = m_openCalibStacksChk->isChecked();
+    obj["open_light_masters"] = m_openLightMastersChk->isChecked();
+    // Grouping
+    obj["strict_dark"] = m_strictDarkChk->isChecked();
+    obj["exp_tolerance"] = m_expToleranceSpin->value();
+    obj["debayer"] = m_debayerChk->isChecked();
+    obj["bayer_pattern"] = m_bayerPatternCombo->currentText();
+    obj["debayer_method"] = m_debayerMethodCombo->currentText();
+    // Bias/Dark Stacking
+    obj["bias_dark_stack_method"] = m_biasDarkStackMethodCombo->currentData().toString();
+    obj["bias_dark_rejection"] = m_biasDarkRejectionCombo->currentData().toString();
+    obj["bias_dark_sigma_low"] = m_biasDarkSigmaLowSpin->value();
+    obj["bias_dark_sigma_high"] = m_biasDarkSigmaHighSpin->value();
+    // Flat Stacking
+    obj["flat_stack_method"] = m_flatStackMethodCombo->currentData().toString();
+    obj["flat_rejection"] = m_flatRejectionCombo->currentData().toString();
+    obj["flat_sigma_low"] = m_flatSigmaLowSpin->value();
+    obj["flat_sigma_high"] = m_flatSigmaHighSpin->value();
+    // Registration
+    obj["star_min_snr"] = m_starMinSnrSpin->value();
+    obj["star_min_fwhm"] = m_starMinFwhmSpin->value();
+    // Alignment
+    obj["align_ref_mode"] = m_alignRefModeCombo->currentData().toString();
+    obj["drizzle_scale"] = m_drizzleScaleSpin->value();
+    // Light Stacking
+    obj["light_stack_method"] = m_lightStackMethodCombo->currentData().toString();
+    obj["light_rejection"] = m_lightRejectionCombo->currentData().toString();
+    obj["light_sigma_low"] = m_lightSigmaLowSpin->value();
+    obj["light_sigma_high"] = m_lightSigmaHighSpin->value();
+    obj["light_weight_method"] = m_lightWeightCombo->currentData().toString();
+    return obj;
+}
+
+void PreprocessingWizardDialog::restoreControlState(const QJsonObject& obj) {
+    auto setCombo = [](QComboBox* combo, const QString& data) {
+        int idx = combo->findData(data);
+        if (idx >= 0) combo->setCurrentIndex(idx);
+    };
+    if (obj.contains("out_prefix")) m_outPrefixEdit->setText(obj["out_prefix"].toString());
+    if (obj.contains("keep_intermediate")) m_keepIntermediateChk->setChecked(obj["keep_intermediate"].toBool());
+    if (obj.contains("overwrite_masters")) m_overwriteMastersChk->setChecked(obj["overwrite_masters"].toBool());
+    if (obj.contains("open_calib_stacks")) m_openCalibStacksChk->setChecked(obj["open_calib_stacks"].toBool());
+    if (obj.contains("open_light_masters")) m_openLightMastersChk->setChecked(obj["open_light_masters"].toBool());
+    if (obj.contains("strict_dark")) m_strictDarkChk->setChecked(obj["strict_dark"].toBool());
+    if (obj.contains("exp_tolerance")) m_expToleranceSpin->setValue(obj["exp_tolerance"].toDouble());
+    if (obj.contains("debayer")) m_debayerChk->setChecked(obj["debayer"].toBool());
+    if (obj.contains("bayer_pattern")) {
+        int idx = m_bayerPatternCombo->findText(obj["bayer_pattern"].toString());
+        if (idx >= 0) m_bayerPatternCombo->setCurrentIndex(idx);
+    }
+    if (obj.contains("debayer_method")) {
+        int idx = m_debayerMethodCombo->findText(obj["debayer_method"].toString());
+        if (idx >= 0) m_debayerMethodCombo->setCurrentIndex(idx);
+    }
+    if (obj.contains("bias_dark_stack_method")) setCombo(m_biasDarkStackMethodCombo, obj["bias_dark_stack_method"].toString());
+    if (obj.contains("bias_dark_rejection")) setCombo(m_biasDarkRejectionCombo, obj["bias_dark_rejection"].toString());
+    if (obj.contains("bias_dark_sigma_low")) m_biasDarkSigmaLowSpin->setValue(obj["bias_dark_sigma_low"].toDouble());
+    if (obj.contains("bias_dark_sigma_high")) m_biasDarkSigmaHighSpin->setValue(obj["bias_dark_sigma_high"].toDouble());
+    if (obj.contains("flat_stack_method")) setCombo(m_flatStackMethodCombo, obj["flat_stack_method"].toString());
+    if (obj.contains("flat_rejection")) setCombo(m_flatRejectionCombo, obj["flat_rejection"].toString());
+    if (obj.contains("flat_sigma_low")) m_flatSigmaLowSpin->setValue(obj["flat_sigma_low"].toDouble());
+    if (obj.contains("flat_sigma_high")) m_flatSigmaHighSpin->setValue(obj["flat_sigma_high"].toDouble());
+    if (obj.contains("star_min_snr")) m_starMinSnrSpin->setValue(obj["star_min_snr"].toDouble());
+    if (obj.contains("star_min_fwhm")) m_starMinFwhmSpin->setValue(obj["star_min_fwhm"].toDouble());
+    if (obj.contains("align_ref_mode")) setCombo(m_alignRefModeCombo, obj["align_ref_mode"].toString());
+    if (obj.contains("drizzle_scale")) m_drizzleScaleSpin->setValue(obj["drizzle_scale"].toDouble());
+    if (obj.contains("light_stack_method")) setCombo(m_lightStackMethodCombo, obj["light_stack_method"].toString());
+    if (obj.contains("light_rejection")) setCombo(m_lightRejectionCombo, obj["light_rejection"].toString());
+    if (obj.contains("light_sigma_low")) m_lightSigmaLowSpin->setValue(obj["light_sigma_low"].toDouble());
+    if (obj.contains("light_sigma_high")) m_lightSigmaHighSpin->setValue(obj["light_sigma_high"].toDouble());
+    if (obj.contains("light_weight_method")) setCombo(m_lightWeightCombo, obj["light_weight_method"].toString());
 }
 
 } // namespace blastro

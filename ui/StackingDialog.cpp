@@ -17,6 +17,7 @@
  */
 
 #include "StackingDialog.h"
+#include <QJsonObject>
 #include "core/Preferences.h"
 #include <QVBoxLayout>
 #include <QFormLayout>
@@ -40,6 +41,7 @@ StackingDialog::StackingDialog(WorkspaceRegistry& workspace, QWidget* parent)
     m_outputPattern = "{input}_stacked";
 
     QVBoxLayout* mainLayout = new QVBoxLayout(this);
+    mainLayout->setSizeConstraint(QLayout::SetFixedSize);
     mainLayout->setContentsMargins(15, 15, 15, 15);
     mainLayout->setSpacing(12);
 
@@ -298,6 +300,39 @@ void StackingDialog::refreshWorkspaceElements() {
     if (idx >= 0) {
         m_targetInputCombo->setCurrentIndex(idx);
     }
+}
+
+QJsonObject StackingDialog::serializeState() const {
+    QJsonObject obj;
+    obj["method"] = m_methodCombo->currentData().toString();
+    obj["rejection"] = m_rejectionCombo->currentData().toString();
+    obj["sigma_low"] = m_lowClipSpin->value();
+    obj["sigma_high"] = m_highClipSpin->value();
+    obj["weight_method"] = QString::fromStdString(m_weightMethod);
+    obj["patch_size"] = m_patchSize;
+    obj["threads"] = m_threads;
+    return obj;
+}
+
+void StackingDialog::restoreState(const QJsonObject& obj) {
+    if (obj.contains("method")) {
+        int idx = m_methodCombo->findData(obj["method"].toString());
+        if (idx >= 0) m_methodCombo->setCurrentIndex(idx);
+    }
+    if (obj.contains("rejection")) {
+        int idx = m_rejectionCombo->findData(obj["rejection"].toString());
+        if (idx >= 0) m_rejectionCombo->setCurrentIndex(idx);
+    }
+    if (obj.contains("sigma_low"))
+        m_lowClipSpin->setValue(obj["sigma_low"].toDouble());
+    if (obj.contains("sigma_high"))
+        m_highClipSpin->setValue(obj["sigma_high"].toDouble());
+    if (obj.contains("weight_method"))
+        m_weightMethod = obj["weight_method"].toString().toStdString();
+    if (obj.contains("patch_size"))
+        m_patchSize = obj["patch_size"].toInt();
+    if (obj.contains("threads"))
+        m_threads = obj["threads"].toInt();
 }
 
 } // namespace blastro

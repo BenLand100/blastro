@@ -20,6 +20,8 @@
 #include <QScrollBar>
 #include <QMouseEvent>
 #include <QKeyEvent>
+#include <QJsonObject>
+#include <QTimer>
 #include <cmath>
 #include <algorithm>
 #include <vector>
@@ -481,6 +483,61 @@ bool ImageView::fitToWindow() {
     scale(factor, factor);
     m_zoomFactor = factor;
     return true;
+}
+
+QJsonObject ImageView::serializeViewState() const {
+    QJsonObject obj;
+    // Display mode
+    obj["display_mode"] = static_cast<int>(m_displayMode);
+    obj["channel_mode"] = static_cast<int>(m_channelMode);
+    obj["blackpoint"] = m_blackpoint;
+    obj["whitepoint"] = m_whitepoint;
+    obj["midpoint"] = m_midpoint;
+    obj["auto_stretch_level"] = m_autoStretchLevel;
+    obj["local_hist_level"] = m_localHistLevel;
+    // Zoom transform (QTransform 6 components)
+    QTransform t = transform();
+    obj["zoom_m11"] = t.m11();
+    obj["zoom_m12"] = t.m12();
+    obj["zoom_m21"] = t.m21();
+    obj["zoom_m22"] = t.m22();
+    obj["zoom_dx"]  = t.dx();
+    obj["zoom_dy"]  = t.dy();
+    // Scroll positions
+    obj["scroll_h"] = horizontalScrollBar()->value();
+    obj["scroll_v"] = verticalScrollBar()->value();
+    return obj;
+}
+
+void ImageView::restoreViewState(const QJsonObject& obj) {
+    if (obj.contains("display_mode"))
+        setDisplayMode(static_cast<DisplayMode>(obj["display_mode"].toInt()));
+    if (obj.contains("channel_mode"))
+        setChannelMode(static_cast<ChannelMode>(obj["channel_mode"].toInt()));
+    if (obj.contains("blackpoint") && obj.contains("whitepoint") && obj.contains("midpoint"))
+        setStretchParams(obj["blackpoint"].toDouble(), obj["whitepoint"].toDouble(), obj["midpoint"].toDouble());
+    if (obj.contains("auto_stretch_level"))
+        setAutoStretchLevel(obj["auto_stretch_level"].toInt());
+    if (obj.contains("local_hist_level"))
+        setLocalHistLevel(obj["local_hist_level"].toInt());
+    // Restore zoom transform
+    if (obj.contains("zoom_m11")) {
+        QTransform t(
+            obj["zoom_m11"].toDouble(), obj["zoom_m12"].toDouble(),
+            obj["zoom_m21"].toDouble(), obj["zoom_m22"].toDouble(),
+            obj["zoom_dx"].toDouble(),  obj["zoom_dy"].toDouble());
+        setTransform(t);
+        m_zoomFactor = t.m11(); // approximate isotropic scale
+    }
+    // Restore scroll positions after the event loop settles
+    if (obj.contains("scroll_h") || obj.contains("scroll_v")) {
+        int sh = obj["scroll_h"].toInt();
+        int sv = obj["scroll_v"].toInt();
+        QTimer::singleShot(0, this, [this, sh, sv]() {
+            horizontalScrollBar()->setValue(sh);
+            verticalScrollBar()->setValue(sv);
+        });
+    }
 }
 
 void ImageView::resizeEvent(QResizeEvent* event) {

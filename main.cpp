@@ -123,7 +123,8 @@ int main(int argc, char* argv[]) {
     QApplication app(argc, argv);
     app.setWindowIcon(QIcon(":/icons/bl_spacey_icon.png"));
     
-    // Parse flexible GUI preload arguments and positional image files
+    // Parse flexible GUI preload arguments, project/session startup options, and positional image files
+    blastro::StartupOptions startupOpts;
     QString loadPluginPath;
     QStringList positionalImages;
     
@@ -131,7 +132,19 @@ int main(int argc, char* argv[]) {
     for (int i = 1; i < args.size(); ++i) {
         QString arg = args.at(i);
         if (arg.startsWith("--")) {
-            if (arg == "--load-plugin" || arg == "--test-load" || arg == "--load-image" || arg == "--test-process" || arg == "--run-plugin") {
+            if (arg == "--no-restore") {
+                startupOpts.noRestore = true;
+            } else if (arg == "--project") {
+                if (i + 1 < args.size()) {
+                    startupOpts.projectPath = args.at(i + 1);
+                    ++i;
+                }
+            } else if (arg == "--session") {
+                if (i + 1 < args.size()) {
+                    startupOpts.sessionPath = args.at(i + 1);
+                    ++i;
+                }
+            } else if (arg == "--load-plugin" || arg == "--test-load" || arg == "--load-image" || arg == "--test-process" || arg == "--run-plugin") {
                 if (arg == "--load-plugin" || arg == "--test-load") {
                     if (i + 1 < args.size()) {
                         loadPluginPath = args.at(i + 1);
@@ -152,17 +165,16 @@ int main(int argc, char* argv[]) {
     blastro::MainWindow w;
     w.show();
     
-    if (!positionalImages.isEmpty() || !loadPluginPath.isEmpty()) {
-        QTimer::singleShot(100, [&w, positionalImages, loadPluginPath]() {
-            int imageCounter = 1;
-            for (const QString& imgPath : positionalImages) {
-                w.loadImageDirectly(imgPath, QString("Image%1").arg(imageCounter++));
-            }
-            if (!loadPluginPath.isEmpty()) {
-                w.loadAndShowPlugin(loadPluginPath);
-            }
-        });
-    }
+    QTimer::singleShot(200, [&w, startupOpts, positionalImages, loadPluginPath]() {
+        int imageCounter = 1;
+        for (const QString& imgPath : positionalImages) {
+            w.loadImageDirectly(imgPath, QString("Image%1").arg(imageCounter++));
+        }
+        if (!loadPluginPath.isEmpty()) {
+            w.loadAndShowPlugin(loadPluginPath);
+        }
+        w.applyStartupOptions(startupOpts);
+    });
     
     return app.exec();
 }

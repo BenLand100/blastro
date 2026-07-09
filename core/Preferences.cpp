@@ -41,7 +41,7 @@ Preferences::Preferences() {
     m_pclPreloadLibDir = false;
     m_pclTensorflowDownloadUrl = "https://download.starnetastro.com/pixinsight/legacy/tensorflow-runtime/pixinsight_tensorflow_runtime_linux_TF_x64.zip";
     m_temporaryFolder = "/tmp";
-    m_intermediateFolder = (QDir::currentPath() + "/process").toStdString();
+    m_processFolderName = "process";
     
     // Default thread count to hardware concurrency
     unsigned int cores = std::thread::hardware_concurrency();
@@ -113,14 +113,14 @@ void Preferences::setTemporaryFolder(const std::string& path) {
     m_temporaryFolder = path;
 }
 
-std::string Preferences::getIntermediateFolder() const {
+std::string Preferences::getProcessFolderName() const {
     std::lock_guard<std::mutex> lock(m_mutex);
-    return m_intermediateFolder;
+    return m_processFolderName;
 }
 
-void Preferences::setIntermediateFolder(const std::string& path) {
+void Preferences::setProcessFolderName(const std::string& name) {
     std::lock_guard<std::mutex> lock(m_mutex);
-    m_intermediateFolder = path;
+    m_processFolderName = name;
 }
 
 int Preferences::getThreadCount() const {
@@ -172,7 +172,7 @@ void Preferences::load() {
     m_pclPreloadLibDir = settings.value("Preferences/PclPreloadLibDir", m_pclPreloadLibDir).toBool();
     m_pclTensorflowDownloadUrl = settings.value("Preferences/PclTensorflowDownloadUrl", QString::fromStdString(m_pclTensorflowDownloadUrl)).toString().toStdString();
     m_temporaryFolder = settings.value("Preferences/TemporaryFolder", QString::fromStdString(m_temporaryFolder)).toString().toStdString();
-    m_intermediateFolder = settings.value("Preferences/IntermediateFolder", QString::fromStdString(m_intermediateFolder)).toString().toStdString();
+    m_processFolderName = settings.value("Preferences/ProcessFolderName", QString::fromStdString(m_processFolderName)).toString().toStdString();
     m_threadCount = settings.value("Preferences/ThreadCount", m_threadCount).toInt();
     m_stackingMode = settings.value("Preferences/StackingMode", QString::fromStdString(m_stackingMode)).toString().toStdString();
     m_maxRamUsage = settings.value("Preferences/MaxRamUsage", m_maxRamUsage).toInt();
@@ -197,7 +197,7 @@ void Preferences::save() {
     settings.setValue("Preferences/PclPreloadLibDir", m_pclPreloadLibDir);
     settings.setValue("Preferences/PclTensorflowDownloadUrl", QString::fromStdString(m_pclTensorflowDownloadUrl));
     settings.setValue("Preferences/TemporaryFolder", QString::fromStdString(m_temporaryFolder));
-    settings.setValue("Preferences/IntermediateFolder", QString::fromStdString(m_intermediateFolder));
+    settings.setValue("Preferences/ProcessFolderName", QString::fromStdString(m_processFolderName));
     settings.setValue("Preferences/ThreadCount", m_threadCount);
     settings.setValue("Preferences/StackingMode", QString::fromStdString(m_stackingMode));
     settings.setValue("Preferences/MaxRamUsage", m_maxRamUsage);

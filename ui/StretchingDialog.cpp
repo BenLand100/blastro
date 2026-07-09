@@ -17,6 +17,7 @@
  */
 
 #include "StretchingDialog.h"
+#include <QJsonObject>
 #include "HistogramWidget.h"
 #include "core/Preferences.h"
 #include "algorithms/StretchingAlgorithm.h"
@@ -49,6 +50,24 @@ static RGBImagePtr cloneRGB(RGBImagePtr src) {
 
 StretchingDialog::StretchingDialog(WorkspaceRegistry& workspace, QWidget* parent)
     : AlgorithmDialog(workspace, parent),
+      m_tabWidget(nullptr),
+      m_histogramWidget(nullptr),
+      m_bSlider(nullptr),
+      m_bSpin(nullptr),
+      m_wSlider(nullptr),
+      m_wSpin(nullptr),
+      m_mSlider(nullptr),
+      m_mSpin(nullptr),
+      m_spSlider(nullptr),
+      m_spSpin(nullptr),
+      m_dSlider(nullptr),
+      m_dSpin(nullptr),
+      m_shadowSlider(nullptr),
+      m_shadowSpin(nullptr),
+      m_highlightSlider(nullptr),
+      m_highlightSpin(nullptr),
+      m_previewChk(nullptr),
+      m_copyStretchesBtn(nullptr),
       m_previewTimer(new QTimer(this)) {
     
     setWindowTitle("Stretching Transformation");
@@ -58,6 +77,7 @@ StretchingDialog::StretchingDialog(WorkspaceRegistry& workspace, QWidget* parent
     connect(m_previewTimer, &QTimer::timeout, this, &StretchingDialog::updatePreview);
 
     QVBoxLayout* mainLayout = new QVBoxLayout(this);
+    mainLayout->setSizeConstraint(QLayout::SetFixedSize);
     mainLayout->setContentsMargins(12, 12, 12, 12);
     mainLayout->setSpacing(10);
 
@@ -707,6 +727,62 @@ std::map<std::string, std::string> StretchingDialog::getConfig() const {
         config["midpoint"] = std::to_string(m_midpoint);
     }
     return config;
+}
+
+QJsonObject StretchingDialog::serializeState() const {
+    QJsonObject obj;
+    obj["is_ghs_mode"] = m_isGhsMode;
+    // HT params
+    obj["blackpoint"] = m_blackpoint;
+    obj["whitepoint"] = m_whitepoint;
+    obj["midpoint"] = m_midpoint;
+    // GHS params
+    obj["sp_point"] = m_spPoint;
+    obj["stretch_factor"] = m_stretchFactor;
+    obj["shadow_protect"] = m_shadowProtect;
+    obj["highlight_protect"] = m_highlightProtect;
+    // Prefs
+    obj["color_preserving"] = m_colorPreserving;
+    obj["threads"] = m_threads;
+    return obj;
+}
+
+void StretchingDialog::restoreState(const QJsonObject& obj) {
+    if (obj.contains("blackpoint")) {
+        m_blackpoint = obj["blackpoint"].toDouble();
+        m_whitepoint = obj["whitepoint"].toDouble(0.0);
+        // update HT spinboxes
+        m_bSpin->blockSignals(true); m_bSpin->setValue(m_blackpoint); m_bSpin->blockSignals(false);
+        m_wSpin->blockSignals(true); m_wSpin->setValue(m_whitepoint); m_wSpin->blockSignals(false);
+        if (obj.contains("midpoint")) {
+            m_midpoint = obj["midpoint"].toDouble(0.5);
+            m_mSpin->blockSignals(true); m_mSpin->setValue(m_midpoint); m_mSpin->blockSignals(false);
+        }
+    }
+    if (obj.contains("sp_point")) {
+        m_spPoint = obj["sp_point"].toDouble();
+        m_spSpin->blockSignals(true); m_spSpin->setValue(m_spPoint); m_spSpin->blockSignals(false);
+    }
+    if (obj.contains("stretch_factor")) {
+        m_stretchFactor = obj["stretch_factor"].toDouble();
+        m_dSpin->blockSignals(true); m_dSpin->setValue(m_stretchFactor); m_dSpin->blockSignals(false);
+    }
+    if (obj.contains("shadow_protect")) {
+        m_shadowProtect = obj["shadow_protect"].toDouble();
+        m_shadowSpin->blockSignals(true); m_shadowSpin->setValue(m_shadowProtect); m_shadowSpin->blockSignals(false);
+    }
+    if (obj.contains("highlight_protect")) {
+        m_highlightProtect = obj["highlight_protect"].toDouble();
+        m_highlightSpin->blockSignals(true); m_highlightSpin->setValue(m_highlightProtect); m_highlightSpin->blockSignals(false);
+    }
+    if (obj.contains("color_preserving"))
+        m_colorPreserving = obj["color_preserving"].toBool();
+    if (obj.contains("threads"))
+        m_threads = obj["threads"].toInt();
+    if (obj.contains("is_ghs_mode")) {
+        m_isGhsMode = obj["is_ghs_mode"].toBool();
+        m_tabWidget->setCurrentIndex(m_isGhsMode ? 1 : 0);
+    }
 }
 
 } // namespace blastro

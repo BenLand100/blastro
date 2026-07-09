@@ -38,7 +38,6 @@ private slots:
     void onBrowseLib();
     void onBrowseLibrary();
     void onBrowseTemp();
-    void onBrowseIntermediate();
     void onAddRepo();
     void onRemoveRepo();
 
@@ -49,7 +48,7 @@ private:
     QCheckBox* m_preloadChk;
     QLineEdit* m_tensorflowUrlEdit;
     QLineEdit* m_tempEdit;
-    QLineEdit* m_intermediateEdit;
+    QLineEdit* m_processFolderEdit;
     QSpinBox* m_threadSpin;
     QSpinBox* m_ramSpin;
     QListWidget* m_reposListWidget;

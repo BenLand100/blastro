@@ -17,6 +17,7 @@
  */
 
 #include "DebayerDialog.h"
+#include <QJsonObject>
 #include "core/Preferences.h"
 #include <QVBoxLayout>
 #include <QFormLayout>
@@ -40,6 +41,7 @@ DebayerDialog::DebayerDialog(WorkspaceRegistry& workspace, QWidget* parent)
     m_outputPattern = "{input}_debayered";
 
     QVBoxLayout* mainLayout = new QVBoxLayout(this);
+    mainLayout->setSizeConstraint(QLayout::SetFixedSize);
     mainLayout->setContentsMargins(15, 15, 15, 15);
     mainLayout->setSpacing(12);
 
@@ -185,6 +187,30 @@ void DebayerDialog::refreshWorkspaceElements() {
     if (idx >= 0) {
         m_targetInputCombo->setCurrentIndex(idx);
     }
+}
+
+QJsonObject DebayerDialog::serializeState() const {
+    QJsonObject obj;
+    obj["pattern"] = m_patternCombo->currentData().toString();
+    obj["method"] = m_methodCombo->currentData().toString();
+    obj["green_equalize"] = m_greenEqualize;
+    obj["threads"] = m_threads;
+    return obj;
+}
+
+void DebayerDialog::restoreState(const QJsonObject& obj) {
+    if (obj.contains("pattern")) {
+        int idx = m_patternCombo->findData(obj["pattern"].toString());
+        if (idx >= 0) m_patternCombo->setCurrentIndex(idx);
+    }
+    if (obj.contains("method")) {
+        int idx = m_methodCombo->findData(obj["method"].toString());
+        if (idx >= 0) m_methodCombo->setCurrentIndex(idx);
+    }
+    if (obj.contains("green_equalize"))
+        m_greenEqualize = obj["green_equalize"].toBool();
+    if (obj.contains("threads"))
+        m_threads = obj["threads"].toInt();
 }
 
 } // namespace blastro

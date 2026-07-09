@@ -119,13 +119,9 @@ PreferencesWindow::PreferencesWindow(QWidget* parent)
     layoutTemp->addWidget(btnBrowseTemp);
     pathsForm->addRow("Temporary Folder:", layoutTemp);
 
-    m_intermediateEdit = new QLineEdit(this);
-    QPushButton* btnBrowseIntermediate = new QPushButton("Browse...", this);
-    connect(btnBrowseIntermediate, &QPushButton::clicked, this, &PreferencesWindow::onBrowseIntermediate);
-    QHBoxLayout* layoutIntermediate = new QHBoxLayout();
-    layoutIntermediate->addWidget(m_intermediateEdit, 1);
-    layoutIntermediate->addWidget(btnBrowseIntermediate);
-    pathsForm->addRow("Intermediate Folder (Batches):", layoutIntermediate);
+    m_processFolderEdit = new QLineEdit(this);
+    m_processFolderEdit->setPlaceholderText("process");
+    pathsForm->addRow("Process Folder Name:", m_processFolderEdit);
     generalLayout->addWidget(pathsGroup);
 
     // Group 3: System Resource Settings
@@ -210,7 +206,7 @@ PreferencesWindow::PreferencesWindow(QWidget* parent)
     m_preloadChk->setChecked(prefs.getPclPreloadLibDir());
     m_tensorflowUrlEdit->setText(QString::fromStdString(prefs.getPclTensorflowDownloadUrl()));
     m_tempEdit->setText(QString::fromStdString(prefs.getTemporaryFolder()));
-    m_intermediateEdit->setText(QString::fromStdString(prefs.getIntermediateFolder()));
+    m_processFolderEdit->setText(QString::fromStdString(prefs.getProcessFolderName()));
     m_threadSpin->setValue(prefs.getThreadCount());
     m_ramSpin->setValue(prefs.getMaxRamUsage());
 
@@ -248,13 +244,6 @@ void PreferencesWindow::onBrowseTemp() {
     }
 }
 
-void PreferencesWindow::onBrowseIntermediate() {
-    QString dir = QFileDialog::getExistingDirectory(this, "Select Intermediate Folder", m_intermediateEdit->text());
-    if (!dir.isEmpty()) {
-        m_intermediateEdit->setText(dir);
-    }
-}
-
 void PreferencesWindow::onSaveClicked() {
     Preferences& prefs = Preferences::instance();
     prefs.setPclModuleFolder(m_moduleEdit->text().trimmed().toStdString());
@@ -263,7 +252,9 @@ void PreferencesWindow::onSaveClicked() {
     prefs.setPclPreloadLibDir(m_preloadChk->isChecked());
     prefs.setPclTensorflowDownloadUrl(m_tensorflowUrlEdit->text().trimmed().toStdString());
     prefs.setTemporaryFolder(m_tempEdit->text().trimmed().toStdString());
-    prefs.setIntermediateFolder(m_intermediateEdit->text().trimmed().toStdString());
+    QString folderName = m_processFolderEdit->text().trimmed();
+    if (folderName.isEmpty()) folderName = "process";
+    prefs.setProcessFolderName(folderName.toStdString());
     prefs.setThreadCount(m_threadSpin->value());
     prefs.setMaxRamUsage(m_ramSpin->value());
 

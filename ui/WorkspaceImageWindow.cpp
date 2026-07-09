@@ -379,7 +379,7 @@ void WorkspaceImageWindow::onStretchParamsChangedInView(double b, double w, doub
 }
 
 void WorkspaceImageWindow::onFrameChanged(int index) {
-    Q_UNUSED(index);
+    m_currentFrame = index;
     updateHistogram();
 }
 
@@ -636,6 +636,34 @@ void WorkspaceImageWindow::redo() {
 
     setElement(elem, true);
     emit undoRedoStateChanged();
+}
+
+QJsonObject WorkspaceImageWindow::serializeWindowState() const {
+    QJsonObject obj;
+    obj["hist_expanded"] = m_histExpanded;
+    obj["current_frame"] = m_currentFrame;
+    if (m_imageView) {
+        obj["view"] = m_imageView->serializeViewState();
+    }
+    return obj;
+}
+
+void WorkspaceImageWindow::restoreWindowState(const QJsonObject& obj) {
+    // Restore histogram expansion
+    if (obj.contains("hist_expanded")) {
+        bool expand = obj["hist_expanded"].toBool();
+        if (expand != m_histExpanded) {
+            onExpandHistClicked(); // toggles the state
+        }
+    }
+    // Restore frame index for batches
+    if (obj.contains("current_frame") && obj["current_frame"].toInt() != m_currentFrame) {
+        onFrameChanged(obj["current_frame"].toInt());
+    }
+    // Restore view state
+    if (m_imageView && obj.contains("view")) {
+        m_imageView->restoreViewState(obj["view"].toObject());
+    }
 }
 
 } // namespace blastro

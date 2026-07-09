@@ -17,6 +17,7 @@
  */
 
 #include "PixelMathDialog.h"
+#include <QJsonObject>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QFormLayout>
@@ -45,6 +46,7 @@ PixelMathDialog::PixelMathDialog(WorkspaceRegistry& workspace, QWidget* parent)
     resize(500, 400);
 
     QVBoxLayout* mainLayout = new QVBoxLayout(this);
+    mainLayout->setSizeConstraint(QLayout::SetFixedSize);
 
     // 1. Image References Info Box
     QGroupBox* infoBox = new QGroupBox("Available Images (use as variables)", this);
@@ -235,6 +237,40 @@ void PixelMathDialog::refreshWorkspaceElements() {
         }
         m_infoLabel->setText(infoText);
     }
+}
+
+QJsonObject PixelMathDialog::serializeState() const {
+    QJsonObject obj;
+    obj["expr_r"] = m_exprR->text();
+    obj["expr_g"] = m_exprG->text();
+    obj["expr_b"] = m_exprB->text();
+    obj["expr_k"] = m_exprK->text();
+    obj["use_single_expr"] = m_useSingleExpr->isChecked();
+    obj["output_mode"] = m_rgbMode->isChecked() ? QString("rgb") : QString("grayscale");
+    obj["create_new"] = m_createNewImage->isChecked();
+    obj["output_name"] = m_outputName->text();
+    return obj;
+}
+
+void PixelMathDialog::restoreState(const QJsonObject& obj) {
+    if (obj.contains("expr_r")) m_exprR->setText(obj["expr_r"].toString());
+    if (obj.contains("expr_g")) m_exprG->setText(obj["expr_g"].toString());
+    if (obj.contains("expr_b")) m_exprB->setText(obj["expr_b"].toString());
+    if (obj.contains("expr_k")) m_exprK->setText(obj["expr_k"].toString());
+    if (obj.contains("use_single_expr"))
+        m_useSingleExpr->setChecked(obj["use_single_expr"].toBool());
+    if (obj.contains("output_mode")) {
+        bool isRgb = obj["output_mode"].toString() == "rgb";
+        m_rgbMode->setChecked(isRgb);
+        m_grayMode->setChecked(!isRgb);
+    }
+    if (obj.contains("create_new")) {
+        bool createNew = obj["create_new"].toBool();
+        m_createNewImage->setChecked(createNew);
+        m_replaceTargetImage->setChecked(!createNew);
+    }
+    if (obj.contains("output_name"))
+        m_outputName->setText(obj["output_name"].toString());
 }
 
 } // namespace blastro

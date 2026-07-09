@@ -46,8 +46,8 @@ public:
     std::string getTemporaryFolder() const;
     void setTemporaryFolder(const std::string& path);
 
-    std::string getIntermediateFolder() const;
-    void setIntermediateFolder(const std::string& path);
+    std::string getProcessFolderName() const;
+    void setProcessFolderName(const std::string& name);
 
     int getThreadCount() const;
     void setThreadCount(int count);
@@ -75,7 +75,7 @@ private:
     bool m_pclPreloadLibDir;
     std::string m_pclTensorflowDownloadUrl;
     std::string m_temporaryFolder;
-    std::string m_intermediateFolder;
+    std::string m_processFolderName;
     int m_threadCount;
     std::string m_stackingMode;
     int m_maxRamUsage;

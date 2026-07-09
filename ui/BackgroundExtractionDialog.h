@@ -38,6 +38,8 @@ public:
 
     std::map<std::string, std::string> getConfig() const override;
     std::string algorithmName() const override { return "BackgroundExtraction"; }
+    QJsonObject serializeState() const override;
+    void restoreState(const QJsonObject& obj) override;
 
 protected:
     void showEvent(QShowEvent* event) override;

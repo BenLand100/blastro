@@ -24,6 +24,7 @@
 #include <QGraphicsView>
 #include <QGraphicsScene>
 #include <QGraphicsPixmapItem>
+#include <QJsonObject>
 #include <QWheelEvent>
 
 namespace blastro {
@@ -78,6 +79,10 @@ public:
     void zoomOut();
     void resetZoom();
     bool fitToWindow();
+
+    // Serialization
+    QJsonObject serializeViewState() const;
+    void restoreViewState(const QJsonObject& obj);
 
     void setFrameSelectedStatus(bool selected);
 

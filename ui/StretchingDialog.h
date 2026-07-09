@@ -39,6 +39,8 @@ public:
 
     std::map<std::string, std::string> getConfig() const override;
     std::string algorithmName() const override { return "Stretching"; }
+    QJsonObject serializeState() const override;
+    void restoreState(const QJsonObject& obj) override;
 
 protected:
     void closeEvent(QCloseEvent* event) override;

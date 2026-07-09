@@ -42,6 +42,7 @@
 #include "UpdateManagerDialog.h"
 #include "core/TempDirectory.h"
 #include "core/Preferences.h"
+#include "core/ProjectSerializer.h"
 #include "WorkspaceImageWindow.h"
 #include "PreprocessingWizardDialog.h"
 #include "BatchImageWidget.h"
@@ -56,6 +57,7 @@
 #include <QDir>
 #include <QDirIterator>
 #include <QStatusBar>
+#include <QStandardPaths>
 #include <QTimer>
 
 namespace blastro {
@@ -171,6 +173,49 @@ MainWindow::MainWindow(QWidget* parent)
             }
         }
     });
+
+    // Initialise persistent algorithm dialogs (not shown yet, just allocated)
+    m_stretchingDlg  = new StretchingDialog(m_workspace, this);
+    m_bgeDlg         = new BackgroundExtractionDialog(m_workspace, this);
+    m_stackingDlg    = new StackingDialog(m_workspace, this);
+    m_registerDlg    = new RegisterDialog(m_workspace, this);
+    m_alignDlg       = new AlignDialog(m_workspace, this);
+    m_debayerDlg     = new DebayerDialog(m_workspace, this);
+    m_calibrationDlg = new CalibrationDialog(m_workspace, this);
+    m_pixelMathDlg   = new PixelMathDialog(m_workspace, this);
+    m_ppwDlg         = new PreprocessingWizardDialog(m_workspace, this);
+
+    // Wire persistent dialog signals
+    connect(m_stretchingDlg,  &StretchingDialog::algorithmExecuted,          this, &MainWindow::executeAlgorithmSlot);
+    connect(m_bgeDlg,          &BackgroundExtractionDialog::algorithmExecuted, this, &MainWindow::executeAlgorithmSlot);
+    connect(m_stackingDlg,     &StackingDialog::algorithmExecuted,            this, &MainWindow::executeAlgorithmSlot);
+    connect(m_registerDlg,     &RegisterDialog::algorithmExecuted,            this, &MainWindow::executeAlgorithmSlot);
+    connect(m_alignDlg,        &AlignDialog::algorithmExecuted,               this, &MainWindow::executeAlgorithmSlot);
+    connect(m_debayerDlg,      &DebayerDialog::algorithmExecuted,             this, &MainWindow::executeAlgorithmSlot);
+    connect(m_calibrationDlg,  &CalibrationDialog::algorithmExecuted,        this, &MainWindow::executeAlgorithmSlot);
+    connect(m_pixelMathDlg,    &PixelMathDialog::algorithmExecuted,           this, &MainWindow::executeAlgorithmSlot);
+
+    // Add them to MDI area and hide them initially
+    m_stretchingSub  = m_workspaceArea->addSubWindow(m_stretchingDlg);  m_stretchingSub->hide();
+    m_bgeSub         = m_workspaceArea->addSubWindow(m_bgeDlg);         m_bgeSub->hide();
+    m_stackingSub    = m_workspaceArea->addSubWindow(m_stackingDlg);    m_stackingSub->hide();
+    m_registerSub    = m_workspaceArea->addSubWindow(m_registerDlg);    m_registerSub->hide();
+    m_alignSub       = m_workspaceArea->addSubWindow(m_alignDlg);       m_alignSub->hide();
+    m_debayerSub     = m_workspaceArea->addSubWindow(m_debayerDlg);     m_debayerSub->hide();
+    m_calibrationSub = m_workspaceArea->addSubWindow(m_calibrationDlg); m_calibrationSub->hide();
+    m_pixelMathSub   = m_workspaceArea->addSubWindow(m_pixelMathDlg);   m_pixelMathSub->hide();
+    m_ppwSub         = m_workspaceArea->addSubWindow(m_ppwDlg);         m_ppwSub->hide();
+
+    // Disable WA_DeleteOnClose to keep dialog widgets alive on close
+    m_stretchingSub->setAttribute(Qt::WA_DeleteOnClose, false);
+    m_bgeSub->setAttribute(Qt::WA_DeleteOnClose, false);
+    m_stackingSub->setAttribute(Qt::WA_DeleteOnClose, false);
+    m_registerSub->setAttribute(Qt::WA_DeleteOnClose, false);
+    m_alignSub->setAttribute(Qt::WA_DeleteOnClose, false);
+    m_debayerSub->setAttribute(Qt::WA_DeleteOnClose, false);
+    m_calibrationSub->setAttribute(Qt::WA_DeleteOnClose, false);
+    m_pixelMathSub->setAttribute(Qt::WA_DeleteOnClose, false);
+    m_ppwSub->setAttribute(Qt::WA_DeleteOnClose, false);
 }
 
 void MainWindow::createMenus() {
@@ -204,6 +249,25 @@ void MainWindow::createMenus() {
     connect(m_saveBatchAct, &QAction::triggered, this, &MainWindow::onSaveActiveBatch);
     m_saveBatchAct->setEnabled(false); // Grayed out by default
     m_fileMenu->addAction(m_saveBatchAct);
+
+    m_fileMenu->addSeparator();
+
+    // Project Group
+    m_newProjectAct = new QAction("New Project", this);
+    connect(m_newProjectAct, &QAction::triggered, this, &MainWindow::onNewProject);
+    m_fileMenu->addAction(m_newProjectAct);
+
+    m_openProjectAct = new QAction("Open Project", this);
+    connect(m_openProjectAct, &QAction::triggered, this, &MainWindow::onOpenProject);
+    m_fileMenu->addAction(m_openProjectAct);
+
+    m_saveProjectAct = new QAction("Save Project", this);
+    connect(m_saveProjectAct, &QAction::triggered, this, &MainWindow::onSaveProject);
+    m_fileMenu->addAction(m_saveProjectAct);
+
+    m_saveProjectAsAct = new QAction("Save Project As...", this);
+    connect(m_saveProjectAsAct, &QAction::triggered, this, &MainWindow::onSaveProjectAs);
+    m_fileMenu->addAction(m_saveProjectAsAct);
 
     m_fileMenu->addSeparator();
 
@@ -669,74 +733,57 @@ void MainWindow::onSaveActiveBatch() {
 }
 
 void MainWindow::onOpenPixelMath() {
-    PixelMathDialog* dlg = new PixelMathDialog(m_workspace, this);
-    connect(dlg, &PixelMathDialog::algorithmExecuted, this, &MainWindow::executeAlgorithmSlot);
-    QMdiSubWindow* sub = m_workspaceArea->addSubWindow(dlg);
-    sub->setAttribute(Qt::WA_DeleteOnClose);
-    sub->show();
+    m_pixelMathSub->show();
+    m_pixelMathSub->raise();
+    m_workspaceArea->setActiveSubWindow(m_pixelMathSub);
 }
 
 void MainWindow::onOpenStacking() {
-    StackingDialog* dlg = new StackingDialog(m_workspace, this);
-    connect(dlg, &StackingDialog::algorithmExecuted, this, &MainWindow::executeAlgorithmSlot);
-    QMdiSubWindow* sub = m_workspaceArea->addSubWindow(dlg);
-    sub->setAttribute(Qt::WA_DeleteOnClose);
-    sub->show();
+    m_stackingSub->show();
+    m_stackingSub->raise();
+    m_workspaceArea->setActiveSubWindow(m_stackingSub);
 }
 
 void MainWindow::onOpenCalibration() {
-    CalibrationDialog* dlg = new CalibrationDialog(m_workspace, this);
-    connect(dlg, &CalibrationDialog::algorithmExecuted, this, &MainWindow::executeAlgorithmSlot);
-    QMdiSubWindow* sub = m_workspaceArea->addSubWindow(dlg);
-    sub->setAttribute(Qt::WA_DeleteOnClose);
-    sub->show();
+    m_calibrationSub->show();
+    m_calibrationSub->raise();
+    m_workspaceArea->setActiveSubWindow(m_calibrationSub);
 }
 
 void MainWindow::onOpenDebayer() {
-    DebayerDialog* dlg = new DebayerDialog(m_workspace, this);
-    connect(dlg, &DebayerDialog::algorithmExecuted, this, &MainWindow::executeAlgorithmSlot);
-    QMdiSubWindow* sub = m_workspaceArea->addSubWindow(dlg);
-    sub->setAttribute(Qt::WA_DeleteOnClose);
-    sub->show();
+    m_debayerSub->show();
+    m_debayerSub->raise();
+    m_workspaceArea->setActiveSubWindow(m_debayerSub);
 }
 
 void MainWindow::onOpenRegister() {
-    RegisterDialog* dlg = new RegisterDialog(m_workspace, this);
-    connect(dlg, &RegisterDialog::algorithmExecuted, this, &MainWindow::executeAlgorithmSlot);
-    QMdiSubWindow* sub = m_workspaceArea->addSubWindow(dlg);
-    sub->setAttribute(Qt::WA_DeleteOnClose);
-    sub->show();
+    m_registerSub->show();
+    m_registerSub->raise();
+    m_workspaceArea->setActiveSubWindow(m_registerSub);
 }
 
 void MainWindow::onOpenAlign() {
-    AlignDialog* dlg = new AlignDialog(m_workspace, this);
-    connect(dlg, &AlignDialog::algorithmExecuted, this, &MainWindow::executeAlgorithmSlot);
-    QMdiSubWindow* sub = m_workspaceArea->addSubWindow(dlg);
-    sub->setAttribute(Qt::WA_DeleteOnClose);
-    sub->show();
+    m_alignSub->show();
+    m_alignSub->raise();
+    m_workspaceArea->setActiveSubWindow(m_alignSub);
 }
 
 void MainWindow::onOpenBackgroundExtraction() {
-    BackgroundExtractionDialog* dlg = new BackgroundExtractionDialog(m_workspace, this);
-    connect(dlg, &BackgroundExtractionDialog::algorithmExecuted, this, &MainWindow::executeAlgorithmSlot);
-    QMdiSubWindow* sub = m_workspaceArea->addSubWindow(dlg);
-    sub->setAttribute(Qt::WA_DeleteOnClose);
-    sub->show();
+    m_bgeSub->show();
+    m_bgeSub->raise();
+    m_workspaceArea->setActiveSubWindow(m_bgeSub);
 }
 
 void MainWindow::onOpenPpw() {
-    PreprocessingWizardDialog* dlg = new PreprocessingWizardDialog(m_workspace, this);
-    QMdiSubWindow* sub = m_workspaceArea->addSubWindow(dlg);
-    sub->setAttribute(Qt::WA_DeleteOnClose);
-    sub->show();
+    m_ppwSub->show();
+    m_ppwSub->raise();
+    m_workspaceArea->setActiveSubWindow(m_ppwSub);
 }
 
 void MainWindow::onOpenGhs() {
-    StretchingDialog* dlg = new StretchingDialog(m_workspace, this);
-    connect(dlg, &StretchingDialog::algorithmExecuted, this, &MainWindow::executeAlgorithmSlot);
-    QMdiSubWindow* sub = m_workspaceArea->addSubWindow(dlg);
-    sub->setAttribute(Qt::WA_DeleteOnClose);
-    sub->show();
+    m_stretchingSub->show();
+    m_stretchingSub->raise();
+    m_workspaceArea->setActiveSubWindow(m_stretchingSub);
 }
 
 void AlgorithmWorker::run() {
@@ -818,6 +865,12 @@ void MainWindow::closeEvent(QCloseEvent* event) {
             }
         }
     }
+
+    // Save session (dialog settings + tool window positions, no image data)
+    ProjectSerializer::saveSession(defaultSessionPath(),
+                                   m_workspaceArea,
+                                   buildDialogSet(),
+                                   this);
 
     m_pclBridge.reset(); // Cleanly unload the PCL module
     TempDirectory::cleanup(); // Clean up temporary directories
@@ -1494,7 +1547,7 @@ void MainWindow::updateWindowMenu() {
     QList<QMdiSubWindow*> images;
 
     for (auto* subWindow : m_workspaceArea->subWindowList()) {
-        if (!subWindow || !subWindow->widget()) continue;
+        if (!subWindow || !subWindow->widget() || !subWindow->isVisible()) continue;
         
         // Skip LogWindow itself as it is handled first
         if (qobject_cast<LogWindow*>(subWindow->widget())) continue;
@@ -2015,6 +2068,147 @@ void MainWindow::onToggleShowBgeControlPoints(bool checked) {
                 iv->setShowBgeControlPoints(checked, true);
             }
         }
+    }
+}
+
+// ── Project / session helpers ─────────────────────────────────────────────────
+
+DialogSet MainWindow::buildDialogSet() const {
+    DialogSet ds;
+    ds.stretching  = m_stretchingDlg;
+    ds.bge         = m_bgeDlg;
+    ds.stacking    = m_stackingDlg;
+    ds.registerDlg = m_registerDlg;
+    ds.align       = m_alignDlg;
+    ds.debayer     = m_debayerDlg;
+    ds.calibration = m_calibrationDlg;
+    ds.pixelMath   = m_pixelMathDlg;
+    ds.ppw         = m_ppwDlg;
+    return ds;
+}
+
+QString MainWindow::defaultSessionPath() {
+    QString configDir = QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation);
+    if (configDir.isEmpty()) configDir = QDir::homePath() + "/.config/BLastro";
+    return QDir(configDir).filePath("last_session.json");
+}
+
+void MainWindow::applyStartupOptions(const StartupOptions& opts) {
+    if (!opts.projectPath.isEmpty()) {
+        openProject(opts.projectPath);
+    } else if (!opts.sessionPath.isEmpty()) {
+        ProjectSerializer::loadSession(opts.sessionPath, m_workspaceArea, buildDialogSet(), this);
+    } else if (!opts.noRestore) {
+        ProjectSerializer::loadSession(defaultSessionPath(), m_workspaceArea, buildDialogSet(), this);
+    }
+}
+
+bool MainWindow::openProject(const QString& projectDir) {
+    // Change CWD to the project directory
+    if (!QDir::setCurrent(projectDir)) {
+        QMessageBox::critical(this, "Open Project", "Cannot change working directory to:\n" + projectDir);
+        return false;
+    }
+    m_projectPath = projectDir;
+    setWindowTitle(QString("BLastro — %1").arg(QDir(projectDir).dirName()));
+
+    bool ok = ProjectSerializer::loadProject(projectDir,
+                                              m_workspace,
+                                              m_workspaceArea,
+                                              this,
+                                              buildDialogSet());
+    // Update PPW process folder label
+    if (m_ppwDlg) m_ppwDlg->updateProcessDirLabel();
+    return ok;
+}
+
+bool MainWindow::saveProject() {
+    if (m_projectPath.isEmpty()) return saveProjectAs("");
+    return ProjectSerializer::saveProject(m_projectPath,
+                                          m_workspace,
+                                          m_workspaceArea,
+                                          buildDialogSet(),
+                                          this);
+}
+
+bool MainWindow::saveProjectAs(const QString& dir) {
+    QString projectDir = dir;
+    if (projectDir.isEmpty()) {
+        projectDir = QFileDialog::getExistingDirectory(this,
+            "Select Project Folder", QDir::currentPath());
+    }
+    if (projectDir.isEmpty()) return false;
+
+    // Ask about external references
+    QStringList external = ProjectSerializer::externalReferences(projectDir, m_workspace);
+    if (!external.isEmpty()) {
+        auto result = QMessageBox::question(this, "External References",
+            QString("The project contains %1 file(s) located outside the project folder.\n"
+                    "Would you like to copy them into the project now?\n\n"
+                    "(If you choose No, the project will reference them by absolute path.)").
+                    arg(external.size()),
+            QMessageBox::Yes | QMessageBox::No | QMessageBox::Cancel);
+        if (result == QMessageBox::Cancel) return false;
+        if (result == QMessageBox::Yes) {
+            ProjectSerializer::copyReferencesIntoProject(projectDir, m_workspace);
+        }
+    }
+
+    QDir::setCurrent(projectDir);
+    m_projectPath = projectDir;
+    setWindowTitle(QString("BLastro — %1").arg(QDir(projectDir).dirName()));
+    if (m_ppwDlg) m_ppwDlg->updateProcessDirLabel();
+    return ProjectSerializer::saveProject(projectDir,
+                                          m_workspace,
+                                          m_workspaceArea,
+                                          buildDialogSet(),
+                                          this);
+}
+
+void MainWindow::onNewProject() {
+    QString projectDir = QFileDialog::getExistingDirectory(this,
+        "Select New Project Folder", QDir::currentPath());
+    if (projectDir.isEmpty()) return;
+    QDir::setCurrent(projectDir);
+    m_projectPath = projectDir;
+    setWindowTitle(QString("BLastro — %1").arg(QDir(projectDir).dirName()));
+    if (m_ppwDlg) m_ppwDlg->updateProcessDirLabel();
+}
+
+void MainWindow::onOpenProject() {
+    QString projectDir = QFileDialog::getExistingDirectory(this,
+        "Open Project Folder", QDir::currentPath());
+    if (projectDir.isEmpty()) return;
+    openProject(projectDir);
+}
+
+void MainWindow::onSaveProject() {
+    saveProject();
+}
+
+void MainWindow::onSaveProjectAs() {
+    saveProjectAs("");
+}
+
+void MainWindow::loadBatchPaths(const QStringList& paths, const QString& name) {
+    if (paths.isEmpty()) return;
+    try {
+        FitsIO reader;
+        std::vector<std::string> names, filepaths;
+        ImageBatch::LoaderFunc loader = [paths, &reader](int i) -> ImageVariant {
+            return std::visit([](auto&& arg) -> ImageVariant { return arg; },
+                              reader.readImage(paths[i].toStdString()));
+        };
+        for (const auto& p : paths) {
+            QFileInfo fi(p);
+            names.push_back(fi.completeBaseName().toStdString());
+            filepaths.push_back(p.toStdString());
+        }
+        auto batch = std::make_shared<ImageBatch>(paths.size(), loader, names, filepaths);
+        QString wsName = name.isEmpty() ? QFileInfo(paths.first()).completeBaseName() : name;
+        addImageToWorkspace(wsName, batch);
+    } catch (const std::exception& e) {
+        qWarning() << "[MainWindow::loadBatchPaths] Error:" << e.what();
     }
 }
 

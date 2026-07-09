@@ -21,6 +21,7 @@
 #include "ImageView.h"
 #include "HistogramWidget.h"
 #include <QWidget>
+#include <QJsonObject>
 #include <QPushButton>
 #include <QButtonGroup>
 #include <QLabel>
@@ -53,6 +54,10 @@ public:
     bool canRedo() const { return !m_redoStack.empty(); }
     void saveUndoState();
     void clearUndoRedo();
+
+    // Serialization
+    QJsonObject serializeWindowState() const;
+    void restoreWindowState(const QJsonObject& obj);
 
     // Live Preview Support
     void setPreviewImage(const ImageVariant& previewImage);
@@ -96,6 +101,7 @@ private:
     QWidget* m_headerHistContainer;
     QWidget* m_expandedHistBar;
     bool m_histExpanded = false;
+    int m_currentFrame = 0;  // tracks current batch frame for serialization
 
     // Channel selection buttons for RGB Images
     QButtonGroup* m_channelGroup;

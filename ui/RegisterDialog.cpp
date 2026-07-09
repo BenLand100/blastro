@@ -17,6 +17,7 @@
  */
 
 #include "RegisterDialog.h"
+#include <QJsonObject>
 #include "core/Preferences.h"
 #include <QVBoxLayout>
 #include <QFormLayout>
@@ -37,6 +38,7 @@ RegisterDialog::RegisterDialog(WorkspaceRegistry& workspace, QWidget* parent)
 
 
     QVBoxLayout* mainLayout = new QVBoxLayout(this);
+    mainLayout->setSizeConstraint(QLayout::SetFixedSize);
     mainLayout->setContentsMargins(15, 15, 15, 15);
     mainLayout->setSpacing(12);
 
@@ -204,6 +206,46 @@ void RegisterDialog::refreshWorkspaceElements() {
     if (idx >= 0) {
         m_targetInputCombo->setCurrentIndex(idx);
     }
+}
+
+QJsonObject RegisterDialog::serializeState() const {
+    QJsonObject obj;
+    obj["detection_method"] = m_methodCombo->currentData().toString();
+    obj["snr_min"] = m_snrSpin->value();
+    obj["min_fwhm"] = m_minFwhmSpin->value();
+    obj["ref_frame_index"] = m_refIdxSpin->value();
+    obj["max_stars"] = m_maxStars;
+    obj["max_eccentricity"] = m_maxEccentricity;
+    obj["match_tol"] = m_matchTol;
+    obj["simplex_tol"] = m_simplexTol;
+    obj["simplex_max_iter"] = m_simplexMaxIter;
+    obj["threads"] = m_threads;
+    return obj;
+}
+
+void RegisterDialog::restoreState(const QJsonObject& obj) {
+    if (obj.contains("detection_method")) {
+        int idx = m_methodCombo->findData(obj["detection_method"].toString());
+        if (idx >= 0) m_methodCombo->setCurrentIndex(idx);
+    }
+    if (obj.contains("snr_min"))
+        m_snrSpin->setValue(obj["snr_min"].toDouble());
+    if (obj.contains("min_fwhm"))
+        m_minFwhmSpin->setValue(obj["min_fwhm"].toDouble());
+    if (obj.contains("ref_frame_index"))
+        m_refIdxSpin->setValue(obj["ref_frame_index"].toInt());
+    if (obj.contains("max_stars"))
+        m_maxStars = obj["max_stars"].toInt();
+    if (obj.contains("max_eccentricity"))
+        m_maxEccentricity = obj["max_eccentricity"].toDouble();
+    if (obj.contains("match_tol"))
+        m_matchTol = obj["match_tol"].toDouble();
+    if (obj.contains("simplex_tol"))
+        m_simplexTol = obj["simplex_tol"].toDouble();
+    if (obj.contains("simplex_max_iter"))
+        m_simplexMaxIter = obj["simplex_max_iter"].toInt();
+    if (obj.contains("threads"))
+        m_threads = obj["threads"].toInt();
 }
 
 } // namespace blastro
