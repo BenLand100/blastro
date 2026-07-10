@@ -36,11 +36,11 @@ struct Star {
 class StarFinder {
 public:
     // Finds stars in a grayscale image.
-    // Methods: "centroid" (fast centroid), "gaussian" (global threshold + Gaussian fit), "sota" (local block-based max search + hybrid fit)
+    // Methods: "centroid" (fast centroid), "gaussian" (global threshold + Gaussian fit), "adaptive" (local block-based max search + hybrid fit)
     static std::vector<Star> findStars(GrayscaleImagePtr img,
                                        int maxStars = 250,
                                        double snrMin = 5.0,
-                                       const std::string& method = "sota",
+                                       const std::string& method = "adaptive",
                                        int patchRadius = 10,
                                        double minFwhm = 2.0,
                                        double maxEccentricity = 0.85);

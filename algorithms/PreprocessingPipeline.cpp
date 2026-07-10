@@ -681,7 +681,7 @@ void PreprocessingPipeline::execute(WorkspaceRegistry& workspace,
                 Logger::info("Preprocessing", "Registering calibrated light frames...");
                 std::string starMinSnr = config.count("star_min_snr") ? config.at("star_min_snr") : "4.0";
                 std::string starMinFwhm = config.count("star_min_fwhm") ? config.at("star_min_fwhm") : "1.5";
-                std::string starDetectMethod = config.count("star_detection_method") ? config.at("star_detection_method") : "sota";
+                std::string starDetectMethod = config.count("star_detection_method") ? config.at("star_detection_method") : "adaptive";
                 std::string starMaxStars = config.count("star_max_stars") ? config.at("star_max_stars") : "500";
                 std::string starMaxEcc = config.count("star_max_eccentricity") ? config.at("star_max_eccentricity") : "0.9";
                 std::string transModel = config.count("transformation_model") ? config.at("transformation_model") : "rigid";
@@ -765,7 +765,7 @@ void PreprocessingPipeline::execute(WorkspaceRegistry& workspace,
 
             std::string starMinSnr = config.count("star_min_snr") ? config.at("star_min_snr") : "4.0";
             std::string starMinFwhm = config.count("star_min_fwhm") ? config.at("star_min_fwhm") : "1.5";
-            std::string starDetectMethod = config.count("star_detection_method") ? config.at("star_detection_method") : "sota";
+            std::string starDetectMethod = config.count("star_detection_method") ? config.at("star_detection_method") : "adaptive";
             std::string starMaxStars = config.count("star_max_stars") ? config.at("star_max_stars") : "500";
             std::string starMaxEcc = config.count("star_max_eccentricity") ? config.at("star_max_eccentricity") : "0.9";
             std::string transModel = config.count("transformation_model") ? config.at("transformation_model") : "rigid";

@@ -375,7 +375,7 @@ PreprocessingWizardDialog::PreprocessingWizardDialog(WorkspaceRegistry& workspac
         controlLayout->addWidget(hdr);
         controlLayout->addWidget(body);
 
-        m_starDetectionMethodCombo->addItem("Advanced Adaptive", "sota");
+        m_starDetectionMethodCombo->addItem("Advanced Adaptive", "adaptive");
         m_starDetectionMethodCombo->addItem("Basic Centroid", "centroid");
         m_starDetectionMethodCombo->addItem("Standard Gaussian", "gaussian");
         form->addRow("Detection Method:", m_starDetectionMethodCombo);

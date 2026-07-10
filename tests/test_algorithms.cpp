@@ -110,18 +110,18 @@ void testGaussianStarFitting() {
     assert(approxEqual(fastStar.x, trueX, 0.3));
     assert(approxEqual(fastStar.y, trueY, 0.3));
 
-    // 3. Test SOTA star finder (method = "sota")
-    std::vector<Star> sotaStars = StarFinder::findStars(img, 10, 3.0, "sota", 10, 1.5, 0.85);
-    if (sotaStars.empty()) {
-        std::cerr << "[-] Error: SOTA star finder returned 0 stars" << std::endl;
+    // 3. Test Adaptive star finder (method = "adaptive")
+    std::vector<Star> adaptiveStars = StarFinder::findStars(img, 10, 3.0, "adaptive", 10, 1.5, 0.85);
+    if (adaptiveStars.empty()) {
+        std::cerr << "[-] Error: Adaptive star finder returned 0 stars" << std::endl;
         std::exit(1);
     }
-    Star sotaStar = sotaStars[0];
-    std::cout << "[+] SOTA Star found at (" << sotaStar.x << ", " << sotaStar.y 
-              << "), FWHM: " << sotaStar.fwhm << ", Peak: " << sotaStar.peak 
-              << ", Bg: " << sotaStar.background << std::endl;
-    assert(approxEqual(sotaStar.x, trueX, 0.15));
-    assert(approxEqual(sotaStar.y, trueY, 0.15));
+    Star adaptiveStar = adaptiveStars[0];
+    std::cout << "[+] Adaptive Star found at (" << adaptiveStar.x << ", " << adaptiveStar.y 
+              << "), FWHM: " << adaptiveStar.fwhm << ", Peak: " << adaptiveStar.peak 
+              << ", Bg: " << adaptiveStar.background << std::endl;
+    assert(approxEqual(adaptiveStar.x, trueX, 0.15));
+    assert(approxEqual(adaptiveStar.y, trueY, 0.15));
 
     std::cout << "[+] Gaussian Star Fitting Test PASSED." << std::endl << std::endl;
 }
@@ -1070,7 +1070,7 @@ void testLightFramePipeline() {
         stacked,
         /*maxStars=*/20,
         /*snrMin=*/3.0,
-        /*method=*/"sota",
+        /*method=*/"adaptive",
         /*patchRadius=*/12,
         /*minFwhm=*/1.5,
         /*maxEccentricity=*/0.90

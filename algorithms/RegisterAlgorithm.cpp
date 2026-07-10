@@ -51,7 +51,7 @@ void RegisterAlgorithm::execute(WorkspaceRegistry& workspace,
     int refFrameIdx = std::stoi(config.at("ref_frame_index"));
     std::string detectionMethod = config.at("detection_method");
     if (detectionMethod == "starfinder") {
-        detectionMethod = "sota";
+        detectionMethod = "adaptive";
     }
     double snrMin = std::stod(config.at("snr_min"));
     double minFwhm = std::stod(config.at("min_fwhm"));
@@ -103,12 +103,12 @@ void RegisterAlgorithm::execute(WorkspaceRegistry& workspace,
         throw std::runtime_error("Failed to extract registration channel from reference frame");
     }
 
-    // Detect all stars (up to 10,000) for statistics in SOTA mode, but slice top maxStars for matching
-    int maxStarsDetect = (detectionMethod == "sota") ? 10000 : maxStars;
+    // Detect all stars (up to 10,000) for statistics in Adaptive mode, but slice top maxStars for matching
+    int maxStarsDetect = (detectionMethod == "adaptive") ? 10000 : maxStars;
     std::vector<Star> refStars = StarFinder::findStars(refChannel, maxStarsDetect, snrMin, detectionMethod, 10, minFwhm, maxEccentricity);
     
     std::vector<Star> refStarsForMatching = refStars;
-    if (detectionMethod == "sota") {
+    if (detectionMethod == "adaptive") {
         // Sort stars descending by peak brightness
         std::sort(refStarsForMatching.begin(), refStarsForMatching.end(), [](const Star& a, const Star& b) {
             return a.peak > b.peak;
@@ -196,12 +196,12 @@ void RegisterAlgorithm::execute(WorkspaceRegistry& workspace,
                 continue;
             }
 
-            // Detect stars in target frame (up to 10,000 in SOTA mode)
-            int maxStarsDetect = (detectionMethod == "sota") ? 10000 : maxStars;
+            // Detect stars in target frame (up to 10,000 in Adaptive mode)
+            int maxStarsDetect = (detectionMethod == "adaptive") ? 10000 : maxStars;
             std::vector<Star> targetStars = StarFinder::findStars(targetChannel, maxStarsDetect, snrMin, detectionMethod, 10, minFwhm, maxEccentricity);
             
             std::vector<Star> targetStarsForMatching = targetStars;
-            if (detectionMethod == "sota") {
+            if (detectionMethod == "adaptive") {
                 // Sort stars descending by peak brightness
                 std::sort(targetStarsForMatching.begin(), targetStarsForMatching.end(), [](const Star& a, const Star& b) {
                     return a.peak > b.peak;

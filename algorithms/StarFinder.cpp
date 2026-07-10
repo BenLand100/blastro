@@ -124,7 +124,7 @@ std::vector<Star> StarFinder::findStars(GrayscaleImagePtr img,
     const float* data = img->buffer()->data();
 
     bool fastFit = (method == "centroid");
-    bool isSota = (method == "sota");
+    bool isAdaptive = (method == "adaptive");
 
     // 1. Compute mean and standard deviation of the image
     double sum = 0.0;
@@ -143,7 +143,7 @@ std::vector<Star> StarFinder::findStars(GrayscaleImagePtr img,
     // Robust estimate of background noise standard deviation for SNR calculations
     double globalNoiseSigma = std::max(estimateBackgroundNoise(data, numPixels), 1e-5);
 
-    // SOTA Block-based Background & Noise estimation
+    // Adaptive Block-based Background & Noise estimation
     std::vector<double> blockMedians;
     std::vector<double> blockSigmas;
     int blockSize = 128;
@@ -151,7 +151,7 @@ std::vector<Star> StarFinder::findStars(GrayscaleImagePtr img,
     int blocksY = (h + blockSize - 1) / blockSize;
     std::vector<int> candidateIndices;
 
-    if (isSota) {
+    if (isAdaptive) {
         blockMedians.assign(blocksX * blocksY, 0.0);
         blockSigmas.assign(blocksX * blocksY, 0.0);
 
@@ -245,7 +245,7 @@ std::vector<Star> StarFinder::findStars(GrayscaleImagePtr img,
                     float val = data[idx];
 
                     if (val > localBg + snrMin * localNoise) {
-                        // SOTA Hot pixel check: direct neighbors must have at least 15% of peak amplitude
+                        // Adaptive Hot pixel check: direct neighbors must have at least 15% of peak amplitude
                         float neighborSum = 0.0f;
                         neighborSum += data[(y - 1) * w + x];
                         neighborSum += data[(y + 1) * w + x];
@@ -311,7 +311,7 @@ std::vector<Star> StarFinder::findStars(GrayscaleImagePtr img,
 
     std::vector<int> indices;
     std::vector<float> reg_search;
-    if (!isSota) {
+    if (!isAdaptive) {
         // 2. Identify candidate regions above mean + 3*stddev
         reg_search.assign(numPixels, 0.0f);
         for (int i = 0; i < numPixels; ++i) {
@@ -339,10 +339,10 @@ std::vector<Star> StarFinder::findStars(GrayscaleImagePtr img,
 
     std::vector<Star> detectedStars;
     int attempts = 0;
-    int maxAttempts = isSota ? 50000 : 2000;
-    int limit = isSota ? 10000 : maxStars;
+    int maxAttempts = isAdaptive ? 50000 : 2000;
+    int limit = isAdaptive ? 10000 : maxStars;
 
-    // Occupancy grid to prevent overlapping fits in SOTA mode (O(1) checks)
+    // Occupancy grid to prevent overlapping fits in adaptive mode (O(1) checks)
     std::vector<uint8_t> occupied(numPixels, 0);
 
     // Pre-calculate relative coordinate grid for patch fitting
@@ -363,7 +363,7 @@ std::vector<Star> StarFinder::findStars(GrayscaleImagePtr img,
         }
 
         // Skip if this region was already zeroed out (assigned to another star)
-        if (!isSota && reg_search[idx] == 0.0f) {
+        if (!isAdaptive && reg_search[idx] == 0.0f) {
             continue;
         }
 
@@ -371,7 +371,7 @@ std::vector<Star> StarFinder::findStars(GrayscaleImagePtr img,
         int y_max = idx / w;
 
         // Check distance against already detected stars to prevent overlapping fits in SOTA mode
-        if (isSota && occupied[idx]) {
+        if (isAdaptive && occupied[idx]) {
             continue;
         }
 
@@ -380,7 +380,7 @@ std::vector<Star> StarFinder::findStars(GrayscaleImagePtr img,
             y_max - patchRadius >= 0 && y_max + patchRadius < h) {
             
             // Zero out patch region in search mask to avoid duplicate detection (legacy mode only)
-            if (!isSota) {
+            if (!isAdaptive) {
                 for (int py = -patchRadius; py <= patchRadius; ++py) {
                     for (int px = -patchRadius; px <= patchRadius; ++px) {
                         reg_search[(y_max + py) * w + (x_max + px)] = 0.0f;
@@ -408,7 +408,7 @@ std::vector<Star> StarFinder::findStars(GrayscaleImagePtr img,
 
             // SNR Check
             double localNoise = globalNoiseSigma;
-            if (isSota) {
+            if (isAdaptive) {
                 double gx = (static_cast<double>(x_max) / blockSize) - 0.5;
                 double gy = (static_cast<double>(y_max) / blockSize) - 0.5;
 
@@ -445,9 +445,9 @@ std::vector<Star> StarFinder::findStars(GrayscaleImagePtr img,
             double eccentricity = 0.0;
             bool fitSuccess = false;
 
-            // In SOTA mode, we always run centroiding first inside the candidate loop,
+            // In adaptive mode, we always run centroiding first inside the candidate loop,
             // and then run Nelder-Mead refinement only on the top maxStars brightest stars later.
-            bool runNelderMeadNow = !isSota && !fastFit;
+            bool runNelderMeadNow = !isAdaptive && !fastFit;
 
             if (!runNelderMeadNow) {
                 // Centroiding (Fast) Mode
@@ -549,8 +549,8 @@ std::vector<Star> StarFinder::findStars(GrayscaleImagePtr img,
                 star.snr = star_lvl / std::max(1e-5, localNoise);
                 detectedStars.push_back(star);
 
-                // Mark the region around this star as occupied in SOTA mode
-                if (isSota) {
+                // Mark the region around this star as occupied in adaptive mode
+                if (isAdaptive) {
                     int cx = static_cast<int>(std::round(finalX));
                     int cy = static_cast<int>(std::round(finalY));
                     int rad = patchRadius;
@@ -570,8 +570,8 @@ std::vector<Star> StarFinder::findStars(GrayscaleImagePtr img,
         }
     }
 
-    // SOTA Refinement Phase: Run high-precision Nelder-Mead on the top maxStars brightest stars
-    if (isSota && !detectedStars.empty()) {
+    // Adaptive Refinement Phase: Run high-precision Nelder-Mead on the top maxStars brightest stars
+    if (isAdaptive && !detectedStars.empty()) {
         // Sort all detected centroid stars descending by peak brightness
         std::sort(detectedStars.begin(), detectedStars.end(), [](const Star& a, const Star& b) {
             return a.peak > b.peak;
@@ -651,7 +651,7 @@ std::vector<Star> StarFinder::findStars(GrayscaleImagePtr img,
 
                     // Calculate local noise at refined position
                     double localNoise = globalNoiseSigma;
-                    if (isSota) {
+                    if (isAdaptive) {
                         double gx = (static_cast<double>(cx) / blockSize) - 0.5;
                         double gy = (static_cast<double>(cy) / blockSize) - 0.5;
 

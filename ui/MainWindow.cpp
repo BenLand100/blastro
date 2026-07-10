@@ -1712,7 +1712,7 @@ void MainWindow::testRegisterOnCube(const QString& cubePath, int refFrameIdx, co
     ImageVariant refFrame = batch->getImage(refFrameIdx);
     if (std::holds_alternative<GrayscaleImagePtr>(refFrame)) {
         auto gray = std::get<GrayscaleImagePtr>(refFrame);
-        std::vector<Star> refStars = StarFinder::findStars(gray, 100, 5.0, "sota", 10, 1.5, 0.90);
+        std::vector<Star> refStars = StarFinder::findStars(gray, 100, 5.0, "adaptive", 10, 1.5, 0.90);
         qDebug() << "[MainWindow] Reference Frame baseline stars found:" << refStars.size();
         double sumFwhm = 0.0;
         double sumEcc = 0.0;
@@ -1851,7 +1851,7 @@ void MainWindow::testRegisterOnCube(const QString& cubePath, int refFrameIdx, co
             qDebug() << "[MainWindow] Running StarFinder on stacked master...";
             if (std::holds_alternative<GrayscaleImagePtr>(stackedImg)) {
                 auto gray = std::get<GrayscaleImagePtr>(stackedImg);
-                std::vector<Star> stars = StarFinder::findStars(gray, 100, 5.0, "sota", 10, 1.5, 0.90);
+                std::vector<Star> stars = StarFinder::findStars(gray, 100, 5.0, "adaptive", 10, 1.5, 0.90);
                 qDebug() << "[MainWindow] Found" << stars.size() << "stars in stacked master.";
                 
                 double sumFwhm = 0.0;
