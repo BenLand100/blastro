@@ -255,25 +255,28 @@ BackgroundExtractionDialog::BackgroundExtractionDialog(WorkspaceRegistry& worksp
     QHBoxLayout* gridLayout = new QHBoxLayout();
     gridLayout->addWidget(new QLabel("Cols:", this));
     m_gridColsSpin = new QSpinBox(this);
+    m_gridColsSpin->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     m_gridColsSpin->setRange(3, 30);
     m_gridColsSpin->setValue(5);
     gridLayout->addWidget(m_gridColsSpin);
-
+ 
     gridLayout->addWidget(new QLabel("Rows:", this));
     m_gridRowsSpin = new QSpinBox(this);
+    m_gridRowsSpin->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     m_gridRowsSpin->setRange(3, 30);
     m_gridRowsSpin->setValue(5);
     gridLayout->addWidget(m_gridRowsSpin);
     formLayout->addRow("Grid Dimensions:", gridLayout);
-
+ 
     // Bad point rejection controls
     QHBoxLayout* rejectLayout = new QHBoxLayout();
     m_autoExcludeChk = new QCheckBox("Auto-Exclude Stars", this);
     m_autoExcludeChk->setChecked(true);
     rejectLayout->addWidget(m_autoExcludeChk);
-
+ 
     rejectLayout->addWidget(new QLabel("Thresh:", this));
     m_excludeThresholdSpin = new QDoubleSpinBox(this);
+    m_excludeThresholdSpin->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     m_excludeThresholdSpin->setRange(0.5, 10.0);
     m_excludeThresholdSpin->setSingleStep(0.1);
     m_excludeThresholdSpin->setValue(1.5);

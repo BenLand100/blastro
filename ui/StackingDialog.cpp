@@ -99,24 +99,25 @@ StackingDialog::StackingDialog(WorkspaceRegistry& workspace, QWidget* parent)
 
     // 5. Low / High Rejection range
     m_lowClipSpin = new QDoubleSpinBox(this);
+    m_lowClipSpin->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     m_lowClipSpin->setRange(0.0, 10.0);
     m_lowClipSpin->setSingleStep(0.05);
     m_lowClipSpin->setValue(0.03);
-
+ 
     m_slashLabel = new QLabel("/", this);
     m_slashLabel->setStyleSheet("QLabel { color: #aaaaaa; font-weight: bold; font-size: 12px; } QLabel:disabled { color: #4a4a4a; }");
-
+ 
     m_highClipSpin = new QDoubleSpinBox(this);
+    m_highClipSpin->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     m_highClipSpin->setRange(0.0, 10.0);
     m_highClipSpin->setSingleStep(0.05);
     m_highClipSpin->setValue(0.03);
-
+ 
     QHBoxLayout* clipLayout = new QHBoxLayout();
     clipLayout->setSpacing(6);
     clipLayout->addWidget(m_lowClipSpin);
     clipLayout->addWidget(m_slashLabel);
     clipLayout->addWidget(m_highClipSpin);
-    clipLayout->addStretch(1);
 
     m_clipLabel = new QLabel("Low / High Rejection:", this);
     formLayout->addRow(m_clipLabel, clipLayout);

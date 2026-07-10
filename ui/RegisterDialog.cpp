@@ -53,6 +53,7 @@ RegisterDialog::RegisterDialog(WorkspaceRegistry& workspace, QWidget* parent)
 
     // 2. Reference Frame Index
     m_refIdxSpin = new QSpinBox(this);
+    m_refIdxSpin->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     m_refIdxSpin->setRange(0, 9999);
     m_refIdxSpin->setValue(0); // 0 is first frame
     formLayout->addRow("Reference Frame Index:", m_refIdxSpin);
@@ -67,6 +68,7 @@ RegisterDialog::RegisterDialog(WorkspaceRegistry& workspace, QWidget* parent)
 
     // 4. SNR Threshold
     m_snrSpin = new QDoubleSpinBox(this);
+    m_snrSpin->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     m_snrSpin->setRange(1.0, 100.0);
     m_snrSpin->setSingleStep(0.5);
     m_snrSpin->setValue(5.0);
@@ -74,6 +76,7 @@ RegisterDialog::RegisterDialog(WorkspaceRegistry& workspace, QWidget* parent)
 
     // 5. Min FWHM
     m_minFwhmSpin = new QDoubleSpinBox(this);
+    m_minFwhmSpin->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     m_minFwhmSpin->setRange(0.5, 20.0);
     m_minFwhmSpin->setSingleStep(0.1);
     m_minFwhmSpin->setValue(2.0);
