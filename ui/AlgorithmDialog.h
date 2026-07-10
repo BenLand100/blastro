@@ -47,7 +47,6 @@ signals:
 
 protected:
     WorkspaceRegistry& m_workspace;
-    void closeEvent(QCloseEvent* event) override;
 };
 
 } // namespace blastro

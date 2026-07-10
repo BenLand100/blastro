@@ -369,7 +369,7 @@ void StretchingDialog::closeEvent(QCloseEvent* event) {
     if (auto win = getActiveImageWindow()) {
         win->restoreOriginalImage();
     }
-    event->ignore();
+    QWidget::closeEvent(event);
 }
 
 WorkspaceImageWindow* StretchingDialog::getActiveImageWindow() const {

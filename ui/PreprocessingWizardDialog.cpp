@@ -1077,12 +1077,6 @@ void PreprocessingWizardDialog::resizeEvent(QResizeEvent* event) {
     recomputeColumnWidths();
 }
 
-void PreprocessingWizardDialog::closeEvent(QCloseEvent* event) {
-    // Ignore close so the QMdiSubWindow hides itself without hiding
-    // this widget — all wizard state is preserved for when it is reopened.
-    event->ignore();
-}
-
 void PreprocessingWizardDialog::logMessage(const QString& msg) {
     Logger::info("Preprocessing", msg);
 }

@@ -192,7 +192,6 @@ private:
 protected:
     void resizeEvent(QResizeEvent* event) override;
     void changeEvent(QEvent* event) override;
-    void closeEvent(QCloseEvent* event) override;
 };
 
 class PreprocessingWorker : public QObject {

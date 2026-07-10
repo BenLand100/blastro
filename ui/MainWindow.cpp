@@ -734,6 +734,7 @@ void MainWindow::onSaveActiveBatch() {
 
 void MainWindow::onOpenPixelMath() {
     m_pixelMathDlg->refreshWorkspaceElements();
+    m_pixelMathDlg->show();
     m_pixelMathSub->show();
     m_pixelMathSub->raise();
     m_workspaceArea->setActiveSubWindow(m_pixelMathSub);
@@ -741,6 +742,7 @@ void MainWindow::onOpenPixelMath() {
 
 void MainWindow::onOpenStacking() {
     m_stackingDlg->refreshWorkspaceElements();
+    m_stackingDlg->show();
     m_stackingSub->show();
     m_stackingSub->raise();
     m_workspaceArea->setActiveSubWindow(m_stackingSub);
@@ -748,6 +750,7 @@ void MainWindow::onOpenStacking() {
 
 void MainWindow::onOpenCalibration() {
     m_calibrationDlg->refreshWorkspaceElements();
+    m_calibrationDlg->show();
     m_calibrationSub->show();
     m_calibrationSub->raise();
     m_workspaceArea->setActiveSubWindow(m_calibrationSub);
@@ -755,6 +758,7 @@ void MainWindow::onOpenCalibration() {
 
 void MainWindow::onOpenDebayer() {
     m_debayerDlg->refreshWorkspaceElements();
+    m_debayerDlg->show();
     m_debayerSub->show();
     m_debayerSub->raise();
     m_workspaceArea->setActiveSubWindow(m_debayerSub);
@@ -762,6 +766,7 @@ void MainWindow::onOpenDebayer() {
 
 void MainWindow::onOpenRegister() {
     m_registerDlg->refreshWorkspaceElements();
+    m_registerDlg->show();
     m_registerSub->show();
     m_registerSub->raise();
     m_workspaceArea->setActiveSubWindow(m_registerSub);
@@ -769,6 +774,7 @@ void MainWindow::onOpenRegister() {
 
 void MainWindow::onOpenAlign() {
     m_alignDlg->refreshWorkspaceElements();
+    m_alignDlg->show();
     m_alignSub->show();
     m_alignSub->raise();
     m_workspaceArea->setActiveSubWindow(m_alignSub);
@@ -776,18 +782,21 @@ void MainWindow::onOpenAlign() {
 
 void MainWindow::onOpenBackgroundExtraction() {
     m_bgeDlg->refreshWorkspaceElements();
+    m_bgeDlg->show();
     m_bgeSub->show();
     m_bgeSub->raise();
     m_workspaceArea->setActiveSubWindow(m_bgeSub);
 }
 
 void MainWindow::onOpenPpw() {
+    m_ppwDlg->show();
     m_ppwSub->show();
     m_ppwSub->raise();
     m_workspaceArea->setActiveSubWindow(m_ppwSub);
 }
 
 void MainWindow::onOpenGhs() {
+    m_stretchingDlg->show();
     m_stretchingSub->show();
     m_stretchingSub->raise();
     m_workspaceArea->setActiveSubWindow(m_stretchingSub);
@@ -1524,6 +1533,7 @@ void MainWindow::updateWindowMenu() {
     if (logWin) {
         connect(consoleAct, &QAction::triggered, this, [logWin]() {
             if (auto* sub = qobject_cast<QMdiSubWindow*>(logWin->parentWidget())) {
+                logWin->show();
                 sub->show();
                 sub->setFocus();
             }

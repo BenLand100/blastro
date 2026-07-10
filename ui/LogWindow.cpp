@@ -190,12 +190,6 @@ LogWindow::~LogWindow() {
     unregisterInstance(this);
 }
 
-void LogWindow::closeEvent(QCloseEvent* event) {
-    // Ignore close so the QMdiSubWindow hides itself without hiding
-    // this widget — log history is preserved for when it is reopened.
-    event->ignore();
-}
-
 void LogWindow::registerInstance(LogWindow* instance) {
     QMutexLocker locker(&s_mutex);
     s_instance = instance;

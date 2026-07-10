@@ -162,17 +162,15 @@ BLastro distinguishes between two kinds of MDI subwindows:
 
 **The Hidden-Widget Trap**: When a `QMdiSubWindow` is closed, Qt sends a `QCloseEvent` to its inner child widget. If the child accepts the event (default `QWidget` and `QDialog` behaviour), Qt marks the child as hidden. Re-showing the subwindow wrapper via `sub->show()` restores the frame but leaves the child hidden, producing an empty gray box.
 
-**The Fix**: Override `closeEvent` in every persistent inner widget class and call `event->ignore()`. When the child ignores the close event, `QMdiSubWindow` falls back to hiding only itself — the inner widget's visibility and all its state are fully preserved.
+**The Fix**: When reopening or reshowing the persistent `QMdiSubWindow`, you must explicitly call `show()` on **both** the inner widget instance and the parent `QMdiSubWindow` wrapper. This ensures that the inner widget is shown again even if it accepted a close event previously and was hidden.
 
 ```cpp
-// In any persistent MDI inner widget (AlgorithmDialog, LogWindow, PreprocessingWizardDialog):
-void MyDialog::closeEvent(QCloseEvent* event) {
-    // Optional: perform any cleanup (e.g. stop timers, restore preview)
-    event->ignore(); // Do NOT accept — keeps inner widget visible inside the hidden subwindow
-}
+// In MainWindow.cpp show slots:
+m_pixelMathDlg->show(); // Show the inner widget first (un-hiding it)
+m_pixelMathSub->show(); // Then show the subwindow wrapper
 ```
 
-Persistent subwindows must also be created with `WA_DeleteOnClose = false` (which `MainWindow` applies to all algorithm and wizard subwindows at startup). The `onOpen...` slots in `MainWindow` simply call `sub->show()`, `sub->raise()`, and `setActiveSubWindow()` — no re-instantiation or re-showing of the inner widget is needed.
+Persistent subwindows must be created with `WA_DeleteOnClose = false` (which `MainWindow` applies to all algorithm and wizard subwindows at startup). The `onOpen...` slots in `MainWindow` simply refresh contents, show the inner dialog, show the subwindow wrapper, raise it, and activate it.
 
 #### Algorithm Dialog Layout Rules
 
