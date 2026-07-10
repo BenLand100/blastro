@@ -98,8 +98,8 @@ HistogramWidget::DragTarget HistogramWidget::getCloseLine(const QPoint& pos) con
 
     if (m_ghsMode) {
         double xSP = valueToX(m_spPoint);
-        double xS = valueToX(m_shadowProtect);
-        double xH = valueToX(1.0 - m_highlightProtect); // Inverted representation
+        double xS = valueToX(m_shadowProtect * m_spPoint);
+        double xH = valueToX(m_spPoint + m_highlightProtect * (1.0 - m_spPoint));
 
         double dxSP = std::abs(pos.x() - xSP);
         double dxS = std::abs(pos.x() - xS);
@@ -346,7 +346,7 @@ void HistogramWidget::paintEvent(QPaintEvent* event) {
         }
 
         // Draw Shadow Protection line
-        double xS = valueToX(m_shadowProtect);
+        double xS = valueToX(m_shadowProtect * m_spPoint);
         if (xS >= 0 && xS <= w) {
             painter.setPen(QPen(QColor("#00e5ff"), 1.2)); // cyan/light blue
             painter.drawLine(xS, 1, xS, h - 1);
@@ -354,8 +354,8 @@ void HistogramWidget::paintEvent(QPaintEvent* event) {
             painter.drawEllipse(QPointF(xS, h / 2.0), 3, 3);
         }
 
-        // Draw Highlight Protection line (inverted mapping)
-        double xH = valueToX(1.0 - m_highlightProtect);
+        // Draw Highlight Protection line (mapped to [SP, 1.0])
+        double xH = valueToX(m_spPoint + m_highlightProtect * (1.0 - m_spPoint));
         if (xH >= 0 && xH <= w) {
             painter.setPen(QPen(QColor("#ffab40"), 1.2)); // orange/yellow
             painter.drawLine(xH, 1, xH, h - 1);
@@ -510,10 +510,10 @@ void HistogramWidget::mouseMoveEvent(QMouseEvent* event) {
             m_spPoint = val;
             emit ghsParamsChanged(m_spPoint, m_stretchFactor);
         } else if (m_dragTarget == ShadowProtect) {
-            m_shadowProtect = val;
+            m_shadowProtect = std::clamp(val / std::max(1e-5, m_spPoint), 0.0, 1.0);
             emit ghsProtectionsChanged(m_shadowProtect, m_highlightProtect);
         } else if (m_dragTarget == HighlightProtect) {
-            m_highlightProtect = 1.0 - val; // Inverted mapping
+            m_highlightProtect = std::clamp((val - m_spPoint) / std::max(1e-5, 1.0 - m_spPoint), 0.0, 1.0);
             emit ghsProtectionsChanged(m_shadowProtect, m_highlightProtect);
         }
     } else {

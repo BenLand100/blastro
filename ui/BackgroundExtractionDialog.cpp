@@ -28,6 +28,7 @@
 #include <QHBoxLayout>
 #include <QMessageBox>
 #include <QMainWindow>
+#include <QGroupBox>
 
 #include <QLabel>
 
@@ -151,24 +152,21 @@ BackgroundExtractionDialog::BackgroundExtractionDialog(WorkspaceRegistry& worksp
     mainLayout->setContentsMargins(15, 15, 15, 15);
     mainLayout->setSpacing(12);
 
-    QFormLayout* formLayout = new QFormLayout();
-    formLayout->setLabelAlignment(Qt::AlignRight | Qt::AlignVCenter);
-    formLayout->setFormAlignment(Qt::AlignLeft | Qt::AlignTop);
-    formLayout->setSpacing(10);
+    // 1. Extraction Settings Group Box
+    QGroupBox* settingsGroup = new QGroupBox("Extraction Settings", this);
+    QFormLayout* settingsForm = new QFormLayout(settingsGroup);
+    settingsForm->setLabelAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    settingsForm->setFormAlignment(Qt::AlignLeft | Qt::AlignTop);
+    settingsForm->setSpacing(10);
 
     // Extraction Method Choice
     m_methodCombo = new QComboBox(this);
     m_methodCombo->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     m_methodCombo->addItem("Polynomial Surface Fit");
     m_methodCombo->addItem("Radial Basis Function (RBF)");
-    formLayout->addRow("Method:", m_methodCombo);
+    settingsForm->addRow("Method:", m_methodCombo);
 
-    // Polynomial parameters widget
-    m_polyParamsWidget = new QWidget(this);
-    QFormLayout* polyForm = new QFormLayout(m_polyParamsWidget);
-    polyForm->setContentsMargins(0, 0, 0, 0);
-    polyForm->setSpacing(10);
-
+    // Polynomial Order
     QHBoxLayout* orderLayout = new QHBoxLayout();
     m_orderSlider = new QSlider(Qt::Horizontal, this);
     m_orderSlider->setRange(1, 5);
@@ -178,18 +176,12 @@ BackgroundExtractionDialog::BackgroundExtractionDialog(WorkspaceRegistry& worksp
     m_orderSpin->setValue(3);
     orderLayout->addWidget(m_orderSlider, 1);
     orderLayout->addWidget(m_orderSpin);
-    polyForm->addRow("Polynomial Order:", orderLayout);
-    formLayout->addRow(m_polyParamsWidget);
+    settingsForm->addRow("Polynomial Order:", orderLayout);
 
     connect(m_orderSlider, &QSlider::valueChanged, m_orderSpin, &QSpinBox::setValue);
     connect(m_orderSpin, qOverload<int>(&QSpinBox::valueChanged), m_orderSlider, &QSlider::setValue);
 
-    // RBF parameters widget
-    m_rbfParamsWidget = new QWidget(this);
-    QFormLayout* rbfForm = new QFormLayout(m_rbfParamsWidget);
-    rbfForm->setContentsMargins(0, 0, 0, 0);
-    rbfForm->setSpacing(10);
-
+    // RBF Smoothing
     QHBoxLayout* rbfSmoothingLayout = new QHBoxLayout();
     m_rbfSmoothingSlider = new QSlider(Qt::Horizontal, this);
     m_rbfSmoothingSlider->setRange(0, 100);
@@ -199,12 +191,9 @@ BackgroundExtractionDialog::BackgroundExtractionDialog(WorkspaceRegistry& worksp
     m_rbfSmoothingSpin->setSingleStep(0.01);
     m_rbfSmoothingSpin->setValue(0.5);
     m_rbfSmoothingSpin->setToolTip("Smoothing regularizer (lambda). 0 = exact interpolation.");
-
     rbfSmoothingLayout->addWidget(m_rbfSmoothingSlider, 1);
     rbfSmoothingLayout->addWidget(m_rbfSmoothingSpin);
-    rbfForm->addRow("RBF Smoothing:", rbfSmoothingLayout);
-    formLayout->addRow(m_rbfParamsWidget);
-    m_rbfParamsWidget->setVisible(false);
+    settingsForm->addRow("RBF Smoothing:", rbfSmoothingLayout);
 
     connect(m_rbfSmoothingSlider, &QSlider::valueChanged, this, [this](int val) {
         m_rbfSmoothingSpin->blockSignals(true);
@@ -221,13 +210,7 @@ BackgroundExtractionDialog::BackgroundExtractionDialog(WorkspaceRegistry& worksp
         m_rbfSmoothingSlider->blockSignals(false);
     });
 
-    connect(m_methodCombo, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int index) {
-        m_polyParamsWidget->setVisible(index == 0);
-        m_rbfParamsWidget->setVisible(index == 1);
-        adjustSize();
-    });
-
-    // 2. Sigma Cut (1.0 to 10.0)
+    // Sigma Cut
     QHBoxLayout* sigmaLayout = new QHBoxLayout();
     m_sigmaSlider = new QSlider(Qt::Horizontal, this);
     m_sigmaSlider->setRange(10, 100); // 1.0 to 10.0 in tenths
@@ -238,7 +221,7 @@ BackgroundExtractionDialog::BackgroundExtractionDialog(WorkspaceRegistry& worksp
     m_sigmaSpin->setValue(3.0);
     sigmaLayout->addWidget(m_sigmaSlider, 1);
     sigmaLayout->addWidget(m_sigmaSpin);
-    formLayout->addRow("Sigma Rejection Cut:", sigmaLayout);
+    settingsForm->addRow("Sigma Rejection Cut:", sigmaLayout);
 
     connect(m_sigmaSlider, &QSlider::valueChanged, this, [this](int val) {
         m_sigmaSpin->blockSignals(true);
@@ -251,6 +234,32 @@ BackgroundExtractionDialog::BackgroundExtractionDialog(WorkspaceRegistry& worksp
         m_sigmaSlider->blockSignals(false);
     });
 
+    // Equalize Channels Checkbox
+    QHBoxLayout* togglesLayout = new QHBoxLayout();
+    m_equalizeChk = new QCheckBox("Equalize Channels", this);
+    m_equalizeChk->setChecked(true);
+    togglesLayout->addWidget(m_equalizeChk);
+    settingsForm->addRow("", togglesLayout);
+
+    mainLayout->addWidget(settingsGroup);
+
+    // Dynamic row switching visibility
+    connect(m_methodCombo, qOverload<int>(&QComboBox::currentIndexChanged), this, [this, settingsForm, orderLayout, rbfSmoothingLayout](int index) {
+        settingsForm->setRowVisible(orderLayout, index == 0);
+        settingsForm->setRowVisible(rbfSmoothingLayout, index == 1);
+        adjustSize();
+    });
+
+    // Initial state setup
+    settingsForm->setRowVisible(rbfSmoothingLayout, false);
+
+    // 2. Grid Generation Group Box
+    QGroupBox* gridGroup = new QGroupBox("Grid Generation", this);
+    QFormLayout* gridForm = new QFormLayout(gridGroup);
+    gridForm->setLabelAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    gridForm->setFormAlignment(Qt::AlignLeft | Qt::AlignTop);
+    gridForm->setSpacing(10);
+
     // Grid Spacing Density
     QHBoxLayout* gridLayout = new QHBoxLayout();
     gridLayout->addWidget(new QLabel("Cols:", this));
@@ -259,21 +268,21 @@ BackgroundExtractionDialog::BackgroundExtractionDialog(WorkspaceRegistry& worksp
     m_gridColsSpin->setRange(3, 30);
     m_gridColsSpin->setValue(5);
     gridLayout->addWidget(m_gridColsSpin);
- 
+
     gridLayout->addWidget(new QLabel("Rows:", this));
     m_gridRowsSpin = new QSpinBox(this);
     m_gridRowsSpin->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     m_gridRowsSpin->setRange(3, 30);
     m_gridRowsSpin->setValue(5);
     gridLayout->addWidget(m_gridRowsSpin);
-    formLayout->addRow("Grid Dimensions:", gridLayout);
- 
+    gridForm->addRow("Grid Dimensions:", gridLayout);
+
     // Bad point rejection controls
     QHBoxLayout* rejectLayout = new QHBoxLayout();
     m_autoExcludeChk = new QCheckBox("Auto-Exclude Stars", this);
     m_autoExcludeChk->setChecked(true);
     rejectLayout->addWidget(m_autoExcludeChk);
- 
+
     rejectLayout->addWidget(new QLabel("Thresh:", this));
     m_excludeThresholdSpin = new QDoubleSpinBox(this);
     m_excludeThresholdSpin->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
@@ -281,19 +290,11 @@ BackgroundExtractionDialog::BackgroundExtractionDialog(WorkspaceRegistry& worksp
     m_excludeThresholdSpin->setSingleStep(0.1);
     m_excludeThresholdSpin->setValue(1.5);
     rejectLayout->addWidget(m_excludeThresholdSpin);
-    formLayout->addRow("Bad Point Rejection:", rejectLayout);
+    gridForm->addRow("Bad Point Rejection:", rejectLayout);
 
     connect(m_autoExcludeChk, &QCheckBox::toggled, m_excludeThresholdSpin, &QDoubleSpinBox::setEnabled);
 
-    // 3. Channel Equalization Toggle
-    QHBoxLayout* togglesLayout = new QHBoxLayout();
-    m_equalizeChk = new QCheckBox("Equalize Channels", this);
-    m_equalizeChk->setChecked(true);
-    togglesLayout->addWidget(m_equalizeChk);
-    
-    formLayout->addRow("", togglesLayout);
-
-    mainLayout->addLayout(formLayout);
+    mainLayout->addWidget(gridGroup);
 
     mainLayout->addStretch(1); // Content top-justifies; buttons pin to bottom
 

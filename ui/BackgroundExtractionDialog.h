@@ -59,11 +59,8 @@ private:
     void disableAllBgeModes();
 
     QComboBox* m_methodCombo;
-    QWidget* m_polyParamsWidget;
     QSlider* m_orderSlider;
     QSpinBox* m_orderSpin;
-
-    QWidget* m_rbfParamsWidget;
     QSlider* m_rbfSmoothingSlider;
     QDoubleSpinBox* m_rbfSmoothingSpin;
 

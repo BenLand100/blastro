@@ -104,6 +104,7 @@ StretchingDialog::StretchingDialog(WorkspaceRegistry& workspace, QWidget* parent
     m_bSlider->setRange(0, 1000);
     m_bSlider->setValue(0);
     m_bSpin = new QDoubleSpinBox(this);
+    m_bSpin->setFixedWidth(80);
     m_bSpin->setRange(0.0, 1.0);
     m_bSpin->setSingleStep(0.001);
     m_bSpin->setDecimals(4);
@@ -133,6 +134,7 @@ StretchingDialog::StretchingDialog(WorkspaceRegistry& workspace, QWidget* parent
     m_mSlider->setRange(1, 999);
     m_mSlider->setValue(500);
     m_mSpin = new QDoubleSpinBox(this);
+    m_mSpin->setFixedWidth(80);
     m_mSpin->setRange(0.0001, 0.9999);
     m_mSpin->setSingleStep(0.01);
     m_mSpin->setDecimals(4);
@@ -162,6 +164,7 @@ StretchingDialog::StretchingDialog(WorkspaceRegistry& workspace, QWidget* parent
     m_wSlider->setRange(0, 1000);
     m_wSlider->setValue(1000);
     m_wSpin = new QDoubleSpinBox(this);
+    m_wSpin->setFixedWidth(80);
     m_wSpin->setRange(0.0, 1.0);
     m_wSpin->setSingleStep(0.001);
     m_wSpin->setDecimals(4);
@@ -198,6 +201,7 @@ StretchingDialog::StretchingDialog(WorkspaceRegistry& workspace, QWidget* parent
     m_spSlider->setRange(0, 1000);
     m_spSlider->setValue(500);
     m_spSpin = new QDoubleSpinBox(this);
+    m_spSpin->setFixedWidth(80);
     m_spSpin->setRange(0.0, 1.0);
     m_spSpin->setSingleStep(0.001);
     m_spSpin->setDecimals(4);
@@ -227,6 +231,7 @@ StretchingDialog::StretchingDialog(WorkspaceRegistry& workspace, QWidget* parent
     m_dSlider->setRange(0, 150);
     m_dSlider->setValue(0);
     m_dSpin = new QDoubleSpinBox(this);
+    m_dSpin->setFixedWidth(80);
     m_dSpin->setRange(0.0, 15.0);
     m_dSpin->setSingleStep(0.1);
     m_dSpin->setDecimals(2);
@@ -256,6 +261,7 @@ StretchingDialog::StretchingDialog(WorkspaceRegistry& workspace, QWidget* parent
     m_shadowSlider->setRange(0, 100);
     m_shadowSlider->setValue(0);
     m_shadowSpin = new QDoubleSpinBox(this);
+    m_shadowSpin->setFixedWidth(80);
     m_shadowSpin->setRange(0.0, 1.0);
     m_shadowSpin->setSingleStep(0.05);
     m_shadowSpin->setDecimals(2);
@@ -285,6 +291,7 @@ StretchingDialog::StretchingDialog(WorkspaceRegistry& workspace, QWidget* parent
     m_highlightSlider->setRange(0, 100);
     m_highlightSlider->setValue(100);
     m_highlightSpin = new QDoubleSpinBox(this);
+    m_highlightSpin->setFixedWidth(80);
     m_highlightSpin->setRange(0.0, 1.0);
     m_highlightSpin->setSingleStep(0.05);
     m_highlightSpin->setDecimals(2);
@@ -297,22 +304,20 @@ StretchingDialog::StretchingDialog(WorkspaceRegistry& workspace, QWidget* parent
         m_highlightSpin->blockSignals(true);
         m_highlightSpin->setValue(val / 100.0);
         m_highlightSpin->blockSignals(false);
-        m_highlightProtect = 1.0 - (val / 100.0);
+        m_highlightProtect = val / 100.0;
         onParameterChanged();
     });
     connect(m_highlightSpin, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double val) {
         m_highlightSlider->blockSignals(true);
         m_highlightSlider->setValue(static_cast<int>(val * 100.0));
         m_highlightSlider->blockSignals(false);
-        m_highlightProtect = 1.0 - val;
+        m_highlightProtect = val;
         onParameterChanged();
     });
 
     m_tabWidget->addTab(ghsTab, "Generalized Hyperbolic (GHS)");
 
     mainLayout->addWidget(m_tabWidget, 0); // Controls tab stays compact
-
-    mainLayout->addStretch(1); // Push control row and buttons to the bottom
 
     // 3. General control box
     QHBoxLayout* ctrlLayout = new QHBoxLayout();
@@ -481,12 +486,12 @@ void StretchingDialog::onGhsProtectionsChanged(double shadowProtect, double high
 
     if (m_highlightSpin) {
         m_highlightSpin->blockSignals(true);
-        m_highlightSpin->setValue(1.0 - highlightProtect);
+        m_highlightSpin->setValue(highlightProtect);
         m_highlightSpin->blockSignals(false);
     }
     if (m_highlightSlider) {
         m_highlightSlider->blockSignals(true);
-        m_highlightSlider->setValue(static_cast<int>((1.0 - highlightProtect) * 100.0));
+        m_highlightSlider->setValue(static_cast<int>(highlightProtect * 100.0));
         m_highlightSlider->blockSignals(false);
     }
 
@@ -577,10 +582,10 @@ void StretchingDialog::syncUiFromValues() {
     m_shadowSlider->blockSignals(false);
 
     m_highlightSpin->blockSignals(true);
-    m_highlightSpin->setValue(1.0 - m_highlightProtect);
+    m_highlightSpin->setValue(m_highlightProtect);
     m_highlightSpin->blockSignals(false);
     m_highlightSlider->blockSignals(true);
-    m_highlightSlider->setValue(static_cast<int>((1.0 - m_highlightProtect) * 100.0));
+    m_highlightSlider->setValue(static_cast<int>(m_highlightProtect * 100.0));
     m_highlightSlider->blockSignals(false);
 
     if (m_isGhsMode) {
