@@ -50,6 +50,7 @@ DebayerDialog::DebayerDialog(WorkspaceRegistry& workspace, QWidget* parent)
 
     // 1. Target Input ComboBox
     m_targetInputCombo = new QComboBox(this);
+    m_targetInputCombo->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     formLayout->addRow("Target Input:", m_targetInputCombo);
 
     // 2. Output Name LineEdit
@@ -78,6 +79,7 @@ DebayerDialog::DebayerDialog(WorkspaceRegistry& workspace, QWidget* parent)
 
     // 3. Bayer Pattern ComboBox
     m_patternCombo = new QComboBox(this);
+    m_patternCombo->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     m_patternCombo->addItem("RGGB", "RGGB");
     m_patternCombo->addItem("BGGR", "BGGR");
     m_patternCombo->addItem("GBRG", "GBRG");
@@ -86,6 +88,7 @@ DebayerDialog::DebayerDialog(WorkspaceRegistry& workspace, QWidget* parent)
 
     // 4. Debayer Method ComboBox
     m_methodCombo = new QComboBox(this);
+    m_methodCombo->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     m_methodCombo->addItem("Bilinear (Full Resolution)", "bilinear");
     m_methodCombo->addItem("Superpixel (Half Resolution)", "superpixel");
     formLayout->addRow("Debayer Method:", m_methodCombo);

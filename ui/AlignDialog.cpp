@@ -50,6 +50,7 @@ AlignDialog::AlignDialog(WorkspaceRegistry& workspace, QWidget* parent)
 
     // 1. Target Input ComboBox (Must be a batch)
     m_targetInputCombo = new QComboBox(this);
+    m_targetInputCombo->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     formLayout->addRow("Registered Batch:", m_targetInputCombo);
 
     // 2. Output Name LineEdit
@@ -78,6 +79,7 @@ AlignDialog::AlignDialog(WorkspaceRegistry& workspace, QWidget* parent)
 
     // 3. Drizzle Scale ComboBox
     m_drizzleCombo = new QComboBox(this);
+    m_drizzleCombo->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     m_drizzleCombo->addItem("1.0x (No Drizzle)", 1.0);
     m_drizzleCombo->addItem("1.5x Drizzle", 1.5);
     m_drizzleCombo->addItem("2.0x Drizzle", 2.0);
@@ -86,6 +88,7 @@ AlignDialog::AlignDialog(WorkspaceRegistry& workspace, QWidget* parent)
 
     // 4. Alignment Reference Mode ComboBox
     m_refModeCombo = new QComboBox(this);
+    m_refModeCombo->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     m_refModeCombo->addItem("Find Centermost", "average_center");
     m_refModeCombo->addItem("Use Reference", "registration");
     formLayout->addRow("Alignment Reference Mode:", m_refModeCombo);

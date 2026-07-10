@@ -158,6 +158,7 @@ BackgroundExtractionDialog::BackgroundExtractionDialog(WorkspaceRegistry& worksp
 
     // Extraction Method Choice
     m_methodCombo = new QComboBox(this);
+    m_methodCombo->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     m_methodCombo->addItem("Polynomial Surface Fit");
     m_methodCombo->addItem("Radial Basis Function (RBF)");
     formLayout->addRow("Method:", m_methodCombo);

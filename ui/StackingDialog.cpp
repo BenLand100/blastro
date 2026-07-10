@@ -50,6 +50,7 @@ StackingDialog::StackingDialog(WorkspaceRegistry& workspace, QWidget* parent)
 
     // 1. Target Input ComboBox (Must be a batch)
     m_targetInputCombo = new QComboBox(this);
+    m_targetInputCombo->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     formLayout->addRow("Aligned Batch:", m_targetInputCombo);
 
     // 2. Output Name LineEdit
@@ -78,6 +79,7 @@ StackingDialog::StackingDialog(WorkspaceRegistry& workspace, QWidget* parent)
 
     // 3. Stacking Method ComboBox
     m_methodCombo = new QComboBox(this);
+    m_methodCombo->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     m_methodCombo->addItem("Average (Mean)", "average");
     m_methodCombo->addItem("Median", "median");
     m_methodCombo->addItem("Maximum", "max");
@@ -86,6 +88,7 @@ StackingDialog::StackingDialog(WorkspaceRegistry& workspace, QWidget* parent)
 
     // 4. Rejection Method ComboBox
     m_rejectionCombo = new QComboBox(this);
+    m_rejectionCombo->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     m_rejectionCombo->addItem("No Rejection", "none");
     m_rejectionCombo->addItem("Winsorized Sigma Clipping", "winsorized_sigma");
     m_rejectionCombo->addItem("Sigma Clipping", "sigma");

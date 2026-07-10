@@ -47,6 +47,7 @@ RegisterDialog::RegisterDialog(WorkspaceRegistry& workspace, QWidget* parent)
 
     // 1. Target Input ComboBox (Must be a batch)
     m_targetInputCombo = new QComboBox(this);
+    m_targetInputCombo->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     refreshWorkspaceElements();
     formLayout->addRow("Input Batch:", m_targetInputCombo);
 
@@ -58,6 +59,7 @@ RegisterDialog::RegisterDialog(WorkspaceRegistry& workspace, QWidget* parent)
 
     // 3. Star Detection Method
     m_methodCombo = new QComboBox(this);
+    m_methodCombo->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     m_methodCombo->addItem("Advanced Adaptive", "sota");
     m_methodCombo->addItem("Basic Centroid", "centroid");
     m_methodCombo->addItem("Standard Gaussian", "gaussian");
