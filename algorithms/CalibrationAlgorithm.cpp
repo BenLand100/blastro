@@ -71,12 +71,17 @@ static GrayscaleImagePtr calibrateChannel(GrayscaleImagePtr input,
     // Calculate flat mean for normalization if not pre-calculated
     if (flatData && flatMean <= 0.0f) {
         double sum = 0.0;
+        int count = 0;
         int numPixels = w * h;
-        #pragma omp parallel for reduction(+:sum)
+        #pragma omp parallel for reduction(+:sum, count)
         for (int i = 0; i < numPixels; ++i) {
-            sum += flatData[i];
+            float val = flatData[i];
+            if (!std::isnan(val)) {
+                sum += val;
+                count++;
+            }
         }
-        flatMean = static_cast<float>(sum / numPixels);
+        flatMean = (count > 0) ? static_cast<float>(sum / count) : 1.0f;
         if (std::abs(flatMean) < 1e-6f) {
             flatMean = 1.0f; // Prevent division-by-zero during normalization
         }
@@ -218,11 +223,16 @@ void CalibrationAlgorithm::execute(WorkspaceRegistry& workspace,
             int numPixels = w * h;
             const float* flatData = flatImg->buffer()->data();
             double sum = 0.0;
-            #pragma omp parallel for reduction(+:sum)
+            int count = 0;
+            #pragma omp parallel for reduction(+:sum, count)
             for (int i = 0; i < numPixels; ++i) {
-                sum += flatData[i];
+                float val = flatData[i];
+                if (!std::isnan(val)) {
+                    sum += val;
+                    count++;
+                }
             }
-            float mean = static_cast<float>(sum / numPixels);
+            float mean = (count > 0) ? static_cast<float>(sum / count) : 1.0f;
             mean = std::abs(mean) < 1e-6f ? 1.0f : mean;
             Logger::info("Calibration", QString("Calculated master flat %1 mean: %2 (took %3 ms)")
                          .arg(channelLabel).arg(mean).arg(meanTimer.elapsed()));

@@ -20,6 +20,7 @@
 #include <cmath>
 #include <random>
 #include <algorithm>
+#include <limits>
 #include <numeric>
 #include <stdexcept>
 #include <iostream>
@@ -176,34 +177,62 @@ GrayscaleImagePtr BackgroundExtractor::extractGrayscale(GrayscaleImagePtr src,
                     int px = cx + dx;
                     int py = cy + dy;
                     if (px >= 0 && px < w && py >= 0 && py < h) {
-                        sumVal += src->buffer()->pixel(px, py);
-                        count++;
+                        float val = src->buffer()->pixel(px, py);
+                        if (!std::isnan(val)) {
+                            sumVal += val;
+                            count++;
+                        }
                     }
                 }
             }
-            double zVal = (count > 0) ? (sumVal / count) : src->buffer()->pixel(cx, cy);
+            double zVal = std::numeric_limits<double>::quiet_NaN();
+            if (count > 0) {
+                zVal = sumVal / count;
+            } else {
+                float centerVal = src->buffer()->pixel(cx, cy);
+                if (!std::isnan(centerVal)) {
+                    zVal = centerVal;
+                }
+            }
 
-            FitPoint fpt;
-            fpt.x_norm = (2.0 * pt.first - w) / w;
-            fpt.y_norm = (2.0 * pt.second - h) / h;
-            fpt.z = zVal;
-            samples.push_back(fpt);
+            if (!std::isnan(zVal)) {
+                FitPoint fpt;
+                fpt.x_norm = (2.0 * pt.first - w) / w;
+                fpt.y_norm = (2.0 * pt.second - h) / h;
+                fpt.z = zVal;
+                samples.push_back(fpt);
+            }
         }
     } else {
         // Compute median and standard deviation of the channel
         if (progress) progress(progressStart + (progressEnd - progressStart) * 5 / 100);
         Logger::info("BackgroundExtraction", QString("Analyzing image data statistics (%1x%2 pixels)...").arg(w).arg(h));
         
-        std::vector<float> sortedData(data, data + numPixels);
+        std::vector<float> sortedData;
+        sortedData.reserve(numPixels);
+        for (int i = 0; i < numPixels; ++i) {
+            if (!std::isnan(data[i])) {
+                sortedData.push_back(data[i]);
+            }
+        }
+        if (sortedData.empty()) {
+            throw std::runtime_error("No valid pixels in the image channel for background extraction");
+        }
         std::sort(sortedData.begin(), sortedData.end());
-        double median = sortedData[numPixels / 2];
+        int validCount = sortedData.size();
+        double median = sortedData[validCount / 2];
 
         double sumSqDiff = 0.0;
+        int validPixels = 0;
         for (int i = 0; i < numPixels; ++i) {
-            double diff = data[i] - median;
-            sumSqDiff += diff * diff;
+            float val = data[i];
+            if (!std::isnan(val)) {
+                double diff = val - median;
+                sumSqDiff += diff * diff;
+                validPixels++;
+            }
         }
-        double stddev = std::sqrt(sumSqDiff / numPixels);
+        double stddev = std::sqrt(sumSqDiff / (validPixels > 1 ? validPixels : 1));
         Logger::info("BackgroundExtraction", QString("  Channel Stats: Median = %1, StdDev = %2").arg(median).arg(stddev));
 
         // Select background sample points within sigmaCut of median
@@ -380,16 +409,31 @@ GrayscaleImagePtr BackgroundExtractor::extractGrayscale(GrayscaleImagePtr src,
             if (progress) progress(progressStart + (progressEnd - progressStart) * 85 / 100);
             Logger::info("BackgroundExtraction", QString("  Performing background channel equalization..."));
 
-            std::vector<float> outSorted(outData, outData + numPixels);
+            std::vector<float> outSorted;
+            outSorted.reserve(numPixels);
+            for (int i = 0; i < numPixels; ++i) {
+                if (!std::isnan(outData[i])) {
+                    outSorted.push_back(outData[i]);
+                }
+            }
+            if (outSorted.empty()) {
+                throw std::runtime_error("No valid pixels in the background-subtracted channel for equalization");
+            }
             std::sort(outSorted.begin(), outSorted.end());
-            double outMedian = outSorted[numPixels / 2];
+            int validCount = outSorted.size();
+            double outMedian = outSorted[validCount / 2];
 
             double outSumSq = 0.0;
+            int validPixels = 0;
             for (int i = 0; i < numPixels; ++i) {
-                double diff = outData[i] - outMedian;
-                outSumSq += diff * diff;
+                float val = outData[i];
+                if (!std::isnan(val)) {
+                    double diff = val - outMedian;
+                    outSumSq += diff * diff;
+                    validPixels++;
+                }
             }
-            double outStd = std::sqrt(outSumSq / numPixels);
+            double outStd = std::sqrt(outSumSq / (validPixels > 1 ? validPixels : 1));
 
             float offset = -outMedian + sigmaCut * outStd;
             Logger::info("BackgroundExtraction", QString("    Equalization complete: Shifted by offset = %1 to pedestal %2")
@@ -515,16 +559,31 @@ GrayscaleImagePtr BackgroundExtractor::extractGrayscale(GrayscaleImagePtr src,
             if (progress) progress(progressStart + (progressEnd - progressStart) * 85 / 100);
             Logger::info("BackgroundExtraction", QString("  Performing background channel equalization..."));
             
-            std::vector<float> outSorted(outData, outData + numPixels);
+            std::vector<float> outSorted;
+            outSorted.reserve(numPixels);
+            for (int i = 0; i < numPixels; ++i) {
+                if (!std::isnan(outData[i])) {
+                    outSorted.push_back(outData[i]);
+                }
+            }
+            if (outSorted.empty()) {
+                throw std::runtime_error("No valid pixels in the background-subtracted channel for equalization");
+            }
             std::sort(outSorted.begin(), outSorted.end());
-            double outMedian = outSorted[numPixels / 2];
+            int validCount = outSorted.size();
+            double outMedian = outSorted[validCount / 2];
 
             double outSumSq = 0.0;
+            int validPixels = 0;
             for (int i = 0; i < numPixels; ++i) {
-                double diff = outData[i] - outMedian;
-                outSumSq += diff * diff;
+                float val = outData[i];
+                if (!std::isnan(val)) {
+                    double diff = val - outMedian;
+                    outSumSq += diff * diff;
+                    validPixels++;
+                }
             }
-            double outStd = std::sqrt(outSumSq / numPixels);
+            double outStd = std::sqrt(outSumSq / (validPixels > 1 ? validPixels : 1));
 
             // Safe floor offset
             float offset = -outMedian + sigmaCut * outStd;
@@ -574,16 +633,33 @@ RGBImagePtr BackgroundExtractor::extractRGB(RGBImagePtr src,
 
         auto getStats = [numPixels](GrayscaleImagePtr img, double& median, double& stddev) {
             const float* data = img->buffer()->data();
-            std::vector<float> sorted(data, data + numPixels);
+            std::vector<float> sorted;
+            sorted.reserve(numPixels);
+            for (int i = 0; i < numPixels; ++i) {
+                if (!std::isnan(data[i])) {
+                    sorted.push_back(data[i]);
+                }
+            }
+            if (sorted.empty()) {
+                median = 0.0;
+                stddev = 0.0;
+                return;
+            }
             std::sort(sorted.begin(), sorted.end());
-            median = sorted[numPixels / 2];
+            int validCount = sorted.size();
+            median = sorted[validCount / 2];
 
             double sumSq = 0.0;
+            int validPixels = 0;
             for (int i = 0; i < numPixels; ++i) {
-                double diff = data[i] - median;
-                sumSq += diff * diff;
+                float val = data[i];
+                if (!std::isnan(val)) {
+                    double diff = val - median;
+                    sumSq += diff * diff;
+                    validPixels++;
+                }
             }
-            stddev = std::sqrt(sumSq / numPixels);
+            stddev = std::sqrt(sumSq / (validPixels > 1 ? validPixels : 1));
         };
 
         double medR, stdR;

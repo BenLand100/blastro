@@ -37,6 +37,7 @@
 #include <iostream>
 #include <cmath>
 #include <cassert>
+#include <limits>
 #include <vector>
 #include <memory>
 #include <map>
@@ -223,6 +224,17 @@ void testStackingMathematics() {
         } else if (idx == 4) {
             buffer->setPixel(2, 2, 0.102f);
         }
+
+        // Test NaN ignoring / dynamic normalization at pixel (3, 3)
+        // Set to NaN in frames 0-4, and to 0.15f in frames 5-14
+        if (idx < 5) {
+            buffer->setPixel(3, 3, std::numeric_limits<float>::quiet_NaN());
+        } else {
+            buffer->setPixel(3, 3, 0.15f);
+        }
+
+        // Test all-NaN pixel propagation at (0, 3)
+        buffer->setPixel(0, 3, std::numeric_limits<float>::quiet_NaN());
         
         return img;
     };
@@ -280,6 +292,14 @@ void testStackingMathematics() {
         // Verify that the outlier is rejected and the value is close to 0.1092
         assert(valOutlier < 0.12f);
         assert(approxEqual(valOutlier, 0.1092, 0.0005));
+
+        // Verify NaN ignoring: (3, 3) should average only the 10 valid frames with value 0.15f
+        float valNanIgnored = outImg->buffer()->pixel(3, 3);
+        assert(approxEqual(valNanIgnored, 0.15, 1e-4));
+
+        // Verify all-NaN propagation: (0, 3) should be quiet NaN
+        float valAllNan = outImg->buffer()->pixel(0, 3);
+        assert(std::isnan(valAllNan));
     }
 
     std::cout << "[+] Stacking Mathematics Test PASSED." << std::endl << std::endl;

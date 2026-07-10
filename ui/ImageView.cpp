@@ -338,7 +338,10 @@ void ImageView::runAutostretch() {
         for (int x = 0; x < width; ++x) {
             int linearIdx = y * width + x;
             if (linearIdx % sampleStep == 0) {
-                samples.push_back(getPixelLuminance(x, y));
+                float val = getPixelLuminance(x, y);
+                if (!std::isnan(val)) {
+                    samples.push_back(val);
+                }
             }
         }
     }
@@ -435,8 +438,10 @@ std::vector<int> ImageView::getHistogram(int bins) const {
             int linearIdx = y * width + x;
             if (linearIdx % sampleStep == 0) {
                 float val = getPixelLuminance(x, y);
-                int bin = std::max(0, std::min(bins - 1, static_cast<int>(val * (bins - 1))));
-                hist[bin]++;
+                if (!std::isnan(val)) {
+                    int bin = std::max(0, std::min(bins - 1, static_cast<int>(val * (bins - 1))));
+                    hist[bin]++;
+                }
             }
         }
     }
@@ -878,7 +883,10 @@ void ImageView::drawBackground(QPainter* painter, const QRectF& rect) {
                     samples.reserve(totalPixels / sampleStep);
                     const float* rawData = img->buffer()->data();
                     for (int i = 0; i < totalPixels; i += sampleStep) {
-                        samples.push_back(rawData[i]);
+                        float val = rawData[i];
+                        if (!std::isnan(val)) {
+                            samples.push_back(val);
+                        }
                     }
                     if (!samples.empty()) {
                         std::sort(samples.begin(), samples.end());
@@ -930,7 +938,10 @@ void ImageView::drawBackground(QPainter* painter, const QRectF& rect) {
                     std::vector<float> samples;
                     samples.reserve(totalPixels / sampleStep);
                     for (int i = 0; i < totalPixels; i += sampleStep) {
-                        samples.push_back((origR[i] + origG[i] + origB[i]) / 3.0f);
+                        float val = (origR[i] + origG[i] + origB[i]) / 3.0f;
+                        if (!std::isnan(val)) {
+                            samples.push_back(val);
+                        }
                     }
                     float B = 0.0f, W = 1.0f, M = 0.5f;
                     if (!samples.empty()) {

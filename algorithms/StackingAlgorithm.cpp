@@ -26,6 +26,7 @@
 #include <algorithm>
 #include <cmath>
 #include <stdexcept>
+#include <limits>
 #include <vector>
 #include <omp.h>
 #include "core/Logger.h"
@@ -210,7 +211,7 @@ static GrayscaleImagePtr stackChannels(const std::vector<GrayscaleImagePtr>& cha
 
             int m = threadActiveValues.size();
             if (m == 0) {
-                outData[p] = 0.0f;
+                outData[p] = std::numeric_limits<float>::quiet_NaN();
                 continue;
             }
 
