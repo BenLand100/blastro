@@ -6,14 +6,6 @@
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation, either version 3 of the License, or
  * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include "StackingAlgorithm.h"
@@ -22,6 +14,7 @@
 #include "core/ImageBatch.h"
 #include "core/ImageBuffer.h"
 #include "core/TempDirectory.h"
+#include "core/MathUtils.h"
 #include "io/FitsIO.h"
 #include <algorithm>
 #include <cmath>
@@ -80,12 +73,13 @@ static ImageVariant loadPatch(ImageBatchPtr batch, int idx, int xStart, int ySta
                             .arg(QString::fromStdString(filepath)).arg(e.what()));
         }
     }
-    // Fallback: load full image from batch and crop
     ImageVariant fullImg = batch->getImage(idx);
     return cropImagePatch(fullImg, xStart, yStart, patchW, patchH);
 }
 
 static GrayscaleImagePtr stackChannels(const std::vector<GrayscaleImagePtr>& channels,
+                                       const std::vector<double>& coeffA,
+                                       const std::vector<double>& coeffB,
                                        const std::string& method,
                                        const std::string& rejection,
                                        double sigmaLow, double sigmaHigh,
@@ -103,7 +97,6 @@ static GrayscaleImagePtr stackChannels(const std::vector<GrayscaleImagePtr>& cha
     auto outBuffer = std::make_shared<ImageBuffer>(width, height);
     float* outData = outBuffer->data();
 
-    // Cache raw pointers to channel data for high-performance pixel access
     std::vector<const float*> rawDataPointers(numFrames);
     for (int f = 0; f < numFrames; ++f) {
         rawDataPointers[f] = channels[f]->buffer()->data();
@@ -114,7 +107,6 @@ static GrayscaleImagePtr stackChannels(const std::vector<GrayscaleImagePtr>& cha
     bool cancelled = false;
     #pragma omp parallel shared(cancelled)
     {
-        // Thread-local vectors allocated once per thread to eliminate heap allocation overhead in the hot loop!
         std::vector<float> threadPixelValues(numFrames);
         std::vector<float> threadActiveValues(numFrames);
         std::vector<float> filtered;
@@ -137,12 +129,11 @@ static GrayscaleImagePtr stackChannels(const std::vector<GrayscaleImagePtr>& cha
                 }
             }
 
-            // Collect non-NaN pixel values across all selected frames
             int n = 0;
             for (int f = 0; f < numFrames; ++f) {
                 float val = rawDataPointers[f][p];
                 if (!std::isnan(val)) {
-                    threadPixelValues[n++] = val;
+                    threadPixelValues[n++] = static_cast<float>(val * coeffA[f] + coeffB[f]);
                 }
             }
 
@@ -151,7 +142,6 @@ static GrayscaleImagePtr stackChannels(const std::vector<GrayscaleImagePtr>& cha
                 threadActiveValues[i] = threadPixelValues[i];
             }
 
-            // Apply rejection methods
             if (rejection == "quantile" && n > 1) {
                 std::sort(threadActiveValues.begin(), threadActiveValues.end());
                 int rejectLow = static_cast<int>(n * quantileLow);
@@ -163,24 +153,21 @@ static GrayscaleImagePtr stackChannels(const std::vector<GrayscaleImagePtr>& cha
                     threadActiveValues = std::vector<float>(threadActiveValues.begin() + rejectLow, threadActiveValues.end() - rejectHigh);
                 }
             } else if ((rejection == "sigma" || rejection == "winsorized_sigma") && n > 2) {
-                // Iterative sigma clipping (2 iterations)
                 for (int iter = 0; iter < 2; ++iter) {
                     int currSize = threadActiveValues.size();
                     if (currSize <= 2) break;
 
-                    // Compute mean
                     double sum = 0.0;
                     for (float val : threadActiveValues) sum += val;
                     double mean = sum / currSize;
 
-                    // Compute standard deviation
                     double sumSqDiff = 0.0;
                     for (float val : threadActiveValues) {
                         double diff = val - mean;
                         sumSqDiff += diff * diff;
                     }
                     double stddev = std::sqrt(sumSqDiff / (currSize - 1));
-                    if (stddev < 1e-8) break; // Terminate if values are homogeneous
+                    if (stddev < 1e-8) break;
 
                     double lowBound = mean - sigmaLow * stddev;
                     double highBound = mean + sigmaHigh * stddev;
@@ -193,11 +180,10 @@ static GrayscaleImagePtr stackChannels(const std::vector<GrayscaleImagePtr>& cha
                             }
                         }
                         if (filtered.empty()) {
-                            break; // Fallback to current set if all would be rejected
+                            break;
                         }
                         threadActiveValues = filtered;
                     } else {
-                        // Winsorization: replace outlying values with bounds
                         for (int i = 0; i < currSize; ++i) {
                             if (threadActiveValues[i] < lowBound) {
                                 threadActiveValues[i] = static_cast<float>(lowBound);
@@ -215,7 +201,6 @@ static GrayscaleImagePtr stackChannels(const std::vector<GrayscaleImagePtr>& cha
                 continue;
             }
 
-            // Apply stacking methods
             if (method == "average") {
                 double sum = 0.0;
                 for (float val : threadActiveValues) sum += val;
@@ -287,6 +272,9 @@ void StackingAlgorithm::execute(WorkspaceRegistry& workspace,
     std::string mode = config.count("stacking_mode") ? config.at("stacking_mode") : "chunked";
     int patchSize = config.count("patch_size") ? std::stoi(config.at("patch_size")) : 1024;
 
+    bool useAdditive = config.count("scale_additive") ? (config.at("scale_additive") == "true") : false;
+    bool useMultiplicative = config.count("scale_multiplicative") ? (config.at("scale_multiplicative") == "true") : false;
+
     int threads = config.count("threads") ? std::stoi(config.at("threads")) : -1;
     if (threads <= 0) {
         threads = Preferences::instance().getThreadCount();
@@ -295,13 +283,13 @@ void StackingAlgorithm::execute(WorkspaceRegistry& workspace,
         omp_set_num_threads(threads);
     }
 
-    Logger::header("Stacking", QString("Starting execution. Input batch: %1, output master: %2, method: %3, rejection: %4, mode: %5, threads: %6")
+    Logger::header("Stacking", QString("Starting execution. Input batch: %1, output master: %2, method: %3, rejection: %4, mode: %5, additive scale: %6, multiplicative scale: %7, threads: %8")
                    .arg(QString::fromStdString(inputName))
                    .arg(QString::fromStdString(outputName))
                    .arg(QString::fromStdString(method))
                    .arg(QString::fromStdString(rejection))
                    .arg(QString::fromStdString(mode))
-                   .arg(threads));
+                   .arg(useAdditive).arg(useMultiplicative).arg(threads));
 
     QElapsedTimer totalTimer;
     totalTimer.start();
@@ -312,7 +300,6 @@ void StackingAlgorithm::execute(WorkspaceRegistry& workspace,
     }
     ImageBatchPtr batch = std::get<ImageBatchPtr>(inputElem);
 
-    // Filter only selected frames
     std::vector<int> selectedIndices;
     for (int i = 0; i < batch->count(); ++i) {
         if (batch->isFrameSelected(i)) {
@@ -327,15 +314,7 @@ void StackingAlgorithm::execute(WorkspaceRegistry& workspace,
 
     Logger::info("Stacking", QString("Total frames in batch: %1, selected frames for stacking: %2")
                  .arg(batch->count()).arg(numSelected));
-    if (rejection == "sigma" || rejection == "winsorized_sigma") {
-        Logger::info("Stacking", QString("Rejection thresholds: low = %1, high = %2")
-                     .arg(sigmaLow).arg(sigmaHigh));
-    } else if (rejection == "quantile") {
-        Logger::info("Stacking", QString("Rejection quantiles: low = %1, high = %2")
-                     .arg(quantileLow).arg(quantileHigh));
-    }
 
-    // Check if the first frame is RGB to determine color mode
     ImageVariant firstFrame = batch->getImage(selectedIndices[0]);
     bool isRGB = std::holds_alternative<RGBImagePtr>(firstFrame);
     
@@ -352,6 +331,86 @@ void StackingAlgorithm::execute(WorkspaceRegistry& workspace,
     }
 
     ImageMetadata coalesced = coalesceMetadata(batch, selectedIndices);
+    batch->clearCache(selectedIndices[0]);
+
+    // -----------------------------------------------------------------------
+    // Precompute scale and offset coefficients for Stacking Normalization
+    // -----------------------------------------------------------------------
+    int refIdx = selectedIndices[0];
+    for (int idx : selectedIndices) {
+        FrameMetadata fm = batch->frameMetadata(idx);
+        if (fm.registered && std::abs(fm.dx) < 1e-5 && std::abs(fm.dy) < 1e-5 && std::abs(fm.theta) < 1e-5) {
+            refIdx = idx;
+            break;
+        }
+    }
+
+    std::vector<double> coeffAR(numSelected, 1.0), coeffBR(numSelected, 0.0);
+    std::vector<double> coeffAG(numSelected, 1.0), coeffBG(numSelected, 0.0);
+    std::vector<double> coeffAB(numSelected, 1.0), coeffBB(numSelected, 0.0);
+
+    if (useAdditive || useMultiplicative) {
+        Logger::info("Stacking", QString("Using frame %1 as the normalization reference.").arg(refIdx));
+
+        double refMedR = 0.0, refSnR = 1.0;
+        double refMedG = 0.0, refSnG = 1.0;
+        double refMedB = 0.0, refSnB = 1.0;
+
+        {
+            ImageVariant refFrame = batch->getImage(refIdx);
+            if (isRGB) {
+                auto rgb = std::get<RGBImagePtr>(refFrame);
+                MathUtils::estimateImageStats(rgb->r()->buffer()->data(), rgb->width() * rgb->height(), refMedR, refSnR, 2000);
+                MathUtils::estimateImageStats(rgb->g()->buffer()->data(), rgb->width() * rgb->height(), refMedG, refSnG, 2000);
+                MathUtils::estimateImageStats(rgb->b()->buffer()->data(), rgb->width() * rgb->height(), refMedB, refSnB, 2000);
+            } else {
+                auto gray = std::get<GrayscaleImagePtr>(refFrame);
+                MathUtils::estimateImageStats(gray->buffer()->data(), gray->width() * gray->height(), refMedG, refSnG, 2000);
+            }
+            batch->clearCache(refIdx);
+        }
+
+        #pragma omp parallel for schedule(dynamic)
+        for (int i = 0; i < numSelected; ++i) {
+            int idx = selectedIndices[i];
+            ImageVariant frame = batch->getImage(idx);
+            
+            double medR = 0.0, snR = 1.0;
+            double medG = 0.0, snG = 1.0;
+            double medB = 0.0, snB = 1.0;
+
+            if (isRGB) {
+                auto rgb = std::get<RGBImagePtr>(frame);
+                MathUtils::estimateImageStats(rgb->r()->buffer()->data(), rgb->width() * rgb->height(), medR, snR, 2000);
+                MathUtils::estimateImageStats(rgb->g()->buffer()->data(), rgb->width() * rgb->height(), medG, snG, 2000);
+                MathUtils::estimateImageStats(rgb->b()->buffer()->data(), rgb->width() * rgb->height(), medB, snB, 2000);
+
+                double scaleR = useMultiplicative ? (refSnR / (snR > 1e-9 ? snR : 1e-9)) : 1.0;
+                double offsetR = useAdditive ? refMedR : medR;
+                coeffAR[i] = scaleR;
+                coeffBR[i] = offsetR - medR * scaleR;
+
+                double scaleG = useMultiplicative ? (refSnG / (snG > 1e-9 ? snG : 1e-9)) : 1.0;
+                double offsetG = useAdditive ? refMedG : medG;
+                coeffAG[i] = scaleG;
+                coeffBG[i] = offsetG - medG * scaleG;
+
+                double scaleB = useMultiplicative ? (refSnB / (snB > 1e-9 ? snB : 1e-9)) : 1.0;
+                double offsetB = useAdditive ? refMedB : medB;
+                coeffAB[i] = scaleB;
+                coeffBB[i] = offsetB - medB * scaleB;
+            } else {
+                auto gray = std::get<GrayscaleImagePtr>(frame);
+                MathUtils::estimateImageStats(gray->buffer()->data(), gray->width() * gray->height(), medG, snG, 2000);
+
+                double scaleG = useMultiplicative ? (refSnG / (snG > 1e-9 ? snG : 1e-9)) : 1.0;
+                double offsetG = useAdditive ? refMedG : medG;
+                coeffAG[i] = scaleG;
+                coeffBG[i] = offsetG - medG * scaleG;
+            }
+            batch->clearCache(idx);
+        }
+    }
 
     if (mode == "chunked") {
         std::string tempDir = TempDirectory::createTempDir("stacking");
@@ -361,9 +420,7 @@ void StackingAlgorithm::execute(WorkspaceRegistry& workspace,
         std::string tempOutPath = tempDir + "/" + outputName + ".fits";
 
         Logger::info("Stacking", QString("Running in 2D Chunked mode with patch size: %1").arg(patchSize));
-        Logger::info("Stacking", QString("Pre-allocating master FITS at: %1").arg(QString::fromStdString(tempOutPath)));
 
-        // Pre-allocate the master FITS file on disk
         FitsIO fits;
         if (isRGB) {
             auto blankR = std::make_shared<GrayscaleImage>(width, height);
@@ -386,6 +443,8 @@ void StackingAlgorithm::execute(WorkspaceRegistry& workspace,
         int numYPatches = (height + patchSize - 1) / patchSize;
         int totalPatches = numXPatches * numYPatches;
         int patchCount = 0;
+
+        std::vector<FitsIO> threadFitsArray(omp_get_max_threads());
 
         for (int py = 0; py < numYPatches; ++py) {
             int yStart = py * patchSize;
@@ -411,7 +470,7 @@ void StackingAlgorithm::execute(WorkspaceRegistry& workspace,
                     std::string errorMsg;
                     #pragma omp parallel
                     {
-                        FitsIO threadFits;
+                        FitsIO& threadFits = threadFitsArray[omp_get_thread_num()];
                         #pragma omp for schedule(dynamic)
                         for (int i = 0; i < numSelected; ++i) {
                             if (!errorMsg.empty()) continue;
@@ -440,9 +499,9 @@ void StackingAlgorithm::execute(WorkspaceRegistry& workspace,
                         throw std::runtime_error(errorMsg);
                     }
 
-                    auto stackedR = stackChannels(rPatches, method, rejection, sigmaLow, sigmaHigh, quantileLow, quantileHigh, nullptr);
-                    auto stackedG = stackChannels(gPatches, method, rejection, sigmaLow, sigmaHigh, quantileLow, quantileHigh, nullptr);
-                    auto stackedB = stackChannels(bPatches, method, rejection, sigmaLow, sigmaHigh, quantileLow, quantileHigh, nullptr);
+                    auto stackedR = stackChannels(rPatches, coeffAR, coeffBR, method, rejection, sigmaLow, sigmaHigh, quantileLow, quantileHigh, nullptr);
+                    auto stackedG = stackChannels(gPatches, coeffAG, coeffBG, method, rejection, sigmaLow, sigmaHigh, quantileLow, quantileHigh, nullptr);
+                    auto stackedB = stackChannels(bPatches, coeffAB, coeffBB, method, rejection, sigmaLow, sigmaHigh, quantileLow, quantileHigh, nullptr);
 
                     auto stackedRGBPatch = std::make_shared<RGBImage>(stackedR, stackedG, stackedB);
                     if (!fits.writeImagePatch(tempOutPath, stackedRGBPatch, xStart, yStart)) {
@@ -454,7 +513,7 @@ void StackingAlgorithm::execute(WorkspaceRegistry& workspace,
                     std::string errorMsg;
                     #pragma omp parallel
                     {
-                        FitsIO threadFits;
+                        FitsIO& threadFits = threadFitsArray[omp_get_thread_num()];
                         #pragma omp for schedule(dynamic)
                         for (int i = 0; i < numSelected; ++i) {
                             if (!errorMsg.empty()) continue;
@@ -480,7 +539,7 @@ void StackingAlgorithm::execute(WorkspaceRegistry& workspace,
                         throw std::runtime_error(errorMsg);
                     }
 
-                    auto stackedPatch = stackChannels(patches, method, rejection, sigmaLow, sigmaHigh, quantileLow, quantileHigh, nullptr);
+                    auto stackedPatch = stackChannels(patches, coeffAG, coeffBG, method, rejection, sigmaLow, sigmaHigh, quantileLow, quantileHigh, nullptr);
                     if (!fits.writeImagePatch(tempOutPath, stackedPatch, xStart, yStart)) {
                         throw std::runtime_error("Failed to write stacked patch to " + tempOutPath);
                     }
@@ -494,8 +553,6 @@ void StackingAlgorithm::execute(WorkspaceRegistry& workspace,
             progress(100);
         }
 
-        // Load the completed master back into memory and register it
-        Logger::info("Stacking", "Loading completed master from disk...");
         ImageVariant finalMaster = fits.readImage(tempOutPath);
         WorkspaceElement elem = std::visit([](auto&& arg) -> WorkspaceElement {
             return arg;
@@ -505,9 +562,7 @@ void StackingAlgorithm::execute(WorkspaceRegistry& workspace,
                         .arg(numSelected).arg(totalTimer.elapsed())
                         .arg(QString::fromStdString(outputName)));
     } else {
-        // Full RAM stacking (original method)
         if (isRGB) {
-            // Collect Red, Green, Blue channels independently across all selected frames
             std::vector<GrayscaleImagePtr> rChannels;
             std::vector<GrayscaleImagePtr> gChannels;
             std::vector<GrayscaleImagePtr> bChannels;
@@ -527,19 +582,17 @@ void StackingAlgorithm::execute(WorkspaceRegistry& workspace,
                 bChannels.push_back(rgb->b());
             }
 
-            // Stack each channel
-            auto stackedR = stackChannels(rChannels, method, rejection, sigmaLow, sigmaHigh, quantileLow, quantileHigh,
+            auto stackedR = stackChannels(rChannels, coeffAR, coeffBR, method, rejection, sigmaLow, sigmaHigh, quantileLow, quantileHigh,
                                           [progress](int p) { if (progress) progress(p / 3); });
-            auto stackedG = stackChannels(gChannels, method, rejection, sigmaLow, sigmaHigh, quantileLow, quantileHigh,
+            auto stackedG = stackChannels(gChannels, coeffAG, coeffBG, method, rejection, sigmaLow, sigmaHigh, quantileLow, quantileHigh,
                                           [progress](int p) { if (progress) progress(33 + p / 3); });
-            auto stackedB = stackChannels(bChannels, method, rejection, sigmaLow, sigmaHigh, quantileLow, quantileHigh,
+            auto stackedB = stackChannels(bChannels, coeffAB, coeffBB, method, rejection, sigmaLow, sigmaHigh, quantileLow, quantileHigh,
                                           [progress](int p) { if (progress) progress(66 + p / 3); });
 
             auto stackedRGB = std::make_shared<RGBImage>(stackedR, stackedG, stackedB);
             stackedRGB->setMetadata(coalesced);
             workspace.registerElement(outputName, stackedRGB);
         } else {
-            // Grayscale stacking
             std::vector<GrayscaleImagePtr> channels;
             channels.reserve(numSelected);
 
@@ -551,7 +604,7 @@ void StackingAlgorithm::execute(WorkspaceRegistry& workspace,
                 channels.push_back(std::get<GrayscaleImagePtr>(frame));
             }
 
-            auto stackedGray = stackChannels(channels, method, rejection, sigmaLow, sigmaHigh, quantileLow, quantileHigh, progress);
+            auto stackedGray = stackChannels(channels, coeffAG, coeffBG, method, rejection, sigmaLow, sigmaHigh, quantileLow, quantileHigh, progress);
             stackedGray->setMetadata(coalesced);
             workspace.registerElement(outputName, stackedGray);
         }

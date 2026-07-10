@@ -57,24 +57,31 @@ int ImageBatch::count() const {
 }
 
 ImageVariant ImageBatch::getImage(int index) {
-    std::lock_guard<std::mutex> lock(m_mutex);
     if (index < 0 || index >= m_count) {
         throw std::out_of_range("Batch index out of range");
     }
     
-    // Check if cached
-    auto& cached = m_cache[index];
-    if (std::holds_alternative<GrayscaleImagePtr>(cached) && std::get<GrayscaleImagePtr>(cached) == nullptr) {
-        // Not loaded yet, call the loader
-        cached = m_loaders[index]();
-    } else if (std::holds_alternative<RGBImagePtr>(cached) && std::get<RGBImagePtr>(cached) == nullptr) {
-        cached = m_loaders[index]();
-    } else if (cached.index() == 0 && !std::get<0>(cached)) {
-        // Variant default-constructed (valueless or null)
-        cached = m_loaders[index]();
+    bool needsLoad = false;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        const auto& cached = m_cache[index];
+        if (std::holds_alternative<GrayscaleImagePtr>(cached) && std::get<GrayscaleImagePtr>(cached) == nullptr) {
+            needsLoad = true;
+        } else if (std::holds_alternative<RGBImagePtr>(cached) && std::get<RGBImagePtr>(cached) == nullptr) {
+            needsLoad = true;
+        } else if (cached.index() == 0 && !std::get<0>(cached)) {
+            needsLoad = true;
+        } else {
+            return cached;
+        }
     }
     
-    return cached;
+    // Load without holding the lock so multiple threads can load different images simultaneously
+    ImageVariant loaded = m_loaders[index]();
+    
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_cache[index] = loaded;
+    return loaded;
 }
 
 std::string ImageBatch::frameName(int index) const {

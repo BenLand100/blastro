@@ -21,9 +21,16 @@
 #include "CalibrationAlgorithm.h"
 #include "DebayerAlgorithm.h"
 #include "RegisterAlgorithm.h"
+#include "StarFindingAlgorithm.h"
+#include "BackgroundExtractionAlgorithm.h"
 #include "AlignAlgorithm.h"
 #include "core/Logger.h"
 #include "core/TempDirectory.h"
+#include "core/MathUtils.h"
+#include "core/GrayscaleImage.h"
+#include "core/RGBImage.h"
+#include "core/ImageBatch.h"
+#include "StarFinder.h"
 #include <QFileInfo>
 #include <QDir>
 #include <QFile>
@@ -37,16 +44,15 @@
 
 namespace blastro {
 
-static std::array<double, 6> multiplyAffine(const std::array<double, 6>& A, const std::array<double, 6>& B) {
-    double a  = A[0]*B[0] + A[1]*B[3];
-    double b  = A[0]*B[1] + A[1]*B[4];
-    double tx = A[0]*B[2] + A[1]*B[5] + A[2];
-    
-    double c  = A[3]*B[0] + A[4]*B[3];
-    double d  = A[3]*B[1] + A[4]*B[4];
-    double ty = A[3]*B[2] + A[4]*B[5] + A[5];
-    
-    return {a, b, tx, c, d, ty};
+
+
+static GrayscaleImagePtr getRegistrationChannel(const ImageVariant& img) {
+    if (std::holds_alternative<GrayscaleImagePtr>(img)) {
+        return std::get<GrayscaleImagePtr>(img);
+    } else if (std::holds_alternative<RGBImagePtr>(img)) {
+        return std::get<RGBImagePtr>(img)->g();
+    }
+    return nullptr;
 }
 
 
@@ -353,6 +359,8 @@ void PreprocessingPipeline::execute(WorkspaceRegistry& workspace,
                         {"rejection", config.count("bias_dark_rejection") ? config.at("bias_dark_rejection") : "sigmaclip"},
                         {"sigma_low", config.count("bias_dark_sigma_low") ? config.at("bias_dark_sigma_low") : "3.0"},
                         {"sigma_high", config.count("bias_dark_sigma_high") ? config.at("bias_dark_sigma_high") : "3.0"},
+                        {"scale_additive", config.count("bias_dark_scale_additive") ? config.at("bias_dark_scale_additive") : "false"},
+                        {"scale_multiplicative", config.count("bias_dark_scale_multiplicative") ? config.at("bias_dark_scale_multiplicative") : "false"},
                         {"quantile_low", "0.2"},
                         {"quantile_high", "0.2"}
                     });
@@ -402,6 +410,8 @@ void PreprocessingPipeline::execute(WorkspaceRegistry& workspace,
                         {"rejection", config.count("bias_dark_rejection") ? config.at("bias_dark_rejection") : "sigmaclip"},
                         {"sigma_low", config.count("bias_dark_sigma_low") ? config.at("bias_dark_sigma_low") : "3.0"},
                         {"sigma_high", config.count("bias_dark_sigma_high") ? config.at("bias_dark_sigma_high") : "3.0"},
+                        {"scale_additive", config.count("bias_dark_scale_additive") ? config.at("bias_dark_scale_additive") : "false"},
+                        {"scale_multiplicative", config.count("bias_dark_scale_multiplicative") ? config.at("bias_dark_scale_multiplicative") : "false"},
                         {"quantile_low", "0.2"},
                         {"quantile_high", "0.2"}
                     });
@@ -541,6 +551,8 @@ void PreprocessingPipeline::execute(WorkspaceRegistry& workspace,
                             {"rejection", config.count("flat_rejection") ? config.at("flat_rejection") : "sigmaclip"},
                             {"sigma_low", config.count("flat_sigma_low") ? config.at("flat_sigma_low") : "3.0"},
                             {"sigma_high", config.count("flat_sigma_high") ? config.at("flat_sigma_high") : "3.0"},
+                            {"scale_additive", config.count("flat_scale_additive") ? config.at("flat_scale_additive") : "false"},
+                            {"scale_multiplicative", config.count("flat_scale_multiplicative") ? config.at("flat_scale_multiplicative") : "false"},
                             {"quantile_low", "0.2"},
                             {"quantile_high", "0.2"}
                         }, [this, &stepTimer, &progress, currentStepIndex, totalSteps](int pct) {
@@ -677,8 +689,6 @@ void PreprocessingPipeline::execute(WorkspaceRegistry& workspace,
                     registerInputName = debayerBatchName;
                 }
 
-                // Register batch
-                Logger::info("Preprocessing", "Registering calibrated light frames...");
                 std::string starMinSnr = config.count("star_min_snr") ? config.at("star_min_snr") : "4.0";
                 std::string starMinFwhm = config.count("star_min_fwhm") ? config.at("star_min_fwhm") : "1.5";
                 std::string starDetectMethod = config.count("star_detection_method") ? config.at("star_detection_method") : "adaptive";
@@ -686,15 +696,26 @@ void PreprocessingPipeline::execute(WorkspaceRegistry& workspace,
                 std::string starMaxEcc = config.count("star_max_eccentricity") ? config.at("star_max_eccentricity") : "0.9";
                 std::string transModel = config.count("transformation_model") ? config.at("transformation_model") : "rigid";
 
-                RegisterAlgorithm registerer;
-                runStep(registerer, {
+                // Star finding
+                Logger::info("Preprocessing", "Detecting stars in calibrated light frames...");
+                StarFindingAlgorithm finder;
+                runStep(finder, {
                     {"input_name", registerInputName},
-                    {"ref_frame_index", "0"},
                     {"detection_method", starDetectMethod},
                     {"snr_min", starMinSnr},
                     {"min_fwhm", starMinFwhm},
                     {"max_stars", starMaxStars},
-                    {"max_eccentricity", starMaxEcc},
+                    {"max_eccentricity", starMaxEcc}
+                });
+
+                // Register batch
+                Logger::info("Preprocessing", "Registering calibrated light frames...");
+                RegisterAlgorithm registerer;
+                runStep(registerer, {
+                    {"input_name", registerInputName},
+                    {"ref_frame_index", config.count("ref_frame_index") ? config.at("ref_frame_index") : ""},
+                    {"reference_strategy", config.count("reference_strategy") ? config.at("reference_strategy") : "snr"},
+                    {"max_stars", starMaxStars},
                     {"match_tolerance", config.count("match_tolerance") ? config.at("match_tolerance") : "1.5"},
                     {"transformation_model", transModel}
                 });
@@ -723,6 +744,8 @@ void PreprocessingPipeline::execute(WorkspaceRegistry& workspace,
         std::vector<BatchRegistration> batchRegs;
 
         // 1. Local Registration Phase: Register each batch against its own local best frame
+        std::vector<std::string> currentBatchNames = batchNames;
+
         for (const auto& name : batchNames) {
             if (m_cancelCallback && m_cancelCallback()) {
                 throw std::runtime_error("Preprocessing cancelled by user.");
@@ -763,30 +786,91 @@ void PreprocessingPipeline::execute(WorkspaceRegistry& workspace,
             Logger::info("Preprocessing", QString("Selected local reference frame: index %1 (SNR = %2) for batch %3")
                          .arg(bestFrameIdx).arg(maxSnr).arg(QString::fromStdString(name)));
 
-            std::string starMinSnr = config.count("star_min_snr") ? config.at("star_min_snr") : "4.0";
-            std::string starMinFwhm = config.count("star_min_fwhm") ? config.at("star_min_fwhm") : "1.5";
-            std::string starDetectMethod = config.count("star_detection_method") ? config.at("star_detection_method") : "adaptive";
-            std::string starMaxStars = config.count("star_max_stars") ? config.at("star_max_stars") : "500";
-            std::string starMaxEcc = config.count("star_max_eccentricity") ? config.at("star_max_eccentricity") : "0.9";
-            std::string transModel = config.count("transformation_model") ? config.at("transformation_model") : "rigid";
+            FrameMetadata bestFrameMeta = batch->frameMetadata(bestFrameIdx);
+            if (!bestFrameMeta.registered) {
+                bestFrameMeta.registered = true;
+                bestFrameMeta.transform = {1.0, 0.0, 0.0, 0.0, 1.0, 0.0};
+                bestFrameMeta.dx = 0.0;
+                bestFrameMeta.dy = 0.0;
+                bestFrameMeta.theta = 0.0;
+                batch->setFrameMetadata(bestFrameIdx, bestFrameMeta);
+            }
 
-            RegisterAlgorithm registerer;
-            runStep(registerer, {
-                {"input_name", name},
-                {"ref_frame_index", std::to_string(bestFrameIdx)},
-                {"detection_method", starDetectMethod},
-                {"snr_min", starMinSnr},
-                {"min_fwhm", starMinFwhm},
-                {"max_stars", starMaxStars},
-                {"max_eccentricity", starMaxEcc},
-                {"match_tolerance", config.count("match_tolerance") ? config.at("match_tolerance") : "1.5"},
-                {"transformation_model", transModel}
-            });
+            // Adjust registrations of all frames in the batch relative to bestFrameIdx
+            std::array<double, 6> T_best_inv = MathUtils::invertAffine(bestFrameMeta.transform);
+            for (int i = 0; i < count; ++i) {
+                if (batch->isFrameSelected(i)) {
+                    FrameMetadata meta = batch->frameMetadata(i);
+                    if (meta.registered) {
+                        std::array<double, 6> T_final = MathUtils::multiplyAffine(T_best_inv, meta.transform);
+                        meta.transform = T_final;
+                        meta.dx = T_final[2];
+                        meta.dy = T_final[5];
+                        meta.theta = std::atan2(T_final[3] - T_final[1], T_final[0] + T_final[4]);
+                        batch->setFrameMetadata(i, meta);
+                    }
+                }
+            }
 
-
-            // Retrieve registered stars of the local reference frame
+            // Retrieve registered stars of the local reference frame.
             FrameMetadata refMeta = batch->frameMetadata(bestFrameIdx);
-            batchRegs.push_back({name, bestFrameIdx, maxSnr, refMeta.stars});
+            std::vector<Star> refStars = refMeta.stars;
+            if (refStars.size() < 3) {
+                Logger::info("Preprocessing", QString("Detecting stars on local reference frame (index %1) for mutual alignment...")
+                             .arg(bestFrameIdx));
+                ImageVariant refFrame = batch->getImage(bestFrameIdx);
+                auto refChannel = getRegistrationChannel(refFrame);
+                if (!refChannel) {
+                    throw std::runtime_error("Failed to extract registration channel from reference frame " + std::to_string(bestFrameIdx));
+                }
+                std::string starMinSnr = config.count("star_min_snr") ? config.at("star_min_snr") : "4.0";
+                std::string starMinFwhm = config.count("star_min_fwhm") ? config.at("star_min_fwhm") : "1.5";
+                std::string starDetectMethod = config.count("star_detection_method") ? config.at("star_detection_method") : "adaptive";
+                std::string starMaxStars = config.count("star_max_stars") ? config.at("star_max_stars") : "500";
+                std::string starMaxEcc = config.count("star_max_eccentricity") ? config.at("star_max_eccentricity") : "0.9";
+
+                double snrMin = std::stod(starMinSnr);
+                double minFwhm = std::stod(starMinFwhm);
+                int maxStars = std::stoi(starMaxStars);
+                double maxEcc = std::stod(starMaxEcc);
+
+                int maxStarsDetect = (starDetectMethod == "adaptive") ? 10000 : maxStars;
+                refStars = StarFinder::findStars(refChannel, maxStarsDetect, snrMin, starDetectMethod, 10, minFwhm, maxEcc);
+
+                refMeta.stars = refStars;
+                batch->setFrameMetadata(bestFrameIdx, refMeta);
+            }
+
+            batchRegs.push_back({name, bestFrameIdx, maxSnr, refStars});
+        }
+
+        // 1.5 Background Normalization Phase (BGE)
+        bool runBGE = config.count("run_bge") ? (config.at("run_bge") == "true") : true;
+        if (runBGE) {
+            for (size_t k = 0; k < batchNames.size(); ++k) {
+                std::string name = batchNames[k];
+                std::string bgeBatchName = name + "_bge";
+                int bestFrameIdx = batchRegs[k].bestFrameIdx;
+                
+                BackgroundExtractionAlgorithm bge;
+                std::map<std::string, std::string> bgeConfig = {
+                    {"input_name", name},
+                    {"output_name", bgeBatchName},
+                    {"order", config.count("bge_order") ? config.at("bge_order") : "3"},
+                    {"sigma_cut", config.count("bge_sigma_cut") ? config.at("bge_sigma_cut") : "3.0"},
+                    {"sample_frac", config.count("bge_sample_frac") ? config.at("bge_sample_frac") : "0.01"},
+                    {"method", config.count("bge_method") ? config.at("bge_method") : "Polynomial"},
+                    {"equalize", "false"},
+                    {"restore_median", "true"},
+                    {"ref_frame_index", std::to_string(bestFrameIdx)}
+                };
+                
+                Logger::info("Preprocessing", QString("Running Background Normalization on batch '%1'...").arg(QString::fromStdString(name)));
+                runStep(bge, bgeConfig);
+                
+                currentBatchNames[k] = bgeBatchName;
+                batchRegs[k].name = bgeBatchName;
+            }
         }
 
         // 2. Mutual Alignment Phase (if enabled)
@@ -848,7 +932,7 @@ void PreprocessingPipeline::execute(WorkspaceRegistry& workspace,
                     if (batch->isFrameSelected(i)) {
                         FrameMetadata meta = batch->frameMetadata(i);
                         if (meta.registered) {
-                            std::array<double, 6> T_final = multiplyAffine(T_batch, meta.transform);
+                            std::array<double, 6> T_final = MathUtils::multiplyAffine(T_batch, meta.transform);
                             meta.transform = T_final;
                             meta.dx = T_final[2];
                             meta.dy = T_final[5];
@@ -916,7 +1000,10 @@ void PreprocessingPipeline::execute(WorkspaceRegistry& workspace,
         }
 
         // 3. Align and Stack Phase: Align and stack each batch
-        for (const auto& name : batchNames) {
+        for (size_t k = 0; k < currentBatchNames.size(); ++k) {
+            std::string name = currentBatchNames[k];
+            std::string origName = batchNames[k];
+
             if (m_cancelCallback && m_cancelCallback()) {
                 throw std::runtime_error("Preprocessing cancelled by user.");
             }
@@ -947,7 +1034,7 @@ void PreprocessingPipeline::execute(WorkspaceRegistry& workspace,
                 relocateBatchFiles(workspace, alignedBatchName, "light_align", outDir, true);
             }
 
-            std::string finalMasterName = name + "_stacked";
+            std::string finalMasterName = origName + "_stacked";
             if (workspace.contains(finalMasterName)) {
                 std::string base = finalMasterName;
                 int suffix = 1;
@@ -960,6 +1047,10 @@ void PreprocessingPipeline::execute(WorkspaceRegistry& workspace,
             }
 
             Logger::info("Preprocessing", QString("Stacking final preprocessed master light for batch %1...").arg(QString::fromStdString(name)));
+            
+            bool scaleAdditive = config.count("light_scale_additive") ? (config.at("light_scale_additive") == "true") : true;
+            bool scaleMultiplicative = config.count("light_scale_multiplicative") ? (config.at("light_scale_multiplicative") == "true") : true;
+
             StackingAlgorithm stacker;
             runStep(stacker, {
                 {"input_name", alignedBatchName},
@@ -970,11 +1061,16 @@ void PreprocessingPipeline::execute(WorkspaceRegistry& workspace,
                 {"sigma_high", config.count("light_sigma_high") ? config.at("light_sigma_high") : "3.0"},
                 {"quantile_low", "0.2"},
                 {"quantile_high", "0.2"},
-                {"weight_method", config.count("light_weight_method") ? config.at("light_weight_method") : "none"}
+                {"weight_method", config.count("light_weight_method") ? config.at("light_weight_method") : "none"},
+                {"scale_additive", scaleAdditive ? "true" : "false"},
+                {"scale_multiplicative", scaleMultiplicative ? "true" : "false"}
             });
 
             if (!keepIntermediate) {
                 workspace.unregisterElement(alignedBatchName);
+            }
+            if (runBGE && !keepIntermediate) {
+                workspace.unregisterElement(name);
             }
 
             auto masterElem = workspace.getElement(finalMasterName);
@@ -1103,6 +1199,7 @@ std::vector<std::string> PreprocessingPipeline::getPlannedSteps(const std::map<s
                 if (debayer) {
                     steps.push_back("Debayer Lights -> " + finalBatchName);
                 }
+                steps.push_back("Star Finding -> " + finalBatchName);
                 steps.push_back("Register Lights -> " + finalBatchName);
             }
         }
@@ -1115,6 +1212,10 @@ std::vector<std::string> PreprocessingPipeline::getPlannedSteps(const std::map<s
                 filter = filter.substr(pos + 20);
             }
             steps.push_back("Register " + filter + " to Reference");
+            bool runBGE = config.count("run_bge") ? (config.at("run_bge") == "true") : true;
+            if (runBGE) {
+                steps.push_back("Background Normalization " + filter);
+            }
             steps.push_back("Align " + filter + " Frames");
             steps.push_back("Stack " + filter + " Frames");
         }

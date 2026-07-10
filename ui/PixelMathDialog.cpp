@@ -17,6 +17,7 @@
  */
 
 #include "PixelMathDialog.h"
+#include <QEvent>
 #include <QJsonObject>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -43,29 +44,30 @@ PixelMathDialog::PixelMathDialog(WorkspaceRegistry& workspace, QWidget* parent)
       m_targetImageCombo(new QComboBox(this)),
       m_createNewImage(new QRadioButton("Create new image:", this)),
       m_replaceTargetImage(new QRadioButton("Replace target image:", this)) {
-
+ 
     setWindowTitle("Pixel Math");
-
+ 
     QVBoxLayout* mainLayout = new QVBoxLayout(this);
-
+ 
     // 1. Image References Info Box
     QGroupBox* infoBox = new QGroupBox("Available Images (use as variables)", this);
     QVBoxLayout* infoLayout = new QVBoxLayout(infoBox);
     
     QScrollArea* scrollArea = new QScrollArea(this);
     scrollArea->setWidgetResizable(true);
-    scrollArea->setMaximumHeight(120);
     scrollArea->setMinimumHeight(60);
     scrollArea->setStyleSheet("QScrollArea { background-color: transparent; border: none; }");
     
     m_infoLabel = new QLabel(this);
     m_infoLabel->setStyleSheet("font-family: monospace; color: #88ff88; background-color: transparent;");
     m_infoLabel->setWordWrap(true);
+    m_infoLabel->setTextInteractionFlags(Qt::TextBrowserInteraction);
+    connect(m_infoLabel, &QLabel::linkActivated, this, &PixelMathDialog::onVariableClicked);
     
     scrollArea->setWidget(m_infoLabel);
     infoLayout->addWidget(scrollArea);
-    mainLayout->addWidget(infoBox);
-
+    mainLayout->addWidget(infoBox, 1);
+ 
     // 2. Color Space / Expression type
     QGroupBox* modeBox = new QGroupBox("Output Color Space", this);
     QHBoxLayout* modeLayout = new QHBoxLayout(modeBox);
@@ -73,8 +75,8 @@ PixelMathDialog::PixelMathDialog(WorkspaceRegistry& workspace, QWidget* parent)
     m_grayMode->setChecked(false);
     modeLayout->addWidget(m_rgbMode);
     modeLayout->addWidget(m_grayMode);
-    mainLayout->addWidget(modeBox);
-
+    mainLayout->addWidget(modeBox, 0);
+ 
     // 3. Expressions input
     QGroupBox* exprBox = new QGroupBox("RGB/K Expressions", this);
     QFormLayout* formLayout = new QFormLayout(exprBox);
@@ -85,14 +87,19 @@ PixelMathDialog::PixelMathDialog(WorkspaceRegistry& workspace, QWidget* parent)
     m_exprK->setPlaceholderText("Expression for Grayscale (K) channel");
     m_exprK->setEnabled(false); // Default is RGB mode
     
+    m_exprR->installEventFilter(this);
+    m_exprG->installEventFilter(this);
+    m_exprB->installEventFilter(this);
+    m_exprK->installEventFilter(this);
+    
     formLayout->addRow("R / Gray:", m_exprR);
     formLayout->addRow("G:", m_exprG);
     formLayout->addRow("B:", m_exprB);
     formLayout->addRow("K (Gray):", m_exprK);
     formLayout->addRow("", m_useSingleExpr);
     
-    mainLayout->addWidget(exprBox);
-
+    mainLayout->addWidget(exprBox, 0);
+ 
     // 4. Destination
     QGroupBox* destBox = new QGroupBox("Destination", this);
     QVBoxLayout* destLayout = new QVBoxLayout(destBox);
@@ -102,7 +109,7 @@ PixelMathDialog::PixelMathDialog(WorkspaceRegistry& workspace, QWidget* parent)
     createLayout->addWidget(m_createNewImage);
     createLayout->addWidget(m_outputName, 1);
     destLayout->addLayout(createLayout);
-
+ 
     QHBoxLayout* replaceLayout = new QHBoxLayout();
     m_replaceTargetImage->setChecked(false);
     replaceLayout->addWidget(m_replaceTargetImage);
@@ -112,8 +119,8 @@ PixelMathDialog::PixelMathDialog(WorkspaceRegistry& workspace, QWidget* parent)
     replaceLayout->addWidget(m_targetImageCombo, 1);
     destLayout->addLayout(replaceLayout);
     
-    mainLayout->addWidget(destBox);
-
+    mainLayout->addWidget(destBox, 0);
+ 
     // 5. Buttons
     QHBoxLayout* btnLayout = new QHBoxLayout();
     QPushButton* runBtn = new QPushButton("Run", this);
@@ -124,7 +131,7 @@ PixelMathDialog::PixelMathDialog(WorkspaceRegistry& workspace, QWidget* parent)
     btnLayout->addWidget(runBtn);
     btnLayout->addWidget(closeBtn);
     mainLayout->addLayout(btnLayout);
-
+ 
     // Connections
     connect(m_useSingleExpr, &QCheckBox::toggled, this, &PixelMathDialog::onUseSingleExpressionChanged);
     connect(m_rgbMode, &QRadioButton::toggled, this, [this](bool checked) {
@@ -149,7 +156,7 @@ PixelMathDialog::PixelMathDialog(WorkspaceRegistry& workspace, QWidget* parent)
         m_outputName->setEnabled(!checked);
         m_targetImageCombo->setEnabled(checked);
     });
-
+ 
     connect(runBtn, &QPushButton::clicked, this, &PixelMathDialog::onRunClicked);
     connect(closeBtn, &QPushButton::clicked, this, &AlgorithmDialog::onClose);
 }
@@ -235,14 +242,15 @@ void PixelMathDialog::refreshWorkspaceElements() {
     }
 
     if (m_infoLabel) {
-        QString infoText = "Active Workspace Variables:\n";
+        QString infoText = "<b>Active Workspace Variables (click to insert):</b><br>";
         if (keys.empty()) {
-            infoText += "  (No images open. Math will output using default 800x600 dimensions)";
+            infoText += "&nbsp;&nbsp;(No images open. Math will output using default 800x600 dimensions)";
         } else {
             for (const auto& name : keys) {
-                infoText += QString("  - %1\n").arg(QString::fromStdString(name));
+                QString nameStr = QString::fromStdString(name);
+                infoText += QString("&nbsp;&nbsp;•&nbsp;<a href=\"%1\" style=\"color: #88ff88; text-decoration: underline;\"><font color=\"#88ff88\">%1</font></a><br>").arg(nameStr);
             }
-            infoText += "\nNote: For RGB images, you can also use suffix _r, _g, _b (e.g. Image1_r)\n";
+            infoText += "<br>Note: For RGB images, you can also use suffix _r, _g, _b (e.g. Image1_r)<br>";
             infoText += "Any valid image name in the workspace registry can be used as a variable.";
         }
         m_infoLabel->setText(infoText);
@@ -281,6 +289,27 @@ void PixelMathDialog::restoreState(const QJsonObject& obj) {
     }
     if (obj.contains("output_name"))
         m_outputName->setText(obj["output_name"].toString());
+}
+
+bool PixelMathDialog::eventFilter(QObject* obj, QEvent* event) {
+    if (event->type() == QEvent::FocusIn) {
+        if (obj == m_exprR || obj == m_exprG || obj == m_exprB || obj == m_exprK) {
+            m_lastFocusedExpr = qobject_cast<QLineEdit*>(obj);
+        }
+    }
+    return AlgorithmDialog::eventFilter(obj, event);
+}
+
+void PixelMathDialog::onVariableClicked(const QString& varName) {
+    QLineEdit* target = m_lastFocusedExpr;
+    if (!target) {
+        if (m_exprR->isEnabled()) target = m_exprR;
+        else if (m_exprK->isEnabled()) target = m_exprK;
+    }
+    if (target && target->isEnabled()) {
+        target->insert(varName);
+        target->setFocus();
+    }
 }
 
 } // namespace blastro

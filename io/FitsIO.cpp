@@ -588,9 +588,20 @@ bool FitsIO::writeBatch(const std::string& filepath, ImageBatchPtr batch) {
     }
 }
 
+void FitsIO::clearCache() {
+    m_readCache.clear();
+}
+
 ImageVariant FitsIO::readImagePatch(const std::string& filepath, int xStart, int yStart, int patchW, int patchH, int planeIndex) {
     try {
-        std::unique_ptr<CCfits::FITS> pInfile(new CCfits::FITS(filepath, CCfits::Read, true));
+        std::shared_ptr<CCfits::FITS> pInfile;
+        auto it = m_readCache.find(filepath);
+        if (it != m_readCache.end()) {
+            pInfile = it->second;
+        } else {
+            pInfile = std::make_shared<CCfits::FITS>(filepath, CCfits::Read, false);
+            m_readCache[filepath] = pInfile;
+        }
         CCfits::PHDU& image = pInfile->pHDU();
 
         int axes = image.axes();

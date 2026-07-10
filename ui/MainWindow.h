@@ -45,6 +45,7 @@ class AlignDialog;
 class DebayerDialog;
 class CalibrationDialog;
 class PixelMathDialog;
+class StarFindingDialog;
 }
 
 namespace blastro {
@@ -146,6 +147,7 @@ private slots:
     void onOpenStacking();
     void onOpenCalibration();
     void onOpenDebayer();
+    void onOpenStarFinding();
     void onOpenRegister();
     void onOpenAlign();
     void onOpenPlatesolve();
@@ -224,6 +226,7 @@ private:
     BackgroundExtractionDialog* m_bgeDlg        = nullptr;
     StackingDialog*            m_stackingDlg    = nullptr;
     RegisterDialog*            m_registerDlg    = nullptr;
+    StarFindingDialog*         m_starFindingDlg = nullptr;
     AlignDialog*               m_alignDlg       = nullptr;
     DebayerDialog*             m_debayerDlg     = nullptr;
     CalibrationDialog*         m_calibrationDlg = nullptr;
@@ -236,6 +239,7 @@ private:
     QMdiSubWindow*             m_bgeSub         = nullptr;
     QMdiSubWindow*             m_stackingSub    = nullptr;
     QMdiSubWindow*             m_registerSub    = nullptr;
+    QMdiSubWindow*             m_starFindingSub = nullptr;
     QMdiSubWindow*             m_alignSub       = nullptr;
     QMdiSubWindow*             m_debayerSub     = nullptr;
     QMdiSubWindow*             m_calibrationSub = nullptr;
@@ -269,6 +273,7 @@ private:
     QAction* m_stackingAct;
     QAction* m_calibrationAct;
     QAction* m_debayerAct;
+    QAction* m_starFindingAct;
     QAction* m_registerAct;
     QAction* m_alignAct;
     QAction* m_backgroundAct;

@@ -38,9 +38,13 @@ public:
     void restoreState(const QJsonObject& obj) override;
     void refreshWorkspaceElements() override;
 
+protected:
+    bool eventFilter(QObject* obj, QEvent* event) override;
+
 private slots:
     void onUseSingleExpressionChanged(bool checked);
     void onRunClicked();
+    void onVariableClicked(const QString& varName);
 
 private:
     QLineEdit* m_exprR;
@@ -57,6 +61,7 @@ private:
     QRadioButton* m_createNewImage;
     QRadioButton* m_replaceTargetImage;
     QLabel* m_infoLabel = nullptr;
+    QLineEdit* m_lastFocusedExpr = nullptr;
 };
 
 } // namespace blastro

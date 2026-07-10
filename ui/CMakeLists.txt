@@ -27,6 +27,7 @@ add_library(blastro_ui
     CalibrationDialog.cpp
     DebayerDialog.cpp
     RegisterDialog.cpp
+    StarFindingDialog.cpp
     AlignDialog.cpp
     BackgroundExtractionDialog.cpp
     PlatesolveDialog.cpp

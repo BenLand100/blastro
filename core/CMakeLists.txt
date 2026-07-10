@@ -26,6 +26,7 @@ add_library(blastro_core
     Preferences.cpp
     Logger.cpp
     ProjectSerializer.cpp
+    MathUtils.cpp
 )
 target_include_directories(blastro_core PUBLIC 
     ${CMAKE_CURRENT_SOURCE_DIR}/..

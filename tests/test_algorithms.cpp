@@ -21,6 +21,7 @@
 #include "algorithms/StackingAlgorithm.h"
 #include "algorithms/CalibrationAlgorithm.h"
 #include "algorithms/RegisterAlgorithm.h"
+#include "algorithms/StarFindingAlgorithm.h"
 #include "algorithms/AlignAlgorithm.h"
 #include "algorithms/BackgroundExtractionAlgorithm.h"
 #include "algorithms/StretchingAlgorithm.h"
@@ -934,16 +935,23 @@ void testLightFramePipeline() {
     // -----------------------------------------------------------------------
     // 13. Register: determine shifts and rotations (on BGE frames)
     // -----------------------------------------------------------------------
+    std::cout << "  [register] Running star finding..." << std::endl;
+    StarFindingAlgorithm starFinder;
+    starFinder.execute(workspace, {
+        {"input_name",       "bge_light_batch"},
+        {"detection_method", "centroid"},
+        {"snr_min",          "3.0"},
+        {"min_fwhm",         "1.5"},
+        {"max_stars",        "12"},    // exactly our injected star count — excludes noise peaks
+        {"max_eccentricity", "0.90"}
+    });
+
     std::cout << "  [register] Running star registration..." << std::endl;
     RegisterAlgorithm registrar;
     registrar.execute(workspace, {
         {"input_name",       "bge_light_batch"},
         {"ref_frame_index",  "0"},
-        {"detection_method", "centroid"},
-        {"snr_min",          "3.0"},
-        {"min_fwhm",         "1.5"},
         {"max_stars",        "12"},    // exactly our injected star count — excludes noise peaks
-        {"max_eccentricity", "0.90"},
         {"match_tolerance",  "3.0"}
     });
 

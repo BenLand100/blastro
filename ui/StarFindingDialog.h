@@ -6,34 +6,25 @@
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation, either version 3 of the License, or
  * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #pragma once
 #include "AlgorithmDialog.h"
 #include <QComboBox>
-#include <QLineEdit>
-#include <QPushButton>
 #include <QDoubleSpinBox>
 #include <QSpinBox>
+#include <QPushButton>
 
 namespace blastro {
 
-class RegisterDialog : public AlgorithmDialog {
+class StarFindingDialog : public AlgorithmDialog {
     Q_OBJECT
 public:
-    RegisterDialog(WorkspaceRegistry& workspace, QWidget* parent = nullptr);
-    ~RegisterDialog() override = default;
+    StarFindingDialog(WorkspaceRegistry& workspace, QWidget* parent = nullptr);
+    ~StarFindingDialog() override = default;
 
     std::map<std::string, std::string> getConfig() const override;
-    std::string algorithmName() const override { return "Register"; }
+    std::string algorithmName() const override { return "StarFinding"; }
     QJsonObject serializeState() const override;
     void restoreState(const QJsonObject& obj) override;
     void refreshWorkspaceElements() override;
@@ -44,13 +35,13 @@ private slots:
 
 private:
     QComboBox* m_targetInputCombo;
-    QComboBox* m_refStrategyCombo;
-    QSpinBox* m_refIdxSpin;
-    QComboBox* m_modelCombo;
+    QComboBox* m_methodCombo;
+    QDoubleSpinBox* m_snrSpin;
+    QDoubleSpinBox* m_minFwhmSpin;
 
-    // Advanced Preferences
+    // Advanced parameters
     int m_maxStars = 500;
-    double m_matchTol = 1.5;
+    double m_maxEccentricity = 0.9;
     int m_threads = -1;
 };
 

@@ -72,9 +72,11 @@ The **Background Extraction** algorithm removes background gradients (such as sk
 
 ## 6. Preprocessing Wizard (PPW)
 
-The **Preprocessing Wizard** calibrates, registers, aligns, and stacks light frames with their corresponding calibration master frames.
+The **Preprocessing Wizard** calibrates, normalizes the background, detects stars, registers, aligns, and stacks light frames with their corresponding calibration master frames.
 
-- **Staged Workflow**: Execution is divided into Stage 1 (Calibration & Registration) and Stage 2 (Alignment & Stacking), allowing you to review registered frames and adjust filtering constraints between stages.
+- **Staged Workflow**: Execution is divided into Stage 1 (Calibration, Star Finding & Registration) and Stage 2 (Background Normalization, Alignment & Stacking), allowing you to review registered frames and adjust filtering constraints between stages.
+- **Background Normalization**: When enabled, applies a modeled background subtraction to all target frames mapped from the reference frame's sample points before alignment.
+- **Stacking Normalization**: Supports additive and multiplicative scaling to match the brightness and contrast of target frames against the reference frame on the fly during integration.
 - **Output Settings (Control Tab)**:
   - **Open Calibration Stacks**: When checked (default), automatically opens the stacked master calibration frames (bias, dark, flat) in the workspace for inspection after Stage 1 completes.
   - **Open Light Masters**: When checked (default), automatically opens the final stacked light master image(s) after Stage 2 completes.

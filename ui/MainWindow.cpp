@@ -26,6 +26,7 @@
 #include "algorithms/CalibrationAlgorithm.h"
 #include "algorithms/DebayerAlgorithm.h"
 #include "algorithms/RegisterAlgorithm.h"
+#include "algorithms/StarFindingAlgorithm.h"
 #include "algorithms/AlignAlgorithm.h"
 #include "algorithms/BackgroundExtractionAlgorithm.h"
 #include "algorithms/StretchingAlgorithmWrapper.h"
@@ -35,6 +36,7 @@
 #include "CalibrationDialog.h"
 #include "DebayerDialog.h"
 #include "RegisterDialog.h"
+#include "StarFindingDialog.h"
 #include "AlignDialog.h"
 #include "BackgroundExtractionDialog.h"
 #include "StretchingDialog.h"
@@ -181,6 +183,7 @@ MainWindow::MainWindow(QWidget* parent)
     m_bgeDlg         = new BackgroundExtractionDialog(m_workspace, this);
     m_stackingDlg    = new StackingDialog(m_workspace, this);
     m_registerDlg    = new RegisterDialog(m_workspace, this);
+    m_starFindingDlg = new StarFindingDialog(m_workspace, this);
     m_alignDlg       = new AlignDialog(m_workspace, this);
     m_debayerDlg     = new DebayerDialog(m_workspace, this);
     m_calibrationDlg = new CalibrationDialog(m_workspace, this);
@@ -193,6 +196,7 @@ MainWindow::MainWindow(QWidget* parent)
     connect(m_bgeDlg,          &BackgroundExtractionDialog::algorithmExecuted, this, &MainWindow::executeAlgorithmSlot);
     connect(m_stackingDlg,     &StackingDialog::algorithmExecuted,            this, &MainWindow::executeAlgorithmSlot);
     connect(m_registerDlg,     &RegisterDialog::algorithmExecuted,            this, &MainWindow::executeAlgorithmSlot);
+    connect(m_starFindingDlg,  &StarFindingDialog::algorithmExecuted,         this, &MainWindow::executeAlgorithmSlot);
     connect(m_alignDlg,        &AlignDialog::algorithmExecuted,               this, &MainWindow::executeAlgorithmSlot);
     connect(m_debayerDlg,      &DebayerDialog::algorithmExecuted,             this, &MainWindow::executeAlgorithmSlot);
     connect(m_calibrationDlg,  &CalibrationDialog::algorithmExecuted,        this, &MainWindow::executeAlgorithmSlot);
@@ -204,6 +208,7 @@ MainWindow::MainWindow(QWidget* parent)
     m_bgeSub         = m_workspaceArea->addSubWindow(m_bgeDlg);         m_bgeSub->hide();
     m_stackingSub    = m_workspaceArea->addSubWindow(m_stackingDlg);    m_stackingSub->hide();
     m_registerSub    = m_workspaceArea->addSubWindow(m_registerDlg);    m_registerSub->hide();
+    m_starFindingSub = m_workspaceArea->addSubWindow(m_starFindingDlg); m_starFindingSub->hide();
     m_alignSub       = m_workspaceArea->addSubWindow(m_alignDlg);       m_alignSub->hide();
     m_debayerSub     = m_workspaceArea->addSubWindow(m_debayerDlg);     m_debayerSub->hide();
     m_calibrationSub = m_workspaceArea->addSubWindow(m_calibrationDlg); m_calibrationSub->hide();
@@ -216,6 +221,7 @@ MainWindow::MainWindow(QWidget* parent)
     m_bgeSub->setAttribute(Qt::WA_DeleteOnClose, false);
     m_stackingSub->setAttribute(Qt::WA_DeleteOnClose, false);
     m_registerSub->setAttribute(Qt::WA_DeleteOnClose, false);
+    m_starFindingSub->setAttribute(Qt::WA_DeleteOnClose, false);
     m_alignSub->setAttribute(Qt::WA_DeleteOnClose, false);
     m_debayerSub->setAttribute(Qt::WA_DeleteOnClose, false);
     m_calibrationSub->setAttribute(Qt::WA_DeleteOnClose, false);
@@ -366,6 +372,10 @@ void MainWindow::createMenus() {
     m_debayerAct = new QAction("&Debayering", this);
     connect(m_debayerAct, &QAction::triggered, this, &MainWindow::onOpenDebayer);
     m_algoMenu->addAction(m_debayerAct);
+
+    m_starFindingAct = new QAction("Star &Finding", this);
+    connect(m_starFindingAct, &QAction::triggered, this, &MainWindow::onOpenStarFinding);
+    m_algoMenu->addAction(m_starFindingAct);
 
     m_registerAct = new QAction("Star &Registration", this);
     connect(m_registerAct, &QAction::triggered, this, &MainWindow::onOpenRegister);
@@ -782,6 +792,14 @@ void MainWindow::onOpenDebayer() {
     m_workspaceArea->setActiveSubWindow(m_debayerSub);
 }
 
+void MainWindow::onOpenStarFinding() {
+    m_starFindingDlg->refreshWorkspaceElements();
+    m_starFindingDlg->show();
+    m_starFindingSub->show();
+    m_starFindingSub->raise();
+    m_workspaceArea->setActiveSubWindow(m_starFindingSub);
+}
+
 void MainWindow::onOpenRegister() {
     m_registerDlg->refreshWorkspaceElements();
     m_registerDlg->show();
@@ -831,6 +849,8 @@ void AlgorithmWorker::run() {
             alg = std::make_unique<CalibrationAlgorithm>();
         } else if (m_name == "Debayer") {
             alg = std::make_unique<DebayerAlgorithm>();
+        } else if (m_name == "StarFinding") {
+            alg = std::make_unique<StarFindingAlgorithm>();
         } else if (m_name == "Register") {
             alg = std::make_unique<RegisterAlgorithm>();
         } else if (m_name == "Align") {
@@ -2116,6 +2136,7 @@ DialogSet MainWindow::buildDialogSet() const {
     ds.bge         = m_bgeDlg;
     ds.stacking    = m_stackingDlg;
     ds.registerDlg = m_registerDlg;
+    ds.starFinding = m_starFindingDlg;
     ds.align       = m_alignDlg;
     ds.debayer     = m_debayerDlg;
     ds.calibration = m_calibrationDlg;

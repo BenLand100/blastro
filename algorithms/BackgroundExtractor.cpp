@@ -6,17 +6,10 @@
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation, either version 3 of the License, or
  * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include "BackgroundExtractor.h"
+#include "core/MathUtils.h"
 #include <cmath>
 #include <random>
 #include <algorithm>
@@ -28,111 +21,14 @@
 
 namespace blastro {
 
-// Solves A * x = B using Gaussian Elimination with partial pivoting
-static std::vector<double> solveGaussianElimination(const std::vector<double>& A, const std::vector<double>& B, int m) {
-    std::vector<double> x(m, 0.0);
-    // Augmented matrix [A | B]
-    std::vector<std::vector<double>> aug(m, std::vector<double>(m + 1, 0.0));
-    for (int i = 0; i < m; ++i) {
-        for (int j = 0; j < m; ++j) {
-            aug[i][j] = A[i * m + j];
-        }
-        aug[i][m] = B[i];
-    }
-
-    for (int i = 0; i < m; ++i) {
-        // Pivot selection
-        int pivotRow = i;
-        double maxVal = std::abs(aug[i][i]);
-        for (int r = i + 1; r < m; ++r) {
-            if (std::abs(aug[r][i]) > maxVal) {
-                maxVal = std::abs(aug[r][i]);
-                pivotRow = r;
-            }
-        }
-
-        if (maxVal < 1e-12) {
-            return {}; // Singular matrix
-        }
-
-        if (pivotRow != i) {
-            std::swap(aug[i], aug[pivotRow]);
-        }
-
-        // Elimination
-        for (int r = i + 1; r < m; ++r) {
-            double factor = aug[r][i] / aug[i][i];
-            for (int c = i; c <= m; ++c) {
-                aug[r][c] -= factor * aug[i][c];
-            }
-        }
-    }
-
-    // Back substitution
-    for (int i = m - 1; i >= 0; --i) {
-        double sum = 0.0;
-        for (int j = i + 1; j < m; ++j) {
-            sum += aug[i][j] * x[j];
-        }
-        x[i] = (aug[i][m] - sum) / aug[i][i];
-    }
-
-    return x;
-}
-
-// Helper: Solve A * x = B using Cholesky decomposition A = L * L^T
-static std::vector<double> solveCholesky(const std::vector<double>& A, const std::vector<double>& B, int m) {
-    std::vector<double> L(m * m, 0.0);
-    for (int i = 0; i < m; ++i) {
-        for (int j = 0; j <= i; ++j) {
-            double sum = 0.0;
-            for (int k = 0; k < j; ++k) {
-                sum += L[i * m + k] * L[j * m + k];
-            }
-            if (i == j) {
-                double val = A[i * m + i] - sum;
-                if (val <= 0.0) return {}; // Not positive definite
-                L[i * m + j] = std::sqrt(val);
-            } else {
-                L[i * m + j] = (A[i * m + j] - sum) / L[j * m + j];
-            }
-        }
-    }
-
-    // Solve L * y = B (Forward substitution)
-    std::vector<double> y(m);
-    for (int i = 0; i < m; ++i) {
-        double sum = 0.0;
-        for (int k = 0; k < i; ++k) {
-            sum += L[i * m + k] * y[k];
-        }
-        y[i] = (B[i] - sum) / L[i * m + i];
-    }
-
-    // Solve L^T * x = y (Backward substitution)
-    std::vector<double> x(m);
-    for (int i = m - 1; i >= 0; --i) {
-        double sum = 0.0;
-        for (int k = i + 1; k < m; ++k) {
-            sum += L[k * m + i] * x[k];
-        }
-        x[i] = (y[i] - sum) / L[i * m + i];
-    }
-
-    // Fallback: If Cholesky fails or becomes unstable, we can return empty or try a simple ridge regularizer.
-    return x;
-}
-
 struct FitPoint {
     double x_norm;
     double y_norm;
     double z;
 };
 
-// Computes the polynomial terms for a given coordinate
 static std::vector<double> getPolynomialTerms(double x, double y, int order) {
     std::vector<double> terms;
-    // Terms are x^i * y^j where i + j <= order
     for (int i = 0; i <= order; ++i) {
         for (int j = 0; j <= order; ++j) {
             if (i + j <= order) {
@@ -141,6 +37,59 @@ static std::vector<double> getPolynomialTerms(double x, double y, int order) {
         }
     }
     return terms;
+}
+
+std::vector<std::pair<double, double>> BackgroundExtractor::generateSamplePoints(
+    GrayscaleImagePtr img,
+    double sigmaCut,
+    double sampleFrac
+) {
+    std::vector<std::pair<double, double>> pts;
+    if (!img) return pts;
+    int w = img->width();
+    int h = img->height();
+    int numPixels = w * h;
+    const float* data = img->buffer()->data();
+
+    std::vector<float> sortedData;
+    sortedData.reserve(numPixels);
+    for (int i = 0; i < numPixels; ++i) {
+        if (!std::isnan(data[i])) {
+            sortedData.push_back(data[i]);
+        }
+    }
+    if (sortedData.empty()) return pts;
+    std::sort(sortedData.begin(), sortedData.end());
+    double median = sortedData[sortedData.size() / 2];
+
+    double sumSqDiff = 0.0;
+    int validPixels = 0;
+    for (int i = 0; i < numPixels; ++i) {
+        float val = data[i];
+        if (!std::isnan(val)) {
+            double diff = val - median;
+            sumSqDiff += diff * diff;
+            validPixels++;
+        }
+    }
+    double stddev = std::sqrt(sumSqDiff / (validPixels > 1 ? validPixels : 1));
+    double lowBound = median - sigmaCut * stddev;
+    double highBound = median + sigmaCut * stddev;
+
+    std::minstd_rand rng(1337);
+    std::uniform_real_distribution<double> dist(0.0, 1.0);
+
+    for (int y = 0; y < h; ++y) {
+        for (int x = 0; x < w; ++x) {
+            float val = data[y * w + x];
+            if (val >= lowBound && val <= highBound) {
+                if (dist(rng) < sampleFrac) {
+                    pts.push_back({static_cast<double>(x), static_cast<double>(y)});
+                }
+            }
+        }
+    }
+    return pts;
 }
 
 GrayscaleImagePtr BackgroundExtractor::extractGrayscale(GrayscaleImagePtr src,
@@ -153,7 +102,9 @@ GrayscaleImagePtr BackgroundExtractor::extractGrayscale(GrayscaleImagePtr src,
                                                        int progressStart,
                                                        int progressEnd,
                                                        const std::string& method,
-                                                       double rbfSmoothing) {
+                                                       double rbfSmoothing,
+                                                       bool restoreMedian,
+                                                       const std::vector<std::pair<double, double>>& customControlPoints) {
     if (!src) return nullptr;
 
     int w = src->width();
@@ -161,12 +112,11 @@ GrayscaleImagePtr BackgroundExtractor::extractGrayscale(GrayscaleImagePtr src,
     int numPixels = w * h;
     const float* data = src->buffer()->data();
 
-    // 1. Select background sample points (user control points or auto statistical sampling)
     std::vector<FitPoint> samples;
-    const auto& ctrlPts = src->buffer()->bgeControlPoints();
+    const auto& ctrlPts = !customControlPoints.empty() ? customControlPoints : src->buffer()->bgeControlPoints();
     if (!ctrlPts.empty()) {
         if (progress) progress(progressStart + (progressEnd - progressStart) * 10 / 100);
-        Logger::info("BackgroundExtraction", QString("  Using %1 user-defined control points for background fitting...").arg(ctrlPts.size()));
+        Logger::info("BackgroundExtraction", QString("  Using %1 control points for background fitting...").arg(ctrlPts.size()));
         for (const auto& pt : ctrlPts) {
             int cx = static_cast<int>(std::round(pt.first));
             int cy = static_cast<int>(std::round(pt.second));
@@ -204,7 +154,6 @@ GrayscaleImagePtr BackgroundExtractor::extractGrayscale(GrayscaleImagePtr src,
             }
         }
     } else {
-        // Compute median and standard deviation of the channel
         if (progress) progress(progressStart + (progressEnd - progressStart) * 5 / 100);
         Logger::info("BackgroundExtraction", QString("Analyzing image data statistics (%1x%2 pixels)...").arg(w).arg(h));
         
@@ -235,7 +184,6 @@ GrayscaleImagePtr BackgroundExtractor::extractGrayscale(GrayscaleImagePtr src,
         double stddev = std::sqrt(sumSqDiff / (validPixels > 1 ? validPixels : 1));
         Logger::info("BackgroundExtraction", QString("  Channel Stats: Median = %1, StdDev = %2").arg(median).arg(stddev));
 
-        // Select background sample points within sigmaCut of median
         if (progress) progress(progressStart + (progressEnd - progressStart) * 15 / 100);
         double lowBound = median - sigmaCut * stddev;
         double highBound = median + sigmaCut * stddev;
@@ -266,10 +214,10 @@ GrayscaleImagePtr BackgroundExtractor::extractGrayscale(GrayscaleImagePtr src,
     }
     Logger::info("BackgroundExtraction", QString("  Selected %1 sample points for robust fitting (sample_frac = %2).").arg(samples.size()).arg(sampleFrac));
 
+    auto outBuffer = std::make_shared<ImageBuffer>(w, h);
+    float* outData = outBuffer->data();
+
     if (method == "RBF") {
-        if (samples.empty()) {
-            throw std::runtime_error("Radial Basis Function (RBF) background extraction requires control points.");
-        }
         Logger::info("BackgroundExtraction", QString("  Solving robust Thin Plate Spline RBF fit (%1 centers, smoothing = %2, max IRLS iterations = 8)...")
                      .arg(samples.size()).arg(rbfSmoothing));
 
@@ -326,7 +274,7 @@ GrayscaleImagePtr BackgroundExtractor::extractGrayscale(GrayscaleImagePtr src,
                 B[i] = samples[i].z;
             }
 
-            auto nextCoeffs = solveGaussianElimination(A, B, m);
+            auto nextCoeffs = MathUtils::solveGaussianElimination(A, B, m);
             if (nextCoeffs.empty()) {
                 Logger::warning("BackgroundExtraction", QString("    RBF IRLS Iteration %1: Linear system solve failed, stopping early.").arg(iter + 1));
                 break;
@@ -368,9 +316,6 @@ GrayscaleImagePtr BackgroundExtractor::extractGrayscale(GrayscaleImagePtr src,
         if (progress) progress(progressStart + (progressEnd - progressStart) * 65 / 100);
         Logger::info("BackgroundExtraction", QString("  Evaluating RBF background model and performing subtraction..."));
 
-        auto outBuffer = std::make_shared<ImageBuffer>(w, h);
-        float* outData = outBuffer->data();
-
         std::vector<double> x_norms(w);
         for (int x = 0; x < w; ++x) x_norms[x] = (2.0 * x - w) / w;
 
@@ -404,51 +349,7 @@ GrayscaleImagePtr BackgroundExtractor::extractGrayscale(GrayscaleImagePtr src,
                 outData[y * w + x] = data[y * w + x] - static_cast<float>(bkgVal);
             }
         }
-
-        if (equalize) {
-            if (progress) progress(progressStart + (progressEnd - progressStart) * 85 / 100);
-            Logger::info("BackgroundExtraction", QString("  Performing background channel equalization..."));
-
-            std::vector<float> outSorted;
-            outSorted.reserve(numPixels);
-            for (int i = 0; i < numPixels; ++i) {
-                if (!std::isnan(outData[i])) {
-                    outSorted.push_back(outData[i]);
-                }
-            }
-            if (outSorted.empty()) {
-                throw std::runtime_error("No valid pixels in the background-subtracted channel for equalization");
-            }
-            std::sort(outSorted.begin(), outSorted.end());
-            int validCount = outSorted.size();
-            double outMedian = outSorted[validCount / 2];
-
-            double outSumSq = 0.0;
-            int validPixels = 0;
-            for (int i = 0; i < numPixels; ++i) {
-                float val = outData[i];
-                if (!std::isnan(val)) {
-                    double diff = val - outMedian;
-                    outSumSq += diff * diff;
-                    validPixels++;
-                }
-            }
-            double outStd = std::sqrt(outSumSq / (validPixels > 1 ? validPixels : 1));
-
-            float offset = -outMedian + sigmaCut * outStd;
-            Logger::info("BackgroundExtraction", QString("    Equalization complete: Shifted by offset = %1 to pedestal %2")
-                         .arg(offset).arg(sigmaCut * outStd));
-
-            #pragma omp parallel for
-            for (int i = 0; i < numPixels; ++i) {
-                outData[i] += offset;
-            }
-        }
-
-        if (progress) progress(progressEnd);
-        return std::make_shared<GrayscaleImage>(outBuffer);
     } else {
-        // Number of polynomial terms
         int numTerms = 0;
         for (int i = 0; i <= order; ++i) {
             for (int j = 0; j <= order; ++j) {
@@ -456,7 +357,6 @@ GrayscaleImagePtr BackgroundExtractor::extractGrayscale(GrayscaleImagePtr src,
             }
         }
 
-        // 3. Solve robust polynomial fit using Iteratively Reweighted Least Squares (IRLS)
         Logger::info("BackgroundExtraction", QString("  Solving robust 2D polynomial surface fit (order = %1, %2 terms, max IRLS iterations = 8)...").arg(order).arg(numTerms));
         std::vector<double> coeffs(numTerms, 0.0);
         std::vector<double> weights(samples.size(), 1.0);
@@ -468,11 +368,9 @@ GrayscaleImagePtr BackgroundExtractor::extractGrayscale(GrayscaleImagePtr src,
                 progress(stepProgress);
             }
 
-            // Build Normal Equations: A * c = B
             std::vector<double> A(numTerms * numTerms, 0.0);
             std::vector<double> B(numTerms, 0.0);
 
-            // Add small ridge regularization to diagonal to guarantee positive definiteness
             for (int i = 0; i < numTerms; ++i) {
                 A[i * numTerms + i] = 1e-6; 
             }
@@ -490,20 +388,17 @@ GrayscaleImagePtr BackgroundExtractor::extractGrayscale(GrayscaleImagePtr src,
                 }
             }
 
-            // Solve linear system via Cholesky
-            auto nextCoeffs = solveCholesky(A, B, numTerms);
+            auto nextCoeffs = MathUtils::solveCholesky(A, B, numTerms);
             if (nextCoeffs.empty()) {
                 Logger::warning("BackgroundExtraction", QString("    IRLS Iteration %1: Cholesky decomposition failed or became unstable, stopping early.").arg(iter + 1));
                 break; 
             }
             coeffs = nextCoeffs;
 
-            // Update residuals and weights using robust Huber loss influence
             double sumAbsRes = 0.0;
             for (size_t p = 0; p < samples.size(); ++p) {
                 const auto& pt = samples[p];
                 std::vector<double> terms = getPolynomialTerms(pt.x_norm, pt.y_norm, order);
-                
                 double fitVal = 0.0;
                 for (int i = 0; i < numTerms; ++i) {
                     fitVal += terms[i] * coeffs[i];
@@ -513,28 +408,22 @@ GrayscaleImagePtr BackgroundExtractor::extractGrayscale(GrayscaleImagePtr src,
                 double absRes = std::abs(residual);
                 sumAbsRes += absRes;
 
-                // Huber Weight Function
                 if (absRes <= huberDelta) {
                     weights[p] = 1.0;
                 } else {
                     weights[p] = huberDelta / absRes;
                 }
             }
-            
+
             if (iter == 0 || iter == maxIRLSIterations - 1) {
                 Logger::info("BackgroundExtraction", QString("    IRLS Iteration %1/8: Mean Absolute Residual = %2")
                              .arg(iter + 1).arg(sumAbsRes / samples.size()));
             }
         }
 
-        // 4. Evaluate fitted background polynomial and subtract from source
         if (progress) progress(progressStart + (progressEnd - progressStart) * 65 / 100);
         Logger::info("BackgroundExtraction", QString("  Evaluating background model and performing subtraction..."));
-        
-        auto outBuffer = std::make_shared<ImageBuffer>(w, h);
-        float* outData = outBuffer->data();
 
-        // Cache terms mapping for rows/cols in full image
         std::vector<double> x_norms(w);
         for (int x = 0; x < w; ++x) x_norms[x] = (2.0 * x - w) / w;
 
@@ -544,7 +433,6 @@ GrayscaleImagePtr BackgroundExtractor::extractGrayscale(GrayscaleImagePtr src,
             for (int x = 0; x < w; ++x) {
                 double x_norm = x_norms[x];
                 std::vector<double> terms = getPolynomialTerms(x_norm, y_norm, order);
-                
                 double bkgVal = 0.0;
                 for (int i = 0; i < numTerms; ++i) {
                     bkgVal += terms[i] * coeffs[i];
@@ -553,52 +441,81 @@ GrayscaleImagePtr BackgroundExtractor::extractGrayscale(GrayscaleImagePtr src,
                 outData[y * w + x] = data[y * w + x] - static_cast<float>(bkgVal);
             }
         }
+    }
 
-        // 5. Shift background-subtracted channel to a safe floor (neutral background peak)
-        if (equalize) {
-            if (progress) progress(progressStart + (progressEnd - progressStart) * 85 / 100);
-            Logger::info("BackgroundExtraction", QString("  Performing background channel equalization..."));
-            
-            std::vector<float> outSorted;
-            outSorted.reserve(numPixels);
-            for (int i = 0; i < numPixels; ++i) {
-                if (!std::isnan(outData[i])) {
-                    outSorted.push_back(outData[i]);
-                }
-            }
-            if (outSorted.empty()) {
-                throw std::runtime_error("No valid pixels in the background-subtracted channel for equalization");
-            }
-            std::sort(outSorted.begin(), outSorted.end());
-            int validCount = outSorted.size();
-            double outMedian = outSorted[validCount / 2];
-
-            double outSumSq = 0.0;
-            int validPixels = 0;
-            for (int i = 0; i < numPixels; ++i) {
-                float val = outData[i];
-                if (!std::isnan(val)) {
-                    double diff = val - outMedian;
-                    outSumSq += diff * diff;
-                    validPixels++;
-                }
-            }
-            double outStd = std::sqrt(outSumSq / (validPixels > 1 ? validPixels : 1));
-
-            // Safe floor offset
-            float offset = -outMedian + sigmaCut * outStd;
-            Logger::info("BackgroundExtraction", QString("    Equalization complete: Shifted by offset = %1 to pedestal %2")
-                         .arg(offset).arg(sigmaCut * outStd));
-            
-            #pragma omp parallel for
-            for (int i = 0; i < numPixels; ++i) {
-                outData[i] += offset;
+    if (restoreMedian) {
+        if (progress) progress(progressStart + (progressEnd - progressStart) * 85 / 100);
+        
+        double sumIn = 0.0;
+        long countIn = 0;
+        for (int i = 0; i < numPixels; ++i) {
+            if (!std::isnan(data[i])) {
+                sumIn += data[i];
+                countIn++;
             }
         }
+        double meanIn = countIn > 0 ? (sumIn / countIn) : 0.0;
 
-        if (progress) progress(progressEnd);
-        return std::make_shared<GrayscaleImage>(outBuffer);
+        double sumOut = 0.0;
+        long countOut = 0;
+        for (int i = 0; i < numPixels; ++i) {
+            if (!std::isnan(outData[i])) {
+                sumOut += outData[i];
+                countOut++;
+            }
+        }
+        double meanOut = countOut > 0 ? (sumOut / countOut) : 0.0;
+
+        float restoreOffset = static_cast<float>(meanIn - meanOut);
+        Logger::info("BackgroundExtraction", QString("  Restored Mean: mean_in=%1, mean_out=%2, offset=%3")
+                     .arg(meanIn).arg(meanOut).arg(restoreOffset));
+
+        #pragma omp parallel for
+        for (int i = 0; i < numPixels; ++i) {
+            outData[i] += restoreOffset;
+        }
+    } else if (equalize) {
+        if (progress) progress(progressStart + (progressEnd - progressStart) * 85 / 100);
+        Logger::info("BackgroundExtraction", QString("  Performing background channel equalization..."));
+
+        std::vector<float> outSorted;
+        outSorted.reserve(numPixels);
+        for (int i = 0; i < numPixels; ++i) {
+            if (!std::isnan(outData[i])) {
+                outSorted.push_back(outData[i]);
+            }
+        }
+        if (outSorted.empty()) {
+            throw std::runtime_error("No valid pixels in the background-subtracted channel for equalization");
+        }
+        std::sort(outSorted.begin(), outSorted.end());
+        int validCount = outSorted.size();
+        double outMedian = outSorted[validCount / 2];
+
+        double outSumSq = 0.0;
+        int validPixels = 0;
+        for (int i = 0; i < numPixels; ++i) {
+            float val = outData[i];
+            if (!std::isnan(val)) {
+                double diff = val - outMedian;
+                outSumSq += diff * diff;
+                validPixels++;
+            }
+        }
+        double outStd = std::sqrt(outSumSq / (validPixels > 1 ? validPixels : 1));
+
+        float offset = -outMedian + sigmaCut * outStd;
+        Logger::info("BackgroundExtraction", QString("    Equalization complete: Shifted by offset = %1 to pedestal %2")
+                     .arg(offset).arg(sigmaCut * outStd));
+
+        #pragma omp parallel for
+        for (int i = 0; i < numPixels; ++i) {
+            outData[i] += offset;
+        }
     }
+
+    if (progress) progress(progressEnd);
+    return std::make_shared<GrayscaleImage>(outBuffer);
 }
 
 RGBImagePtr BackgroundExtractor::extractRGB(RGBImagePtr src,
@@ -609,21 +526,21 @@ RGBImagePtr BackgroundExtractor::extractRGB(RGBImagePtr src,
                                             bool equalize,
                                             ProgressCallback progress,
                                             const std::string& method,
-                                            double rbfSmoothing) {
+                                            double rbfSmoothing,
+                                            bool restoreMedian,
+                                            const std::vector<std::pair<double, double>>& customControlPoints) {
     if (!src) return nullptr;
 
-    // 1. Process each channel independently WITHOUT individual equalization
     Logger::info("BackgroundExtraction", "Processing Red channel background extraction...");
-    auto extR = extractGrayscale(src->r(), order, sigmaCut, sampleFrac, huberDelta, false, progress, 5, 33, method, rbfSmoothing);
+    auto extR = extractGrayscale(src->r(), order, sigmaCut, sampleFrac, huberDelta, equalize && !restoreMedian, progress, 5, 33, method, rbfSmoothing, restoreMedian, customControlPoints);
     
     Logger::info("BackgroundExtraction", "Processing Green channel background extraction...");
-    auto extG = extractGrayscale(src->g(), order, sigmaCut, sampleFrac, huberDelta, false, progress, 33, 66, method, rbfSmoothing);
+    auto extG = extractGrayscale(src->g(), order, sigmaCut, sampleFrac, huberDelta, equalize && !restoreMedian, progress, 33, 66, method, rbfSmoothing, restoreMedian, customControlPoints);
     
     Logger::info("BackgroundExtraction", "Processing Blue channel background extraction...");
-    auto extB = extractGrayscale(src->b(), order, sigmaCut, sampleFrac, huberDelta, false, progress, 66, 90, method, rbfSmoothing);
+    auto extB = extractGrayscale(src->b(), order, sigmaCut, sampleFrac, huberDelta, equalize && !restoreMedian, progress, 66, 90, method, rbfSmoothing, restoreMedian, customControlPoints);
 
-    // 2. If equalize is true, apply coordinated equalization to neutralize the background
-    if (equalize) {
+    if (equalize && !restoreMedian) {
         if (progress) progress(93);
         Logger::info("BackgroundExtraction", "Performing coordinated RGB background equalization...");
         
@@ -670,11 +587,9 @@ RGBImagePtr BackgroundExtractor::extractRGB(RGBImagePtr src,
         getStats(extG, medG, stdG);
         getStats(extB, medB, stdB);
 
-        // Common pedestal based on the maximum noise standard deviation of the channels
         double maxStd = std::max({stdR, stdG, stdB});
         float commonPedestal = static_cast<float>(sigmaCut * maxStd);
 
-        // Coordinated offsets to shift all channel medians to the exact same pedestal
         float offsetR = static_cast<float>(-medR + commonPedestal);
         float offsetG = static_cast<float>(-medG + commonPedestal);
         float offsetB = static_cast<float>(-medB + commonPedestal);

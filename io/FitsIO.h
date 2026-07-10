@@ -17,8 +17,12 @@
  */
 
 #pragma once
+#include <map>
+#include <memory>
 #include "ImageReader.h"
 #include "ImageWriter.h"
+
+namespace CCfits { class FITS; }
 
 namespace blastro {
 
@@ -41,6 +45,9 @@ public:
 
     static bool readHeaderInfo(const std::string& filepath, FitsHeaderInfo& info);
 
+    // Clears the internal read cache of FITS files to release file handles.
+    void clearCache();
+
     // ImageReader interface
     bool supportsExtension(const std::string& ext) const override;
     ImageVariant readImage(const std::string& filepath) override;
@@ -53,6 +60,9 @@ public:
     // ImageWriter interface
     bool writeImage(const std::string& filepath, const ImageVariant& image) override;
     bool writeBatch(const std::string& filepath, ImageBatchPtr batch);
+
+private:
+    std::map<std::string, std::shared_ptr<CCfits::FITS>> m_readCache;
 };
 
 } // namespace blastro

@@ -121,12 +121,16 @@ private:
     QComboBox* m_biasDarkRejectionCombo;
     QDoubleSpinBox* m_biasDarkSigmaLowSpin;
     QDoubleSpinBox* m_biasDarkSigmaHighSpin;
+    QCheckBox* m_biasDarkScaleAdditiveChk;
+    QCheckBox* m_biasDarkScaleMultiplicativeChk;
 
     // Control Tab — Flat Stacking section
     QComboBox* m_flatStackMethodCombo;
     QComboBox* m_flatRejectionCombo;
     QDoubleSpinBox* m_flatSigmaLowSpin;
     QDoubleSpinBox* m_flatSigmaHighSpin;
+    QCheckBox* m_flatScaleAdditiveChk;
+    QCheckBox* m_flatScaleMultiplicativeChk;
 
     // Control Tab — Registration (Star Finding) section
     QDoubleSpinBox* m_starMinSnrSpin;
@@ -143,12 +147,21 @@ private:
     QCheckBox* m_alignMutuallyChk;
     QComboBox* m_interpolationMethodCombo;
 
+    // Control Tab — Background Normalization section
+    QCheckBox* m_runBgeChk;
+    QSpinBox* m_bgeOrderSpin;
+    QDoubleSpinBox* m_bgeSigmaCutSpin;
+    QDoubleSpinBox* m_bgeSampleFracSpin;
+    QComboBox* m_bgeMethodCombo;
+
     // Control Tab — Light Stacking section
     QComboBox* m_lightStackMethodCombo;
     QComboBox* m_lightRejectionCombo;
     QDoubleSpinBox* m_lightSigmaLowSpin;
     QDoubleSpinBox* m_lightSigmaHighSpin;
     QComboBox* m_lightWeightCombo;
+    QCheckBox* m_lightScaleAdditiveChk;
+    QCheckBox* m_lightScaleMultiplicativeChk;
 
     // Groups & Process Tabs
     QTreeWidget* m_previewTree;

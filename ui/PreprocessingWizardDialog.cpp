@@ -84,11 +84,15 @@ PreprocessingWizardDialog::PreprocessingWizardDialog(WorkspaceRegistry& workspac
       m_biasDarkRejectionCombo(new QComboBox(this)),
       m_biasDarkSigmaLowSpin(new QDoubleSpinBox(this)),
       m_biasDarkSigmaHighSpin(new QDoubleSpinBox(this)),
+      m_biasDarkScaleAdditiveChk(new QCheckBox(this)),
+      m_biasDarkScaleMultiplicativeChk(new QCheckBox(this)),
       // Flat Stacking
       m_flatStackMethodCombo(new QComboBox(this)),
       m_flatRejectionCombo(new QComboBox(this)),
       m_flatSigmaLowSpin(new QDoubleSpinBox(this)),
       m_flatSigmaHighSpin(new QDoubleSpinBox(this)),
+      m_flatScaleAdditiveChk(new QCheckBox(this)),
+      m_flatScaleMultiplicativeChk(new QCheckBox(this)),
       // Registration
       m_starMinSnrSpin(new QDoubleSpinBox(this)),
       m_starMinFwhmSpin(new QDoubleSpinBox(this)),
@@ -108,6 +112,13 @@ PreprocessingWizardDialog::PreprocessingWizardDialog(WorkspaceRegistry& workspac
       m_lightSigmaLowSpin(new QDoubleSpinBox(this)),
       m_lightSigmaHighSpin(new QDoubleSpinBox(this)),
       m_lightWeightCombo(new QComboBox(this)),
+      m_runBgeChk(new QCheckBox(this)),
+      m_bgeOrderSpin(new QSpinBox(this)),
+      m_bgeSigmaCutSpin(new QDoubleSpinBox(this)),
+      m_bgeSampleFracSpin(new QDoubleSpinBox(this)),
+      m_bgeMethodCombo(new QComboBox(this)),
+      m_lightScaleAdditiveChk(new QCheckBox(this)),
+      m_lightScaleMultiplicativeChk(new QCheckBox(this)),
       // Other
       m_previewTree(new QTreeWidget(this)),
       m_processTree(new QTreeWidget(this)),
@@ -351,6 +362,11 @@ PreprocessingWizardDialog::PreprocessingWizardDialog(WorkspaceRegistry& workspac
             m_biasDarkStackMethodCombo, m_biasDarkRejectionCombo,
             m_biasDarkSigmaLowSpin,     m_biasDarkSigmaHighSpin,
             "average", "sigmaclip", 3.0, 3.0);
+
+        m_biasDarkScaleAdditiveChk->setChecked(false);
+        form->addRow("Additive Normalization:", m_biasDarkScaleAdditiveChk);
+        m_biasDarkScaleMultiplicativeChk->setChecked(false);
+        form->addRow("Multiplicative Normalization:", m_biasDarkScaleMultiplicativeChk);
     }
 
     controlLayout->addSpacing(4);
@@ -365,6 +381,11 @@ PreprocessingWizardDialog::PreprocessingWizardDialog(WorkspaceRegistry& workspac
             m_flatStackMethodCombo, m_flatRejectionCombo,
             m_flatSigmaLowSpin,     m_flatSigmaHighSpin,
             "average", "sigmaclip", 3.0, 3.0);
+
+        m_flatScaleAdditiveChk->setChecked(false);
+        form->addRow("Additive Normalization:", m_flatScaleAdditiveChk);
+        m_flatScaleMultiplicativeChk->setChecked(true);
+        form->addRow("Multiplicative Normalization:", m_flatScaleMultiplicativeChk);
     }
 
     controlLayout->addSpacing(4);
@@ -445,6 +466,44 @@ PreprocessingWizardDialog::PreprocessingWizardDialog(WorkspaceRegistry& workspac
 
     controlLayout->addSpacing(4);
 
+    // ── Section 6.5: Background Normalization Settings (collapsed) ───────────
+    {
+        auto [hdr, body, form] = makeSectionHeader("Background Normalization", false);
+        controlLayout->addWidget(hdr);
+        controlLayout->addWidget(body);
+
+        m_runBgeChk->setChecked(true);
+        form->addRow("Run Background Subtraction:", m_runBgeChk);
+
+        m_bgeMethodCombo->addItem("2D Polynomial Surface", "Polynomial");
+        m_bgeMethodCombo->addItem("Radial Basis Function (RBF)", "RBF");
+        form->addRow("Model Method:", m_bgeMethodCombo);
+
+        m_bgeOrderSpin->setRange(1, 10);
+        m_bgeOrderSpin->setValue(3);
+        form->addRow("Polynomial Order:", m_bgeOrderSpin);
+
+        m_bgeSigmaCutSpin->setRange(0.5, 10.0);
+        m_bgeSigmaCutSpin->setValue(3.0);
+        m_bgeSigmaCutSpin->setSingleStep(0.5);
+        form->addRow("Rejection Sigma Cut:", m_bgeSigmaCutSpin);
+
+        m_bgeSampleFracSpin->setRange(0.001, 1.0);
+        m_bgeSampleFracSpin->setValue(0.01);
+        m_bgeSampleFracSpin->setSingleStep(0.01);
+        m_bgeSampleFracSpin->setDecimals(3);
+        form->addRow("Sample Grid Fraction:", m_bgeSampleFracSpin);
+
+        connect(m_runBgeChk, &QCheckBox::toggled, this, [this](bool checked) {
+            m_bgeMethodCombo->setEnabled(checked);
+            m_bgeOrderSpin->setEnabled(checked);
+            m_bgeSigmaCutSpin->setEnabled(checked);
+            m_bgeSampleFracSpin->setEnabled(checked);
+        });
+    }
+
+    controlLayout->addSpacing(4);
+
     // ── Section 7: Light Stacking Settings (expanded by default) ─────────────
     {
         auto [hdr, body, form] = makeSectionHeader("Light Stacking Settings", true);
@@ -460,6 +519,12 @@ PreprocessingWizardDialog::PreprocessingWizardDialog(WorkspaceRegistry& workspac
         m_lightWeightCombo->addItem("SNR-based Weighting", "snr");
         m_lightWeightCombo->addItem("FWHM-based Weighting", "fwhm");
         form->addRow("Frame Weighting:", m_lightWeightCombo);
+
+        m_lightScaleAdditiveChk->setChecked(true);
+        form->addRow("Additive Normalization:", m_lightScaleAdditiveChk);
+
+        m_lightScaleMultiplicativeChk->setChecked(true);
+        form->addRow("Multiplicative Normalization:", m_lightScaleMultiplicativeChk);
     }
 
     controlLayout->addStretch(1);
@@ -1178,11 +1243,15 @@ void PreprocessingWizardDialog::onRunCalibrationRegister() {
     config["bias_dark_rejection"]    = m_biasDarkRejectionCombo->currentData().toString().toStdString();
     config["bias_dark_sigma_low"]    = QString::number(m_biasDarkSigmaLowSpin->value()).toStdString();
     config["bias_dark_sigma_high"]   = QString::number(m_biasDarkSigmaHighSpin->value()).toStdString();
+    config["bias_dark_scale_additive"]       = m_biasDarkScaleAdditiveChk->isChecked() ? "true" : "false";
+    config["bias_dark_scale_multiplicative"] = m_biasDarkScaleMultiplicativeChk->isChecked() ? "true" : "false";
     // Flat stacking settings
     config["flat_stack_method"]  = m_flatStackMethodCombo->currentData().toString().toStdString();
     config["flat_rejection"]     = m_flatRejectionCombo->currentData().toString().toStdString();
     config["flat_sigma_low"]     = QString::number(m_flatSigmaLowSpin->value()).toStdString();
     config["flat_sigma_high"]    = QString::number(m_flatSigmaHighSpin->value()).toStdString();
+    config["flat_scale_additive"]            = m_flatScaleAdditiveChk->isChecked() ? "true" : "false";
+    config["flat_scale_multiplicative"]      = m_flatScaleMultiplicativeChk->isChecked() ? "true" : "false";
 
     auto joinPaths = [](const std::vector<std::string>& paths) -> std::string {
         std::string res;
@@ -1495,12 +1564,22 @@ void PreprocessingWizardDialog::onResumeStacking() {
     config["star_max_eccentricity"] = std::to_string(m_starMaxEccentricitySpin->value());
     config["match_tolerance"] = std::to_string(m_starMatchToleranceSpin->value());
     config["out_prefix"] = m_outPrefixEdit->text().toStdString();
+    
+    // Background Normalization
+    config["run_bge"] = m_runBgeChk->isChecked() ? "true" : "false";
+    config["bge_model_method"] = m_bgeMethodCombo->currentData().toString().toStdString();
+    config["bge_poly_order"] = std::to_string(m_bgeOrderSpin->value());
+    config["bge_sigma_cut"] = QString::number(m_bgeSigmaCutSpin->value()).toStdString();
+    config["bge_sample_fraction"] = QString::number(m_bgeSampleFracSpin->value()).toStdString();
+
     // Light stacking settings
     config["light_stack_method"] = m_lightStackMethodCombo->currentData().toString().toStdString();
     config["light_rejection"]    = m_lightRejectionCombo->currentData().toString().toStdString();
     config["light_sigma_low"]    = QString::number(m_lightSigmaLowSpin->value()).toStdString();
     config["light_sigma_high"]   = QString::number(m_lightSigmaHighSpin->value()).toStdString();
     config["light_weight_method"]= m_lightWeightCombo->currentData().toString().toStdString();
+    config["scale_additive"]     = m_lightScaleAdditiveChk->isChecked() ? "true" : "false";
+    config["scale_multiplicative"] = m_lightScaleMultiplicativeChk->isChecked() ? "true" : "false";
 
     m_progressBar->setRange(0, 0);
 
@@ -1826,12 +1905,15 @@ static QString getStageFromStepName(const std::string& stepName) {
                stepName.rfind("Calibrate Lights", 0) == 0 ||
                stepName.rfind("Debayer Lights", 0) == 0) {
         return "Calibrate";
-    } else if (stepName.rfind("Register Lights", 0) == 0) {
+    } else if (stepName.rfind("Star Finding", 0) == 0 ||
+               stepName.rfind("Register Lights", 0) == 0) {
         return "Register";
     } else if (stepName.rfind("User Frame Selection", 0) == 0) {
         return "Frame Selection";
     } else if (stepName.rfind("Register ", 0) == 0) {
         return "Align (Register)";
+    } else if (stepName.rfind("Background Normalization", 0) == 0) {
+        return "Align (Normalize)";
     } else if (stepName.rfind("Align ", 0) == 0) {
         return "Align";
     } else if (stepName.rfind("Stack ", 0) == 0) {
@@ -2117,11 +2199,15 @@ QJsonObject PreprocessingWizardDialog::serializeControlState() const {
     obj["bias_dark_rejection"] = m_biasDarkRejectionCombo->currentData().toString();
     obj["bias_dark_sigma_low"] = m_biasDarkSigmaLowSpin->value();
     obj["bias_dark_sigma_high"] = m_biasDarkSigmaHighSpin->value();
+    obj["bias_dark_scale_additive"] = m_biasDarkScaleAdditiveChk->isChecked();
+    obj["bias_dark_scale_multiplicative"] = m_biasDarkScaleMultiplicativeChk->isChecked();
     // Flat Stacking
     obj["flat_stack_method"] = m_flatStackMethodCombo->currentData().toString();
     obj["flat_rejection"] = m_flatRejectionCombo->currentData().toString();
     obj["flat_sigma_low"] = m_flatSigmaLowSpin->value();
     obj["flat_sigma_high"] = m_flatSigmaHighSpin->value();
+    obj["flat_scale_additive"] = m_flatScaleAdditiveChk->isChecked();
+    obj["flat_scale_multiplicative"] = m_flatScaleMultiplicativeChk->isChecked();
     // Registration
     obj["star_min_snr"] = m_starMinSnrSpin->value();
     obj["star_min_fwhm"] = m_starMinFwhmSpin->value();
@@ -2141,6 +2227,15 @@ QJsonObject PreprocessingWizardDialog::serializeControlState() const {
     obj["light_sigma_low"] = m_lightSigmaLowSpin->value();
     obj["light_sigma_high"] = m_lightSigmaHighSpin->value();
     obj["light_weight_method"] = m_lightWeightCombo->currentData().toString();
+    // Background Normalization
+    obj["run_bge"] = m_runBgeChk->isChecked();
+    obj["bge_model_method"] = m_bgeMethodCombo->currentData().toString();
+    obj["bge_poly_order"] = m_bgeOrderSpin->value();
+    obj["bge_sigma_cut"] = m_bgeSigmaCutSpin->value();
+    obj["bge_sample_fraction"] = m_bgeSampleFracSpin->value();
+    // Scaling Normalizations
+    obj["scale_additive"] = m_lightScaleAdditiveChk->isChecked();
+    obj["scale_multiplicative"] = m_lightScaleMultiplicativeChk->isChecked();
     return obj;
 }
 
@@ -2169,10 +2264,14 @@ void PreprocessingWizardDialog::restoreControlState(const QJsonObject& obj) {
     if (obj.contains("bias_dark_rejection")) setCombo(m_biasDarkRejectionCombo, obj["bias_dark_rejection"].toString());
     if (obj.contains("bias_dark_sigma_low")) m_biasDarkSigmaLowSpin->setValue(obj["bias_dark_sigma_low"].toDouble());
     if (obj.contains("bias_dark_sigma_high")) m_biasDarkSigmaHighSpin->setValue(obj["bias_dark_sigma_high"].toDouble());
+    if (obj.contains("bias_dark_scale_additive")) m_biasDarkScaleAdditiveChk->setChecked(obj["bias_dark_scale_additive"].toBool());
+    if (obj.contains("bias_dark_scale_multiplicative")) m_biasDarkScaleMultiplicativeChk->setChecked(obj["bias_dark_scale_multiplicative"].toBool());
     if (obj.contains("flat_stack_method")) setCombo(m_flatStackMethodCombo, obj["flat_stack_method"].toString());
     if (obj.contains("flat_rejection")) setCombo(m_flatRejectionCombo, obj["flat_rejection"].toString());
     if (obj.contains("flat_sigma_low")) m_flatSigmaLowSpin->setValue(obj["flat_sigma_low"].toDouble());
     if (obj.contains("flat_sigma_high")) m_flatSigmaHighSpin->setValue(obj["flat_sigma_high"].toDouble());
+    if (obj.contains("flat_scale_additive")) m_flatScaleAdditiveChk->setChecked(obj["flat_scale_additive"].toBool());
+    if (obj.contains("flat_scale_multiplicative")) m_flatScaleMultiplicativeChk->setChecked(obj["flat_scale_multiplicative"].toBool());
     if (obj.contains("star_min_snr")) m_starMinSnrSpin->setValue(obj["star_min_snr"].toDouble());
     if (obj.contains("star_min_fwhm")) m_starMinFwhmSpin->setValue(obj["star_min_fwhm"].toDouble());
     if (obj.contains("star_detection_method")) setCombo(m_starDetectionMethodCombo, obj["star_detection_method"].toString());
@@ -2189,6 +2288,13 @@ void PreprocessingWizardDialog::restoreControlState(const QJsonObject& obj) {
     if (obj.contains("light_sigma_low")) m_lightSigmaLowSpin->setValue(obj["light_sigma_low"].toDouble());
     if (obj.contains("light_sigma_high")) m_lightSigmaHighSpin->setValue(obj["light_sigma_high"].toDouble());
     if (obj.contains("light_weight_method")) setCombo(m_lightWeightCombo, obj["light_weight_method"].toString());
+    if (obj.contains("run_bge")) m_runBgeChk->setChecked(obj["run_bge"].toBool());
+    if (obj.contains("bge_model_method")) setCombo(m_bgeMethodCombo, obj["bge_model_method"].toString());
+    if (obj.contains("bge_poly_order")) m_bgeOrderSpin->setValue(obj["bge_poly_order"].toInt());
+    if (obj.contains("bge_sigma_cut")) m_bgeSigmaCutSpin->setValue(obj["bge_sigma_cut"].toDouble());
+    if (obj.contains("bge_sample_fraction")) m_bgeSampleFracSpin->setValue(obj["bge_sample_fraction"].toDouble());
+    if (obj.contains("scale_additive")) m_lightScaleAdditiveChk->setChecked(obj["scale_additive"].toBool());
+    if (obj.contains("scale_multiplicative")) m_lightScaleMultiplicativeChk->setChecked(obj["scale_multiplicative"].toBool());
 }
 
 } // namespace blastro

@@ -25,6 +25,7 @@
 #include "ui/BackgroundExtractionDialog.h"
 #include "ui/StackingDialog.h"
 #include "ui/RegisterDialog.h"
+#include "ui/StarFindingDialog.h"
 #include "ui/AlignDialog.h"
 #include "ui/DebayerDialog.h"
 #include "ui/CalibrationDialog.h"
@@ -85,6 +86,7 @@ QJsonObject ProjectSerializer::serializeDialogs(const DialogSet& dialogs) {
     if (dialogs.bge)         obj["background_extraction"] = dialogs.bge->serializeState();
     if (dialogs.stacking)    obj["stacking"]              = dialogs.stacking->serializeState();
     if (dialogs.registerDlg) obj["register"]              = dialogs.registerDlg->serializeState();
+    if (dialogs.starFinding) obj["star_finding"]          = dialogs.starFinding->serializeState();
     if (dialogs.align)       obj["align"]                 = dialogs.align->serializeState();
     if (dialogs.debayer)     obj["debayer"]               = dialogs.debayer->serializeState();
     if (dialogs.calibration) obj["calibration"]           = dialogs.calibration->serializeState();
@@ -103,6 +105,8 @@ void ProjectSerializer::restoreDialogs(const QJsonObject& obj, const DialogSet& 
         dialogs.stacking->restoreState(obj["stacking"].toObject());
     if (dialogs.registerDlg && obj.contains("register"))
         dialogs.registerDlg->restoreState(obj["register"].toObject());
+    if (dialogs.starFinding && obj.contains("star_finding"))
+        dialogs.starFinding->restoreState(obj["star_finding"].toObject());
     if (dialogs.align       && obj.contains("align"))
         dialogs.align->restoreState(obj["align"].toObject());
     if (dialogs.debayer     && obj.contains("debayer"))
@@ -130,6 +134,7 @@ static QList<ToolWindowDef> toolWindowDefs(const DialogSet& dialogs) {
         { "BackgroundExtractionDialog",dialogs.bge },
         { "StackingDialog",            dialogs.stacking },
         { "RegisterDialog",            dialogs.registerDlg },
+        { "StarFindingDialog",         dialogs.starFinding },
         { "AlignDialog",               dialogs.align },
         { "DebayerDialog",             dialogs.debayer },
         { "CalibrationDialog",         dialogs.calibration },

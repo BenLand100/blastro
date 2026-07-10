@@ -122,6 +122,14 @@ StackingDialog::StackingDialog(WorkspaceRegistry& workspace, QWidget* parent)
     m_clipLabel = new QLabel("Low / High Rejection:", this);
     formLayout->addRow(m_clipLabel, clipLayout);
 
+    m_scaleAdditiveChk = new QCheckBox("Additive Normalization (Median to Reference)", this);
+    m_scaleAdditiveChk->setChecked(true);
+    formLayout->addRow("", m_scaleAdditiveChk);
+
+    m_scaleMultiplicativeChk = new QCheckBox("Multiplicative Normalization (Sn to Reference)", this);
+    m_scaleMultiplicativeChk->setChecked(true);
+    formLayout->addRow("", m_scaleMultiplicativeChk);
+
     mainLayout->addLayout(formLayout);
 
     mainLayout->addStretch(1); // Content top-justifies; buttons pin to bottom
@@ -287,6 +295,8 @@ std::map<std::string, std::string> StackingDialog::getConfig() const {
     config["stacking_mode"] = Preferences::instance().getStackingMode();
     config["patch_size"] = std::to_string(m_patchSize);
     config["threads"] = std::to_string(m_threads);
+    config["scale_additive"] = m_scaleAdditiveChk->isChecked() ? "true" : "false";
+    config["scale_multiplicative"] = m_scaleMultiplicativeChk->isChecked() ? "true" : "false";
     return config;
 }
 
@@ -315,6 +325,8 @@ QJsonObject StackingDialog::serializeState() const {
     obj["weight_method"] = QString::fromStdString(m_weightMethod);
     obj["patch_size"] = m_patchSize;
     obj["threads"] = m_threads;
+    obj["scale_additive"] = m_scaleAdditiveChk->isChecked();
+    obj["scale_multiplicative"] = m_scaleMultiplicativeChk->isChecked();
     return obj;
 }
 
@@ -337,6 +349,10 @@ void StackingDialog::restoreState(const QJsonObject& obj) {
         m_patchSize = obj["patch_size"].toInt();
     if (obj.contains("threads"))
         m_threads = obj["threads"].toInt();
+    if (obj.contains("scale_additive"))
+        m_scaleAdditiveChk->setChecked(obj["scale_additive"].toBool());
+    if (obj.contains("scale_multiplicative"))
+        m_scaleMultiplicativeChk->setChecked(obj["scale_multiplicative"].toBool());
 }
 
 } // namespace blastro

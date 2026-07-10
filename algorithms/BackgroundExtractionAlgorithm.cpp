@@ -6,14 +6,6 @@
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation, either version 3 of the License, or
  * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include "BackgroundExtractionAlgorithm.h"
@@ -22,6 +14,7 @@
 #include "core/RGBImage.h"
 #include "core/ImageBatch.h"
 #include "core/TempDirectory.h"
+#include "core/MathUtils.h"
 #include "io/FitsIO.h"
 #include <stdexcept>
 #include <iostream>
@@ -32,6 +25,15 @@
 #include "core/Logger.h"
 
 namespace blastro {
+
+static GrayscaleImagePtr getExtractionChannel(const ImageVariant& img) {
+    if (std::holds_alternative<GrayscaleImagePtr>(img)) {
+        return std::get<GrayscaleImagePtr>(img);
+    } else if (std::holds_alternative<RGBImagePtr>(img)) {
+        return std::get<RGBImagePtr>(img)->g();
+    }
+    return nullptr;
+}
 
 void BackgroundExtractionAlgorithm::execute(WorkspaceRegistry& workspace,
                                             const std::map<std::string, std::string>& config,
@@ -55,6 +57,7 @@ void BackgroundExtractionAlgorithm::execute(WorkspaceRegistry& workspace,
     double huberDelta = config.count("huber_delta") ? std::stod(config.at("huber_delta")) : 5.0;
     std::string method = config.count("method") ? config.at("method") : "Polynomial";
     double rbfSmoothing = config.count("rbf_smoothing") ? std::stod(config.at("rbf_smoothing")) : 0.0;
+    bool restoreMedian = config.count("restore_median") ? (config.at("restore_median") == "true") : false;
 
     int threads = config.count("threads") ? std::stoi(config.at("threads")) : -1;
     if (threads <= 0) {
@@ -64,11 +67,11 @@ void BackgroundExtractionAlgorithm::execute(WorkspaceRegistry& workspace,
         omp_set_num_threads(threads);
     }
 
-    Logger::header("BackgroundExtraction", QString("Starting BGE execution. Input: %1, Output: %2, Method: %3, Order: %4, RbfSmoothing: %5, SigmaCut: %6, Equalize: %7, Threads: %8")
+    Logger::header("BackgroundExtraction", QString("Starting BGE execution. Input: %1, Output: %2, Method: %3, Order: %4, RbfSmoothing: %5, SigmaCut: %6, Equalize: %7, RestoreMedian: %8, Threads: %9")
                    .arg(QString::fromStdString(inputName))
                    .arg(QString::fromStdString(outputName))
                    .arg(QString::fromStdString(method))
-                   .arg(order).arg(rbfSmoothing).arg(sigmaCut).arg(equalize).arg(threads));
+                   .arg(order).arg(rbfSmoothing).arg(sigmaCut).arg(equalize).arg(restoreMedian).arg(threads));
 
     QElapsedTimer totalTimer;
     totalTimer.start();
@@ -76,12 +79,55 @@ void BackgroundExtractionAlgorithm::execute(WorkspaceRegistry& workspace,
     WorkspaceElement inputElem = workspace.getElement(inputName);
     if (progress) progress(5);
 
-    // -----------------------------------------------------------------------
-    // Batch mode: process each selected frame, write to disk, return new batch
-    // -----------------------------------------------------------------------
     if (std::holds_alternative<ImageBatchPtr>(inputElem)) {
         auto inputBatch = std::get<ImageBatchPtr>(inputElem);
         int count = inputBatch->count();
+
+        // 1. Identify Reference Frame
+        int refFrameIdx = -1;
+        if (config.count("ref_frame_index") && !config.at("ref_frame_index").empty()) {
+            refFrameIdx = std::stoi(config.at("ref_frame_index"));
+        }
+        if (refFrameIdx < 0 || refFrameIdx >= count) {
+            for (int i = 0; i < count; ++i) {
+                if (inputBatch->isFrameSelected(i)) {
+                    auto meta = inputBatch->frameMetadata(i);
+                    if (meta.registered && std::abs(meta.dx) < 1e-5 && std::abs(meta.dy) < 1e-5 && std::abs(meta.theta) < 1e-5) {
+                        refFrameIdx = i;
+                        break;
+                    }
+                }
+            }
+        }
+        if (refFrameIdx < 0 || refFrameIdx >= count) {
+            for (int i = 0; i < count; ++i) {
+                if (inputBatch->isFrameSelected(i)) {
+                    refFrameIdx = i;
+                    break;
+                }
+            }
+        }
+        if (refFrameIdx < 0 || refFrameIdx >= count) {
+            throw std::runtime_error("No valid frames selected in the batch");
+        }
+
+        Logger::info("BackgroundExtraction", QString("Selected reference frame index %1 for sample points").arg(refFrameIdx));
+
+        // 2. Establish sample points on reference frame
+        ImageVariant refFrame = inputBatch->getImage(refFrameIdx);
+        auto refChannel = getExtractionChannel(refFrame);
+        if (!refChannel) {
+            throw std::runtime_error("Failed to extract reference channel from reference frame");
+        }
+
+        std::vector<std::pair<double, double>> refPts = refChannel->buffer()->bgeControlPoints();
+        if (refPts.empty()) {
+            Logger::info("BackgroundExtraction", "No manual control points on reference frame. Auto-generating sample grid...");
+            refPts = BackgroundExtractor::generateSamplePoints(refChannel, sigmaCut, sampleFrac);
+        }
+
+        Logger::info("BackgroundExtraction", QString("Established %1 sample points on reference frame").arg(refPts.size()));
+        inputBatch->clearCache(refFrameIdx);
 
         std::string tempDir = TempDirectory::createTempDir("bge");
         if (tempDir.empty())
@@ -102,14 +148,27 @@ void BackgroundExtractionAlgorithm::execute(WorkspaceRegistry& workspace,
             }
 
             ImageVariant frame = inputBatch->getImage(i);
-            ImageVariant extracted;
+            auto meta = inputBatch->frameMetadata(i);
 
+            // Transform sample points if registered, otherwise reuse as-is
+            std::vector<std::pair<double, double>> targetPts;
+            if (meta.registered) {
+                auto invTrans = MathUtils::invertAffine(meta.transform);
+                for (const auto& pt : refPts) {
+                    auto transPt = MathUtils::transformPoint(invTrans, pt.first, pt.second);
+                    targetPts.push_back(transPt);
+                }
+            } else {
+                targetPts = refPts;
+            }
+
+            ImageVariant extracted;
             if (std::holds_alternative<GrayscaleImagePtr>(frame)) {
                 auto gray = std::get<GrayscaleImagePtr>(frame);
                 auto res = BackgroundExtractor::extractGrayscale(
                     gray,
                     order, sigmaCut, sampleFrac, huberDelta, equalize,
-                    nullptr, 0, 100, method, rbfSmoothing);
+                    nullptr, 0, 100, method, rbfSmoothing, restoreMedian, targetPts);
                 res->setMetadata(gray->metadata());
                 extracted = res;
             } else if (std::holds_alternative<RGBImagePtr>(frame)) {
@@ -117,7 +176,7 @@ void BackgroundExtractionAlgorithm::execute(WorkspaceRegistry& workspace,
                 auto res = BackgroundExtractor::extractRGB(
                     rgb,
                     order, sigmaCut, sampleFrac, huberDelta, equalize,
-                    nullptr, method, rbfSmoothing);
+                    nullptr, method, rbfSmoothing, restoreMedian, targetPts);
                 res->setMetadata(rgb->metadata());
                 extracted = res;
             } else {
@@ -155,22 +214,19 @@ void BackgroundExtractionAlgorithm::execute(WorkspaceRegistry& workspace,
             workspace.unregisterElement(outputName);
         workspace.registerElement(outputName, outBatch);
 
-        Logger::success("BackgroundExtraction", QString("Finished batch BGE (%1 frames) in %2 ms (avg %3 ms per frame). Registered output: %4")
-                        .arg(count).arg(totalTimer.elapsed()).arg(totalTimer.elapsed() / (count > 0 ? count : 1))
-                        .arg(QString::fromStdString(outputName)));
+        Logger::success("BackgroundExtraction", QString("Finished batch BGE (%1 frames) in %2 ms. Registered output: %3")
+                        .arg(count).arg(totalTimer.elapsed()).arg(QString::fromStdString(outputName)));
         return;
     }
 
-    // -----------------------------------------------------------------------
     // Single-image mode
-    // -----------------------------------------------------------------------
     WorkspaceElement outputElem;
     if (std::holds_alternative<GrayscaleImagePtr>(inputElem)) {
         auto gray = std::get<GrayscaleImagePtr>(inputElem);
         auto res = BackgroundExtractor::extractGrayscale(
             gray,
             order, sigmaCut, sampleFrac, huberDelta, equalize,
-            progress, 5, 95, method, rbfSmoothing);
+            progress, 5, 95, method, rbfSmoothing, restoreMedian);
         res->setMetadata(gray->metadata());
         outputElem = res;
     } else if (std::holds_alternative<RGBImagePtr>(inputElem)) {
@@ -178,7 +234,7 @@ void BackgroundExtractionAlgorithm::execute(WorkspaceRegistry& workspace,
         auto res = BackgroundExtractor::extractRGB(
             rgb,
             order, sigmaCut, sampleFrac, huberDelta, equalize,
-            progress, method, rbfSmoothing);
+            progress, method, rbfSmoothing, restoreMedian);
         res->setMetadata(rgb->metadata());
         outputElem = res;
     } else {

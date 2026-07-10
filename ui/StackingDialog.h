@@ -22,6 +22,7 @@
 #include <QLineEdit>
 #include <QPushButton>
 #include <QDoubleSpinBox>
+#include <QCheckBox>
 #include <QLabel>
 
 namespace blastro {
@@ -51,6 +52,8 @@ private:
     QComboBox* m_rejectionCombo;
     QDoubleSpinBox* m_lowClipSpin;
     QDoubleSpinBox* m_highClipSpin;
+    QCheckBox* m_scaleAdditiveChk;
+    QCheckBox* m_scaleMultiplicativeChk;
     QLabel* m_clipLabel = nullptr;
     QLabel* m_slashLabel = nullptr;
 

@@ -35,6 +35,7 @@ class CalibrationDialog;
 class PixelMathDialog;
 class PreprocessingWizardDialog;
 class PlatesolveDialog;
+class StarFindingDialog;
 }
 class QMainWindow;
 
@@ -46,6 +47,7 @@ struct DialogSet {
     BackgroundExtractionDialog* bge        = nullptr;
     StackingDialog*            stacking    = nullptr;
     RegisterDialog*            registerDlg = nullptr;
+    StarFindingDialog*         starFinding = nullptr;
     AlignDialog*               align       = nullptr;
     DebayerDialog*             debayer     = nullptr;
     CalibrationDialog*         calibration = nullptr;
