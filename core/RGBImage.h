@@ -18,6 +18,7 @@
 
 #pragma once
 #include "GrayscaleImage.h"
+#include "ImageMetadata.h"
 
 namespace blastro {
 
@@ -38,10 +39,15 @@ public:
     const GrayscaleImagePtr g() const { return m_g; }
     const GrayscaleImagePtr b() const { return m_b; }
 
+    const ImageMetadata& metadata() const { return m_metadata; }
+    void setMetadata(const ImageMetadata& meta) { m_metadata = meta; }
+    ImageMetadata& metadata() { return m_metadata; }
+
 private:
     GrayscaleImagePtr m_r;
     GrayscaleImagePtr m_g;
     GrayscaleImagePtr m_b;
+    ImageMetadata m_metadata;
 };
 
 using RGBImagePtr = std::shared_ptr<RGBImage>;

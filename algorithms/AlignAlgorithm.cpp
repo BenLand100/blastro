@@ -34,6 +34,35 @@
 
 namespace blastro {
 
+static std::array<double, 6> invertAffine(const std::array<double, 6>& T) {
+    double a = T[0], b = T[1], tx = T[2];
+    double c = T[3], d = T[4], ty = T[5];
+    double det = a * d - b * c;
+    if (std::abs(det) < 1e-9) {
+        return {1.0, 0.0, 0.0, 0.0, 1.0, 0.0};
+    }
+    double inv_det = 1.0 / det;
+    double inv_a = d * inv_det;
+    double inv_b = -b * inv_det;
+    double inv_tx = (b * ty - d * tx) * inv_det;
+    double inv_c = -c * inv_det;
+    double inv_d = a * inv_det;
+    double inv_ty = (c * tx - a * ty) * inv_det;
+    return {inv_a, inv_b, inv_tx, inv_c, inv_d, inv_ty};
+}
+
+static std::array<double, 6> multiplyAffine(const std::array<double, 6>& A, const std::array<double, 6>& B) {
+    double a  = A[0]*B[0] + A[1]*B[3];
+    double b  = A[0]*B[1] + A[1]*B[4];
+    double tx = A[0]*B[2] + A[1]*B[5] + A[2];
+    
+    double c  = A[3]*B[0] + A[4]*B[3];
+    double d  = A[3]*B[1] + A[4]*B[4];
+    double ty = A[3]*B[2] + A[4]*B[5] + A[5];
+    
+    return {a, b, tx, c, d, ty};
+}
+
 void AlignAlgorithm::execute(WorkspaceRegistry& workspace, 
                              const std::map<std::string, std::string>& config, 
                              ProgressCallback progress) {
@@ -45,11 +74,12 @@ void AlignAlgorithm::execute(WorkspaceRegistry& workspace,
         threads = Preferences::instance().getThreadCount();
     }
     bool evictCache = config.at("evict_cache") == "true";
+    std::string interpolation = config.count("interpolation_method") ? config.at("interpolation_method") : "bilinear";
 
-    Logger::header("Align", QString("Starting execution. Input batch: %1, output batch: %2, drizzle scale: %3, threads: %4")
+    Logger::header("Align", QString("Starting execution. Input batch: %1, output batch: %2, drizzle scale: %3, threads: %4, interpolation: %5")
                    .arg(QString::fromStdString(inputName))
                    .arg(QString::fromStdString(outputName))
-                   .arg(drizzleScale).arg(threads));
+                   .arg(drizzleScale).arg(threads).arg(QString::fromStdString(interpolation)));
 
     QElapsedTimer totalTimer;
     totalTimer.start();
@@ -77,13 +107,17 @@ void AlignAlgorithm::execute(WorkspaceRegistry& workspace,
     double refDx = 0.0;
     double refDy = 0.0;
     double refTheta = 0.0;
-    bool hasCustomRef = false;
+    std::array<double, 6> T_ref = {1.0, 0.0, 0.0, 0.0, 1.0, 0.0};
+    bool hasRef = false;
 
     if (config.count("ref_dx") && config.count("ref_dy") && config.count("ref_theta")) {
         refDx = std::stod(config.at("ref_dx"));
         refDy = std::stod(config.at("ref_dy"));
         refTheta = std::stod(config.at("ref_theta"));
-        hasCustomRef = true;
+        double cosRef = std::cos(refTheta);
+        double sinRef = std::sin(refTheta);
+        T_ref = {cosRef, -sinRef, refDx, sinRef, cosRef, refDy};
+        hasRef = true;
         Logger::info("Align", QString("Using custom reference offsets: dx=%1, dy=%2, theta=%3")
                      .arg(refDx).arg(refDy).arg(refTheta));
     } else if (refMode == "average_center") {
@@ -123,6 +157,8 @@ void AlignAlgorithm::execute(WorkspaceRegistry& workspace,
             refDx = centerMeta.dx;
             refDy = centerMeta.dy;
             refTheta = centerMeta.theta;
+            T_ref = centerMeta.transform;
+            hasRef = true;
             Logger::info("Align", QString("Average Center Mode: Selected frame %1 (%2) as center reference (offsets: dx=%3, dy=%4, theta=%5)")
                          .arg(centerFrameIdx)
                          .arg(QString::fromStdString(batch->frameName(centerFrameIdx)))
@@ -173,29 +209,29 @@ void AlignAlgorithm::execute(WorkspaceRegistry& workspace,
         ImageVariant frame = batch->getImage(i);
         ImageVariant alignedFrame;
 
-        // Adjust offsets if a centermost reference frame is selected
-        double targetDx = meta.dx;
-        double targetDy = meta.dy;
-        double targetTheta = meta.theta;
+        // Adjust offsets if a reference frame is selected
+        std::array<double, 6> targetTransform = meta.transform;
 
-        if (hasCustomRef || centerFrameIdx != -1) {
-            double cosRef = std::cos(refTheta);
-            double sinRef = std::sin(refTheta);
-            double diffDx = meta.dx - refDx;
-            double diffDy = meta.dy - refDy;
-
-            targetTheta = meta.theta - refTheta;
-            targetDx = diffDx * cosRef + diffDy * sinRef;
-            targetDy = -diffDx * sinRef + diffDy * cosRef;
+        if (hasRef) {
+            std::array<double, 6> invRef = invertAffine(T_ref);
+            targetTransform = multiplyAffine(invRef, meta.transform);
         }
 
-        // Perform warping (backward-mapping bilinear interpolation, applying drizzle)
+        double targetDx = targetTransform[2];
+        double targetDy = targetTransform[5];
+        double targetTheta = std::atan2(targetTransform[3] - targetTransform[1], targetTransform[0] + targetTransform[4]);
+
+        // Perform warping (backward-mapping interpolation, applying drizzle)
         if (std::holds_alternative<GrayscaleImagePtr>(frame)) {
             auto gray = std::get<GrayscaleImagePtr>(frame);
-            alignedFrame = Warping::warpGrayscale(gray, targetDx, targetDy, targetTheta, drizzleScale);
+            auto warped = Warping::warpGrayscale(gray, targetTransform, drizzleScale, interpolation);
+            warped->setMetadata(gray->metadata());
+            alignedFrame = warped;
         } else if (std::holds_alternative<RGBImagePtr>(frame)) {
             auto rgb = std::get<RGBImagePtr>(frame);
-            alignedFrame = Warping::warpRGB(rgb, targetDx, targetDy, targetTheta, drizzleScale);
+            auto warped = Warping::warpRGB(rgb, targetTransform, drizzleScale, interpolation);
+            warped->setMetadata(rgb->metadata());
+            alignedFrame = warped;
         }
 
         // Save aligned frame to a temporary FITS file
@@ -215,6 +251,7 @@ void AlignAlgorithm::execute(WorkspaceRegistry& workspace,
         finalMeta.dx = targetDx;
         finalMeta.dy = targetDy;
         finalMeta.theta = targetTheta;
+        finalMeta.transform = targetTransform;
         finalMetadata[i] = finalMeta;
 
         // Memory optimization: evict the loaded source frame from RAM

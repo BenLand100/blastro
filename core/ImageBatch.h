@@ -20,11 +20,13 @@
 #include "GrayscaleImage.h"
 #include "RGBImage.h"
 #include "algorithms/StarFinder.h"
+#include "ImageMetadata.h"
 #include <vector>
 #include <variant>
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <array>
 
 namespace blastro {
 
@@ -35,10 +37,12 @@ struct FrameMetadata {
     double dx = 0.0;
     double dy = 0.0;
     double theta = 0.0;
+    std::array<double, 6> transform = {1.0, 0.0, 0.0, 0.0, 1.0, 0.0}; // [a, b, tx, c, d, ty]
     int starCount = 0;
     double fwhm = 0.0;
     double snr = 0.0;
     std::vector<Star> stars; // Stored registered stars (in-memory only)
+    ImageMetadata baseMetadata;
 };
 
 class ImageBatch {

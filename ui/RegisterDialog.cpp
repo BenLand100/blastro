@@ -66,6 +66,14 @@ RegisterDialog::RegisterDialog(WorkspaceRegistry& workspace, QWidget* parent)
     m_methodCombo->addItem("Standard Gaussian", "gaussian");
     formLayout->addRow("Detection Method:", m_methodCombo);
 
+    // Transformation Model dropdown
+    m_modelCombo = new QComboBox(this);
+    m_modelCombo->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    m_modelCombo->addItem("Rigid Body (Translation + Rotation)", "rigid");
+    m_modelCombo->addItem("Affine (Translation + Rotation + Scale + Shear)", "affine");
+    formLayout->addRow("Transformation Model:", m_modelCombo);
+
+
     // 4. SNR Threshold
     m_snrSpin = new QDoubleSpinBox(this);
     m_snrSpin->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
@@ -186,6 +194,8 @@ std::map<std::string, std::string> RegisterDialog::getConfig() const {
     config["input_name"] = m_targetInputCombo->currentText().toStdString();
     config["ref_frame_index"] = std::to_string(m_refIdxSpin->value());
     config["detection_method"] = m_methodCombo->currentData().toString().toStdString();
+    config["transformation_model"] = m_modelCombo->currentData().toString().toStdString();
+
     config["snr_min"] = std::to_string(m_snrSpin->value());
     config["min_fwhm"] = std::to_string(m_minFwhmSpin->value());
     config["max_stars"] = std::to_string(m_maxStars);
@@ -216,6 +226,8 @@ void RegisterDialog::refreshWorkspaceElements() {
 QJsonObject RegisterDialog::serializeState() const {
     QJsonObject obj;
     obj["detection_method"] = m_methodCombo->currentData().toString();
+    obj["transformation_model"] = m_modelCombo->currentData().toString();
+
     obj["snr_min"] = m_snrSpin->value();
     obj["min_fwhm"] = m_minFwhmSpin->value();
     obj["ref_frame_index"] = m_refIdxSpin->value();
@@ -233,6 +245,11 @@ void RegisterDialog::restoreState(const QJsonObject& obj) {
         int idx = m_methodCombo->findData(obj["detection_method"].toString());
         if (idx >= 0) m_methodCombo->setCurrentIndex(idx);
     }
+    if (obj.contains("transformation_model")) {
+        int idx = m_modelCombo->findData(obj["transformation_model"].toString());
+        if (idx >= 0) m_modelCombo->setCurrentIndex(idx);
+    }
+
     if (obj.contains("snr_min"))
         m_snrSpin->setValue(obj["snr_min"].toDouble());
     if (obj.contains("min_fwhm"))

@@ -49,6 +49,8 @@ Preferences::Preferences() {
     m_stackingMode = "ram";
     m_maxRamUsage = 16;
     m_updateRepositories = { "https://pixinsight.deepsnrastro.com/" };
+    m_astapBinaryPath = "/usr/bin/astap";
+    m_solveFieldBinaryPath = "/usr/bin/solve-field";
     
     load();
 }
@@ -163,6 +165,26 @@ void Preferences::setUpdateRepositories(const std::vector<std::string>& repos) {
     m_updateRepositories = repos;
 }
 
+std::string Preferences::getAstapBinaryPath() const {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return m_astapBinaryPath;
+}
+
+void Preferences::setAstapBinaryPath(const std::string& path) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_astapBinaryPath = path;
+}
+
+std::string Preferences::getSolveFieldBinaryPath() const {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return m_solveFieldBinaryPath;
+}
+
+void Preferences::setSolveFieldBinaryPath(const std::string& path) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_solveFieldBinaryPath = path;
+}
+
 void Preferences::load() {
     std::lock_guard<std::mutex> lock(m_mutex);
     QSettings settings("BLastro", "BLastro");
@@ -176,6 +198,8 @@ void Preferences::load() {
     m_threadCount = settings.value("Preferences/ThreadCount", m_threadCount).toInt();
     m_stackingMode = settings.value("Preferences/StackingMode", QString::fromStdString(m_stackingMode)).toString().toStdString();
     m_maxRamUsage = settings.value("Preferences/MaxRamUsage", m_maxRamUsage).toInt();
+    m_astapBinaryPath = settings.value("Preferences/AstapBinaryPath", QString::fromStdString(m_astapBinaryPath)).toString().toStdString();
+    m_solveFieldBinaryPath = settings.value("Preferences/SolveFieldBinaryPath", QString::fromStdString(m_solveFieldBinaryPath)).toString().toStdString();
 
     QStringList defaultRepos;
     for (const auto& r : m_updateRepositories) {
@@ -201,6 +225,8 @@ void Preferences::save() {
     settings.setValue("Preferences/ThreadCount", m_threadCount);
     settings.setValue("Preferences/StackingMode", QString::fromStdString(m_stackingMode));
     settings.setValue("Preferences/MaxRamUsage", m_maxRamUsage);
+    settings.setValue("Preferences/AstapBinaryPath", QString::fromStdString(m_astapBinaryPath));
+    settings.setValue("Preferences/SolveFieldBinaryPath", QString::fromStdString(m_solveFieldBinaryPath));
 
     QStringList reposList;
     for (const auto& r : m_updateRepositories) {

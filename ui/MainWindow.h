@@ -148,6 +148,7 @@ private slots:
     void onOpenDebayer();
     void onOpenRegister();
     void onOpenAlign();
+    void onOpenPlatesolve();
     void onOpenBackgroundExtraction();
     void onOpenPpw();
     void onOpenGhs();
@@ -228,6 +229,7 @@ private:
     CalibrationDialog*         m_calibrationDlg = nullptr;
     PixelMathDialog*           m_pixelMathDlg   = nullptr;
     PreprocessingWizardDialog* m_ppwDlg         = nullptr;
+    PlatesolveDialog*          m_platesolveDlg  = nullptr;
 
     // Persistent algorithm dialog subwindows
     QMdiSubWindow*             m_stretchingSub  = nullptr;
@@ -239,6 +241,7 @@ private:
     QMdiSubWindow*             m_calibrationSub = nullptr;
     QMdiSubWindow*             m_pixelMathSub   = nullptr;
     QMdiSubWindow*             m_ppwSub         = nullptr;
+    QMdiSubWindow*             m_platesolveSub  = nullptr;
 
     // Menus
     QMenu* m_fileMenu;
@@ -269,6 +272,7 @@ private:
     QAction* m_registerAct;
     QAction* m_alignAct;
     QAction* m_backgroundAct;
+    QAction* m_platesolveAct;
     QAction* m_stretchAct;
     QAction* m_newProjectAct    = nullptr;
     QAction* m_openProjectAct   = nullptr;

@@ -26,6 +26,154 @@
 
 namespace blastro {
 
+const double PI = 3.14159265358979323846;
+
+static void populateMetadata(CCfits::FITS* pInfile, ImageMetadata& metadata) {
+    fitsfile* fptr = pInfile->fitsPointer();
+    int nkeys = 0;
+    int status = 0;
+    fits_get_hdrspace(fptr, &nkeys, nullptr, &status);
+    for (int i = 1; i <= nkeys; ++i) {
+        char keyname[FLEN_KEYWORD] = {0};
+        char value[FLEN_VALUE] = {0};
+        char comment[FLEN_COMMENT] = {0};
+        fits_read_keyn(fptr, i, keyname, value, comment, &status);
+        if (status == 0) {
+            std::string name = keyname;
+            if (name == "SIMPLE" || name == "BITPIX" || name == "NAXIS" || name == "NAXIS1" || name == "NAXIS2" || 
+                name == "NAXIS3" || name == "EXTEND" || name == "BSCALE" || name == "BZERO" || name == "COMMENT" || name == "HISTORY") {
+                continue;
+            }
+            std::string valStr = value;
+            if (valStr.size() >= 2 && valStr.front() == '\'' && valStr.back() == '\'') {
+                valStr = valStr.substr(1, valStr.size() - 2);
+                while (!valStr.empty() && valStr.back() == ' ') {
+                    valStr.pop_back();
+                }
+            }
+            metadata.fitsKeywords[name] = valStr;
+        } else {
+            status = 0;
+        }
+    }
+
+    auto getDouble = [&](const std::string& key, double& outVal) {
+        auto it = metadata.fitsKeywords.find(key);
+        if (it != metadata.fitsKeywords.end()) {
+            try {
+                outVal = std::stod(it->second);
+                return true;
+            } catch (...) {}
+        }
+        return false;
+    };
+
+    getDouble("EXPTIME", metadata.exposureTime);
+    getDouble("GAIN", metadata.gain);
+
+    auto itF = metadata.fitsKeywords.find("FILTER");
+    if (itF != metadata.fitsKeywords.end()) {
+        metadata.filter = itF->second;
+    } else {
+        itF = metadata.fitsKeywords.find("FILTNAM");
+        if (itF != metadata.fitsKeywords.end()) {
+            metadata.filter = itF->second;
+        }
+    }
+
+    double crval1 = 0.0, crval2 = 0.0;
+    if (getDouble("CRVAL1", crval1) && getDouble("CRVAL2", crval2)) {
+        metadata.wcsSolved = true;
+        metadata.wcsRaCenter = crval1;
+        metadata.wcsDecCenter = crval2;
+
+        double cd11 = 0.0, cd12 = 0.0, cd21 = 0.0, cd22 = 0.0;
+        bool hasCD = getDouble("CD1_1", cd11) && getDouble("CD1_2", cd12) &&
+                     getDouble("CD2_1", cd21) && getDouble("CD2_2", cd22);
+        if (hasCD) {
+            metadata.wcsPixelScale = std::sqrt(cd11 * cd11 + cd21 * cd21) * 3600.0;
+            metadata.wcsRotation = std::atan2(cd12, cd11) * 180.0 / PI;
+        } else {
+            double cdelt1 = 0.0;
+            if (getDouble("CDELT1", cdelt1)) {
+                metadata.wcsPixelScale = std::abs(cdelt1) * 3600.0;
+            }
+            getDouble("CROTA2", metadata.wcsRotation);
+        }
+    } else {
+        metadata.wcsSolved = false;
+    }
+}
+
+static void writeMetadata(CCfits::PHDU& phdu, const ImageMetadata& metadata) {
+    for (const auto& pair : metadata.fitsKeywords) {
+        const std::string& name = pair.first;
+        const std::string& val = pair.second;
+
+        if (name == "SIMPLE" || name == "BITPIX" || name == "NAXIS" || name == "NAXIS1" || name == "NAXIS2" || 
+            name == "NAXIS3" || name == "EXTEND" || name == "BSCALE" || name == "BZERO") {
+            continue;
+        }
+
+        if (name == "EXPTIME" || name == "GAIN" || name == "FILTER" || name == "FILTNAM" ||
+            name == "CRVAL1" || name == "CRVAL2" || name == "CD1_1" || name == "CD1_2" ||
+            name == "CD2_1" || name == "CD2_2" || name == "CDELT1" || name == "CDELT2" ||
+            name == "CROTA2" || name == "WCS_SLVD") {
+            continue;
+        }
+
+        try {
+            if (val == "T" || val == "F" || val == "true" || val == "false") {
+                bool bVal = (val == "T" || val == "true");
+                phdu.addKey(name, bVal, "");
+            } else {
+                size_t idx = 0;
+                int iVal = std::stoi(val, &idx);
+                if (idx == val.size()) {
+                    phdu.addKey(name, iVal, "");
+                } else {
+                    double dVal = std::stod(val, &idx);
+                    if (idx == val.size()) {
+                        phdu.addKey(name, dVal, "");
+                    } else {
+                        phdu.addKey(name, val, "");
+                    }
+                }
+            }
+        } catch (...) {
+            phdu.addKey(name, val, "");
+        }
+    }
+
+    if (metadata.exposureTime > 0.0) {
+        phdu.addKey("EXPTIME", metadata.exposureTime, "Exposure time in seconds");
+    }
+    if (metadata.gain > 0.0) {
+        phdu.addKey("GAIN", metadata.gain, "Detector gain");
+    }
+    if (metadata.filter != "None" && !metadata.filter.empty()) {
+        phdu.addKey("FILTER", metadata.filter, "Filter used");
+    }
+
+    if (metadata.wcsSolved) {
+        phdu.addKey("WCS_SLVD", 1, "WCS solved by BLastro");
+        phdu.addKey("CRVAL1", metadata.wcsRaCenter, "RA at reference pixel");
+        phdu.addKey("CRVAL2", metadata.wcsDecCenter, "DEC at reference pixel");
+
+        double scaleDeg = metadata.wcsPixelScale / 3600.0;
+        double rotRad = metadata.wcsRotation * PI / 180.0;
+        double cd11 = scaleDeg * std::cos(rotRad);
+        double cd12 = scaleDeg * std::sin(rotRad);
+        double cd21 = -scaleDeg * std::sin(rotRad);
+        double cd22 = scaleDeg * std::cos(rotRad);
+
+        phdu.addKey("CD1_1", cd11, "WCS CD matrix 1_1");
+        phdu.addKey("CD1_2", cd12, "WCS CD matrix 1_2");
+        phdu.addKey("CD2_1", cd21, "WCS CD matrix 2_1");
+        phdu.addKey("CD2_2", cd22, "WCS CD matrix 2_2");
+    }
+}
+
 static float determineScaleFactor(int bitpix, const std::valarray<float>& contents) {
     float scaleFactor = 1.0f;
     if (bitpix == 8) {
@@ -66,6 +214,7 @@ ImageVariant FitsIO::readImage(const std::string& filepath) {
             image.read(contents);
 
             auto grayImg = std::make_shared<GrayscaleImage>(width, height);
+            populateMetadata(pInfile.get(), grayImg->metadata());
             auto buffer = grayImg->buffer();
             float scale = determineScaleFactor(image.bitpix(), contents);
             for (int y = 0; y < height; ++y) {
@@ -83,6 +232,7 @@ ImageVariant FitsIO::readImage(const std::string& filepath) {
             if (depth == 3) {
                 // Read as RGB image
                 auto rgbImg = std::make_shared<RGBImage>(width, height);
+                populateMetadata(pInfile.get(), rgbImg->metadata());
                 auto bufR = rgbImg->r()->buffer();
                 auto bufG = rgbImg->g()->buffer();
                 auto bufB = rgbImg->b()->buffer();
@@ -162,14 +312,19 @@ ImageBatchPtr FitsIO::readBatch(const std::vector<std::string>& filepaths) {
                 };
                 auto batch = std::make_shared<ImageBatch>(depth, loader, names, filepaths);
                 
-                // Read registration metadata from primary HDU header if present
+                // Read registration and WCS metadata from primary HDU header if present
+                ImageMetadata mainMeta;
+                populateMetadata(pInfile.get(), mainMeta);
+
                 for (int i = 0; i < depth; ++i) {
                     std::string idxStr = std::to_string(i + 1);
+                    FrameMetadata meta = batch->frameMetadata(i);
+                    meta.baseMetadata = mainMeta;
+
                     try {
                         int reg = 0;
                         image.readKey("R" + idxStr + "REG", reg);
                         if (reg) {
-                            FrameMetadata meta;
                             meta.registered = true;
                             image.readKey("R" + idxStr + "DX", meta.dx);
                             image.readKey("R" + idxStr + "DY", meta.dy);
@@ -177,7 +332,6 @@ ImageBatchPtr FitsIO::readBatch(const std::vector<std::string>& filepaths) {
                             image.readKey("R" + idxStr + "ST", meta.starCount);
                             image.readKey("R" + idxStr + "FW", meta.fwhm);
                             image.readKey("R" + idxStr + "SN", meta.snr);
-                            batch->setFrameMetadata(i, meta);
                             
                             int sel = 1;
                             try {
@@ -185,9 +339,29 @@ ImageBatchPtr FitsIO::readBatch(const std::vector<std::string>& filepaths) {
                             } catch (...) {}
                             batch->setFrameSelected(i, sel != 0);
                         }
-                    } catch (...) {
-                        // Keyword not found, skip
-                    }
+                    } catch (...) {}
+
+                    // Read WCS and base metadata overrides
+                    try {
+                        int wcs = 0;
+                        image.readKey("R" + idxStr + "WCS", wcs);
+                        if (wcs) {
+                            meta.baseMetadata.wcsSolved = true;
+                            image.readKey("R" + idxStr + "WRA", meta.baseMetadata.wcsRaCenter);
+                            image.readKey("R" + idxStr + "WDEC", meta.baseMetadata.wcsDecCenter);
+                            image.readKey("R" + idxStr + "WSCL", meta.baseMetadata.wcsPixelScale);
+                            image.readKey("R" + idxStr + "WROT", meta.baseMetadata.wcsRotation);
+                        }
+                    } catch (...) {}
+                    try { image.readKey("R" + idxStr + "EXP", meta.baseMetadata.exposureTime); } catch (...) {}
+                    try { image.readKey("R" + idxStr + "GAIN", meta.baseMetadata.gain); } catch (...) {}
+                    try {
+                        std::string filt;
+                        image.readKey("R" + idxStr + "FILT", filt);
+                        meta.baseMetadata.filter = filt;
+                    } catch (...) {}
+
+                    batch->setFrameMetadata(i, meta);
                 }
                 return batch;
             }
@@ -208,11 +382,15 @@ ImageBatchPtr FitsIO::readBatch(const std::vector<std::string>& filepaths) {
     };
     auto batch = std::make_shared<ImageBatch>(filepaths.size(), loader, names, filepaths);
     
-    // Read registration metadata from each individual file header if present
+    // Read registration and WCS metadata from each individual file header if present
     for (size_t i = 0; i < filepaths.size(); ++i) {
         try {
             std::unique_ptr<CCfits::FITS> pInfile(new CCfits::FITS(filepaths[i], CCfits::Read, true));
             CCfits::PHDU& image = pInfile->pHDU();
+            
+            FrameMetadata meta = batch->frameMetadata(i);
+            populateMetadata(pInfile.get(), meta.baseMetadata);
+
             int reg = 0;
             try {
                 image.readKey("REG_REG", reg);
@@ -220,7 +398,6 @@ ImageBatchPtr FitsIO::readBatch(const std::vector<std::string>& filepaths) {
                 try { image.readKey("REG", reg); } catch (...) {}
             }
             if (reg) {
-                FrameMetadata meta;
                 meta.registered = true;
                 try { image.readKey("REG_DX", meta.dx); } catch (...) {}
                 try { image.readKey("REG_DY", meta.dy); } catch (...) {}
@@ -228,12 +405,12 @@ ImageBatchPtr FitsIO::readBatch(const std::vector<std::string>& filepaths) {
                 try { image.readKey("REG_ST", meta.starCount); } catch (...) {}
                 try { image.readKey("REG_FW", meta.fwhm); } catch (...) {}
                 try { image.readKey("REG_SN", meta.snr); } catch (...) {}
-                batch->setFrameMetadata(i, meta);
                 
                 int sel = 1;
                 try { image.readKey("REG_SEL", sel); } catch (...) {}
                 batch->setFrameSelected(i, sel != 0);
             }
+            batch->setFrameMetadata(i, meta);
         } catch (...) {}
     }
     return batch;
@@ -271,6 +448,12 @@ bool FitsIO::writeImage(const std::string& filepath, const ImageVariant& image) 
         // CCfits::FITS constructor creates the file
         std::unique_ptr<CCfits::FITS> pOutfile(new CCfits::FITS(writePath, FLOAT_IMG, numAxes, naxes.data()));
         CCfits::PHDU& phdu = pOutfile->pHDU();
+
+        if (std::holds_alternative<GrayscaleImagePtr>(image)) {
+            writeMetadata(phdu, std::get<GrayscaleImagePtr>(image)->metadata());
+        } else {
+            writeMetadata(phdu, std::get<RGBImagePtr>(image)->metadata());
+        }
 
         long planeSize = width * height;
         std::valarray<float> arrayData(planeSize * planes);
@@ -337,6 +520,12 @@ bool FitsIO::writeBatch(const std::string& filepath, ImageBatchPtr batch) {
         CCfits::PHDU& phdu = pOutfile->pHDU();
 
         // Write registration metadata to the primary HDU header
+        // Write primary batch metadata
+        if (count > 0) {
+            FrameMetadata meta0 = batch->frameMetadata(0);
+            writeMetadata(phdu, meta0.baseMetadata);
+        }
+
         for (int i = 0; i < count; ++i) {
             FrameMetadata meta = batch->frameMetadata(i);
             bool selected = batch->isFrameSelected(i);
@@ -350,6 +539,18 @@ bool FitsIO::writeBatch(const std::string& filepath, ImageBatchPtr batch) {
             phdu.addKey("R" + idxStr + "FW", meta.fwhm, "Average FWHM");
             phdu.addKey("R" + idxStr + "SN", meta.snr, "SNR value");
             phdu.addKey("R" + idxStr + "SL", static_cast<int>(selected), "Is frame selected");
+
+            // Write frame specific metadata
+            phdu.addKey("R" + idxStr + "EXP", meta.baseMetadata.exposureTime, "Exposure time");
+            phdu.addKey("R" + idxStr + "GAIN", meta.baseMetadata.gain, "Gain");
+            phdu.addKey("R" + idxStr + "FILT", meta.baseMetadata.filter, "Filter");
+            if (meta.baseMetadata.wcsSolved) {
+                phdu.addKey("R" + idxStr + "WCS", 1, "WCS solved");
+                phdu.addKey("R" + idxStr + "WRA", meta.baseMetadata.wcsRaCenter, "WCS RA");
+                phdu.addKey("R" + idxStr + "WDEC", meta.baseMetadata.wcsDecCenter, "WCS DEC");
+                phdu.addKey("R" + idxStr + "WSCL", meta.baseMetadata.wcsPixelScale, "WCS Pixel Scale");
+                phdu.addKey("R" + idxStr + "WROT", meta.baseMetadata.wcsRotation, "WCS Rotation");
+            }
         }
 
         long planeSize = width * height;

@@ -92,10 +92,16 @@ PreprocessingWizardDialog::PreprocessingWizardDialog(WorkspaceRegistry& workspac
       // Registration
       m_starMinSnrSpin(new QDoubleSpinBox(this)),
       m_starMinFwhmSpin(new QDoubleSpinBox(this)),
+      m_transformationModelCombo(new QComboBox(this)),
+      m_starDetectionMethodCombo(new QComboBox(this)),
+      m_starMaxStarsSpin(new QSpinBox(this)),
+      m_starMatchToleranceSpin(new QDoubleSpinBox(this)),
+      m_starMaxEccentricitySpin(new QDoubleSpinBox(this)),
       // Alignment
       m_alignRefModeCombo(new QComboBox(this)),
       m_drizzleScaleSpin(new QDoubleSpinBox(this)),
       m_alignMutuallyChk(new QCheckBox(this)),
+      m_interpolationMethodCombo(new QComboBox(this)),
       // Light Stacking
       m_lightStackMethodCombo(new QComboBox(this)),
       m_lightRejectionCombo(new QComboBox(this)),
@@ -369,6 +375,11 @@ PreprocessingWizardDialog::PreprocessingWizardDialog(WorkspaceRegistry& workspac
         controlLayout->addWidget(hdr);
         controlLayout->addWidget(body);
 
+        m_starDetectionMethodCombo->addItem("Advanced Adaptive", "sota");
+        m_starDetectionMethodCombo->addItem("Basic Centroid", "centroid");
+        m_starDetectionMethodCombo->addItem("Standard Gaussian", "gaussian");
+        form->addRow("Detection Method:", m_starDetectionMethodCombo);
+
         m_starMinSnrSpin->setRange(1.0, 100.0);
         m_starMinSnrSpin->setValue(4.0);
         m_starMinSnrSpin->setSingleStep(0.5);
@@ -381,6 +392,25 @@ PreprocessingWizardDialog::PreprocessingWizardDialog(WorkspaceRegistry& workspac
         m_starMinFwhmSpin->setDecimals(1);
         m_starMinFwhmSpin->setSuffix(" px");
         form->addRow("Minimum Star FWHM:", m_starMinFwhmSpin);
+
+        m_starMaxStarsSpin->setRange(10, 5000);
+        m_starMaxStarsSpin->setValue(500);
+        form->addRow("Max Stars to Detect:", m_starMaxStarsSpin);
+
+        m_starMaxEccentricitySpin->setRange(0.1, 1.0);
+        m_starMaxEccentricitySpin->setValue(0.9);
+        m_starMaxEccentricitySpin->setSingleStep(0.05);
+        form->addRow("Max Star Eccentricity:", m_starMaxEccentricitySpin);
+
+        m_starMatchToleranceSpin->setRange(0.1, 10.0);
+        m_starMatchToleranceSpin->setValue(1.5);
+        m_starMatchToleranceSpin->setSingleStep(0.1);
+        m_starMatchToleranceSpin->setSuffix(" px");
+        form->addRow("Constellation Match Tol:", m_starMatchToleranceSpin);
+
+        m_transformationModelCombo->addItem("Rigid Body (Translation + Rotation)", "rigid");
+        m_transformationModelCombo->addItem("Affine (Translation + Rotation + Scale + Shear)", "affine");
+        form->addRow("Transformation Model:", m_transformationModelCombo);
     }
 
     controlLayout->addSpacing(4);
@@ -404,6 +434,13 @@ PreprocessingWizardDialog::PreprocessingWizardDialog(WorkspaceRegistry& workspac
 
         m_alignMutuallyChk->setChecked(true);
         form->addRow("Mutually Align Stacks:", m_alignMutuallyChk);
+
+        m_interpolationMethodCombo->addItem("Bilinear (Fast, Softer)", "bilinear");
+        m_interpolationMethodCombo->addItem("Bicubic Spline", "bicubic");
+        m_interpolationMethodCombo->addItem("Lanczos-3 (High Quality, Sharper)", "lanczos3");
+        m_interpolationMethodCombo->addItem("Lanczos-4 (Highest Quality)", "lanczos4");
+        m_interpolationMethodCombo->setCurrentIndex(2); // Default to Lanczos-3
+        form->addRow("Interpolation Method:", m_interpolationMethodCombo);
     }
 
     controlLayout->addSpacing(4);
@@ -1130,6 +1167,11 @@ void PreprocessingWizardDialog::onRunCalibrationRegister() {
     config["keep_intermediate"] = m_keepIntermediateChk->isChecked() ? "true" : "false";
     config["star_min_snr"] = QString::number(m_starMinSnrSpin->value()).toStdString();
     config["star_min_fwhm"] = QString::number(m_starMinFwhmSpin->value()).toStdString();
+    config["star_detection_method"] = m_starDetectionMethodCombo->currentData().toString().toStdString();
+    config["star_max_stars"] = std::to_string(m_starMaxStarsSpin->value());
+    config["star_max_eccentricity"] = std::to_string(m_starMaxEccentricitySpin->value());
+    config["match_tolerance"] = std::to_string(m_starMatchToleranceSpin->value());
+    config["transformation_model"] = m_transformationModelCombo->currentData().toString().toStdString();
     config["out_prefix"] = m_outPrefixEdit->text().toStdString();
     // Bias/Dark stacking settings
     config["bias_dark_stack_method"] = m_biasDarkStackMethodCombo->currentData().toString().toStdString();
@@ -1441,11 +1483,17 @@ void PreprocessingWizardDialog::onResumeStacking() {
     config["drizzle_scale"] = QString::number(m_drizzleScaleSpin->value()).toStdString();
     config["align_ref_mode"] = m_alignRefModeCombo->currentData().toString().toStdString();
     config["align_mutually"] = m_alignMutuallyChk->isChecked() ? "true" : "false";
+    config["interpolation_method"] = m_interpolationMethodCombo->currentData().toString().toStdString();
+    config["transformation_model"] = m_transformationModelCombo->currentData().toString().toStdString();
     config["keep_intermediate"] = m_keepIntermediateChk->isChecked() ? "true" : "false";
     config["out_dir"] = QDir::current().filePath(
         QString::fromStdString(Preferences::instance().getProcessFolderName())).toStdString();
     config["star_min_snr"] = QString::number(m_starMinSnrSpin->value()).toStdString();
     config["star_min_fwhm"] = QString::number(m_starMinFwhmSpin->value()).toStdString();
+    config["star_detection_method"] = m_starDetectionMethodCombo->currentData().toString().toStdString();
+    config["star_max_stars"] = std::to_string(m_starMaxStarsSpin->value());
+    config["star_max_eccentricity"] = std::to_string(m_starMaxEccentricitySpin->value());
+    config["match_tolerance"] = std::to_string(m_starMatchToleranceSpin->value());
     config["out_prefix"] = m_outPrefixEdit->text().toStdString();
     // Light stacking settings
     config["light_stack_method"] = m_lightStackMethodCombo->currentData().toString().toStdString();
@@ -2077,10 +2125,16 @@ QJsonObject PreprocessingWizardDialog::serializeControlState() const {
     // Registration
     obj["star_min_snr"] = m_starMinSnrSpin->value();
     obj["star_min_fwhm"] = m_starMinFwhmSpin->value();
+    obj["star_detection_method"] = m_starDetectionMethodCombo->currentData().toString();
+    obj["star_max_stars"] = m_starMaxStarsSpin->value();
+    obj["star_max_eccentricity"] = m_starMaxEccentricitySpin->value();
+    obj["match_tolerance"] = m_starMatchToleranceSpin->value();
+    obj["transformation_model"] = m_transformationModelCombo->currentData().toString();
     // Alignment
     obj["align_ref_mode"] = m_alignRefModeCombo->currentData().toString();
     obj["drizzle_scale"] = m_drizzleScaleSpin->value();
     obj["align_mutually"] = m_alignMutuallyChk->isChecked();
+    obj["interpolation_method"] = m_interpolationMethodCombo->currentData().toString();
     // Light Stacking
     obj["light_stack_method"] = m_lightStackMethodCombo->currentData().toString();
     obj["light_rejection"] = m_lightRejectionCombo->currentData().toString();
@@ -2121,9 +2175,15 @@ void PreprocessingWizardDialog::restoreControlState(const QJsonObject& obj) {
     if (obj.contains("flat_sigma_high")) m_flatSigmaHighSpin->setValue(obj["flat_sigma_high"].toDouble());
     if (obj.contains("star_min_snr")) m_starMinSnrSpin->setValue(obj["star_min_snr"].toDouble());
     if (obj.contains("star_min_fwhm")) m_starMinFwhmSpin->setValue(obj["star_min_fwhm"].toDouble());
+    if (obj.contains("star_detection_method")) setCombo(m_starDetectionMethodCombo, obj["star_detection_method"].toString());
+    if (obj.contains("star_max_stars")) m_starMaxStarsSpin->setValue(obj["star_max_stars"].toInt());
+    if (obj.contains("star_max_eccentricity")) m_starMaxEccentricitySpin->setValue(obj["star_max_eccentricity"].toDouble());
+    if (obj.contains("match_tolerance")) m_starMatchToleranceSpin->setValue(obj["match_tolerance"].toDouble());
+    if (obj.contains("transformation_model")) setCombo(m_transformationModelCombo, obj["transformation_model"].toString());
     if (obj.contains("align_ref_mode")) setCombo(m_alignRefModeCombo, obj["align_ref_mode"].toString());
     if (obj.contains("drizzle_scale")) m_drizzleScaleSpin->setValue(obj["drizzle_scale"].toDouble());
     if (obj.contains("align_mutually")) m_alignMutuallyChk->setChecked(obj["align_mutually"].toBool());
+    if (obj.contains("interpolation_method")) setCombo(m_interpolationMethodCombo, obj["interpolation_method"].toString());
     if (obj.contains("light_stack_method")) setCombo(m_lightStackMethodCombo, obj["light_stack_method"].toString());
     if (obj.contains("light_rejection")) setCombo(m_lightRejectionCombo, obj["light_rejection"].toString());
     if (obj.contains("light_sigma_low")) m_lightSigmaLowSpin->setValue(obj["light_sigma_low"].toDouble());

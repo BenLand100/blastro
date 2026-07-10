@@ -244,6 +244,33 @@ static GrayscaleImagePtr stackChannels(const std::vector<GrayscaleImagePtr>& cha
     return std::make_shared<GrayscaleImage>(outBuffer);
 }
 
+static ImageMetadata coalesceMetadata(ImageBatchPtr batch, const std::vector<int>& selectedIndices) {
+    ImageMetadata outMeta;
+    if (selectedIndices.empty()) return outMeta;
+
+    int refIdx = selectedIndices[0];
+    for (int idx : selectedIndices) {
+        FrameMetadata fm = batch->frameMetadata(idx);
+        if (fm.registered && std::abs(fm.dx) < 1e-5 && std::abs(fm.dy) < 1e-5 && std::abs(fm.theta) < 1e-5) {
+            refIdx = idx;
+            break;
+        }
+    }
+
+    FrameMetadata refFM = batch->frameMetadata(refIdx);
+    outMeta = refFM.baseMetadata;
+
+    double totalExp = 0.0;
+    for (int idx : selectedIndices) {
+        totalExp += batch->frameMetadata(idx).baseMetadata.exposureTime;
+    }
+    outMeta.exposureTime = totalExp;
+    outMeta.fitsKeywords["EXPTIME"] = std::to_string(totalExp);
+    outMeta.fitsKeywords["STACKCNT"] = std::to_string(selectedIndices.size());
+
+    return outMeta;
+}
+
 void StackingAlgorithm::execute(WorkspaceRegistry& workspace, 
                                  const std::map<std::string, std::string>& config, 
                                  ProgressCallback progress) {
@@ -324,6 +351,8 @@ void StackingAlgorithm::execute(WorkspaceRegistry& workspace,
         height = gray->height();
     }
 
+    ImageMetadata coalesced = coalesceMetadata(batch, selectedIndices);
+
     if (mode == "chunked") {
         std::string tempDir = TempDirectory::createTempDir("stacking");
         if (tempDir.empty()) {
@@ -341,11 +370,13 @@ void StackingAlgorithm::execute(WorkspaceRegistry& workspace,
             auto blankG = std::make_shared<GrayscaleImage>(width, height);
             auto blankB = std::make_shared<GrayscaleImage>(width, height);
             auto blankRGB = std::make_shared<RGBImage>(blankR, blankG, blankB);
+            blankRGB->setMetadata(coalesced);
             if (!fits.writeImage(tempOutPath, blankRGB)) {
                 throw std::runtime_error("Failed to initialize blank RGB FITS file at " + tempOutPath);
             }
         } else {
             auto blankGray = std::make_shared<GrayscaleImage>(width, height);
+            blankGray->setMetadata(coalesced);
             if (!fits.writeImage(tempOutPath, blankGray)) {
                 throw std::runtime_error("Failed to initialize blank Grayscale FITS file at " + tempOutPath);
             }
@@ -505,6 +536,7 @@ void StackingAlgorithm::execute(WorkspaceRegistry& workspace,
                                           [progress](int p) { if (progress) progress(66 + p / 3); });
 
             auto stackedRGB = std::make_shared<RGBImage>(stackedR, stackedG, stackedB);
+            stackedRGB->setMetadata(coalesced);
             workspace.registerElement(outputName, stackedRGB);
         } else {
             // Grayscale stacking
@@ -520,6 +552,7 @@ void StackingAlgorithm::execute(WorkspaceRegistry& workspace,
             }
 
             auto stackedGray = stackChannels(channels, method, rejection, sigmaLow, sigmaHigh, quantileLow, quantileHigh, progress);
+            stackedGray->setMetadata(coalesced);
             workspace.registerElement(outputName, stackedGray);
         }
         Logger::success("Stacking", QString("Finished RAM stacking of %1 frames in %2 ms. Registered output master: %3")

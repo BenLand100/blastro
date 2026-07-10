@@ -17,32 +17,23 @@
  */
 
 #pragma once
-#include "ImageBuffer.h"
-#include "ImageMetadata.h"
+#include <string>
+#include <map>
 
 namespace blastro {
 
-class GrayscaleImage {
-public:
-    GrayscaleImage(int width, int height);
-    GrayscaleImage(ImageBufferPtr buffer);
-    ~GrayscaleImage() = default;
-    
-    int width() const { return m_buffer->width(); }
-    int height() const { return m_buffer->height(); }
-    
-    ImageBufferPtr buffer() { return m_buffer; }
-    const ImageBufferPtr buffer() const { return m_buffer; }
+struct ImageMetadata {
+    bool wcsSolved = false;
+    double wcsRaCenter = 0.0;    // CRVAL1
+    double wcsDecCenter = 0.0;   // CRVAL2
+    double wcsPixelScale = 0.0;  // derived from CD matrix or CDELT
+    double wcsRotation = 0.0;    // derived from CD matrix or CROTA
 
-    const ImageMetadata& metadata() const { return m_metadata; }
-    void setMetadata(const ImageMetadata& meta) { m_metadata = meta; }
-    ImageMetadata& metadata() { return m_metadata; }
+    double exposureTime = 0.0;
+    double gain = 0.0;
+    std::string filter = "None";
 
-private:
-    ImageBufferPtr m_buffer;
-    ImageMetadata m_metadata;
+    std::map<std::string, std::string> fitsKeywords;
 };
-
-using GrayscaleImagePtr = std::shared_ptr<GrayscaleImage>;
 
 } // namespace blastro

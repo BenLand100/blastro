@@ -58,6 +58,8 @@ void RegisterAlgorithm::execute(WorkspaceRegistry& workspace,
     int maxStars = std::stoi(config.at("max_stars"));
     double maxEccentricity = std::stod(config.at("max_eccentricity"));
     double matchTolerance = std::stod(config.at("match_tolerance"));
+    bool useAffine = (config.count("transformation_model") && config.at("transformation_model") == "affine");
+
 
     WorkspaceElement inputElem = workspace.getElement(inputName);
     if (!std::holds_alternative<ImageBatchPtr>(inputElem)) {
@@ -140,11 +142,13 @@ void RegisterAlgorithm::execute(WorkspaceRegistry& workspace,
     refMeta.dx = 0.0;
     refMeta.dy = 0.0;
     refMeta.theta = 0.0;
+    refMeta.transform = {1.0, 0.0, 0.0, 0.0, 1.0, 0.0};
     refMeta.starCount = refStars.size();
     refMeta.fwhm = refAvgFwhm;
     refMeta.snr = refAvgSnr;
     refMeta.stars = refStars;
     batch->setFrameMetadata(refFrameIdx, refMeta);
+
 
     // 2. Loop through all other selected frames and register them against the reference frame
     std::atomic<int> processedFrames(0);
@@ -220,7 +224,7 @@ void RegisterAlgorithm::execute(WorkspaceRegistry& workspace,
             }
 
             // Match constellations to reference frame using brightest subsets
-            auto alignRes = ConstellationMatcher::match(refStarsForMatching, targetStarsForMatching, 7, matchTolerance);
+            auto alignRes = ConstellationMatcher::match(refStarsForMatching, targetStarsForMatching, 7, matchTolerance, useAffine);
             
             if (alignRes.success) {
                 // Compute average FWHM and SNR from all detected target stars
@@ -238,6 +242,7 @@ void RegisterAlgorithm::execute(WorkspaceRegistry& workspace,
                 meta.dx = alignRes.dx;
                 meta.dy = alignRes.dy;
                 meta.theta = alignRes.theta;
+                meta.transform = alignRes.transform;
                 meta.starCount = targetStars.size(); // Total detected stars count!
                 meta.fwhm = avgFwhm;
                 meta.snr = avgSnr;

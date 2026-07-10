@@ -33,6 +33,7 @@ struct AlignmentResult {
     double dx = 0.0;
     double dy = 0.0;
     double theta = 0.0;
+    std::array<double, 6> transform = {1.0, 0.0, 0.0, 0.0, 1.0, 0.0}; // [a, b, tx, c, d, ty]
     double rmsError = 0.0;
     int matchedStars = 0;
 };
@@ -43,7 +44,8 @@ public:
     static AlignmentResult match(const std::vector<Star>& refStars,
                                  const std::vector<Star>& targetStars,
                                  int kNearest = 7,
-                                 double matchTolerance = 1.5);
+                                 double matchTolerance = 1.5,
+                                 bool useAffine = false);
 
 private:
     static std::vector<Triangle> buildTriangles(const std::vector<Star>& stars, int kNearest);

@@ -122,6 +122,23 @@ PreferencesWindow::PreferencesWindow(QWidget* parent)
     m_processFolderEdit = new QLineEdit(this);
     m_processFolderEdit->setPlaceholderText("process");
     pathsForm->addRow("Process Folder Name:", m_processFolderEdit);
+
+    m_astapPathEdit = new QLineEdit(this);
+    QPushButton* btnBrowseAstap = new QPushButton("Browse...", this);
+    connect(btnBrowseAstap, &QPushButton::clicked, this, &PreferencesWindow::onBrowseAstap);
+    QHBoxLayout* layoutAstap = new QHBoxLayout();
+    layoutAstap->addWidget(m_astapPathEdit, 1);
+    layoutAstap->addWidget(btnBrowseAstap);
+    pathsForm->addRow("ASTAP Binary Path:", layoutAstap);
+
+    m_solveFieldPathEdit = new QLineEdit(this);
+    QPushButton* btnBrowseSolveField = new QPushButton("Browse...", this);
+    connect(btnBrowseSolveField, &QPushButton::clicked, this, &PreferencesWindow::onBrowseSolveField);
+    QHBoxLayout* layoutSolveField = new QHBoxLayout();
+    layoutSolveField->addWidget(m_solveFieldPathEdit, 1);
+    layoutSolveField->addWidget(btnBrowseSolveField);
+    pathsForm->addRow("solve-field Binary Path:", layoutSolveField);
+
     generalLayout->addWidget(pathsGroup);
 
     // Group 3: System Resource Settings
@@ -207,6 +224,8 @@ PreferencesWindow::PreferencesWindow(QWidget* parent)
     m_tensorflowUrlEdit->setText(QString::fromStdString(prefs.getPclTensorflowDownloadUrl()));
     m_tempEdit->setText(QString::fromStdString(prefs.getTemporaryFolder()));
     m_processFolderEdit->setText(QString::fromStdString(prefs.getProcessFolderName()));
+    m_astapPathEdit->setText(QString::fromStdString(prefs.getAstapBinaryPath()));
+    m_solveFieldPathEdit->setText(QString::fromStdString(prefs.getSolveFieldBinaryPath()));
     m_threadSpin->setValue(prefs.getThreadCount());
     m_ramSpin->setValue(prefs.getMaxRamUsage());
 
@@ -244,6 +263,20 @@ void PreferencesWindow::onBrowseTemp() {
     }
 }
 
+void PreferencesWindow::onBrowseAstap() {
+    QString path = QFileDialog::getOpenFileName(this, "Select ASTAP Binary", m_astapPathEdit->text());
+    if (!path.isEmpty()) {
+        m_astapPathEdit->setText(path);
+    }
+}
+
+void PreferencesWindow::onBrowseSolveField() {
+    QString path = QFileDialog::getOpenFileName(this, "Select solve-field Binary", m_solveFieldPathEdit->text());
+    if (!path.isEmpty()) {
+        m_solveFieldPathEdit->setText(path);
+    }
+}
+
 void PreferencesWindow::onSaveClicked() {
     Preferences& prefs = Preferences::instance();
     prefs.setPclModuleFolder(m_moduleEdit->text().trimmed().toStdString());
@@ -255,6 +288,8 @@ void PreferencesWindow::onSaveClicked() {
     QString folderName = m_processFolderEdit->text().trimmed();
     if (folderName.isEmpty()) folderName = "process";
     prefs.setProcessFolderName(folderName.toStdString());
+    prefs.setAstapBinaryPath(m_astapPathEdit->text().trimmed().toStdString());
+    prefs.setSolveFieldBinaryPath(m_solveFieldPathEdit->text().trimmed().toStdString());
     prefs.setThreadCount(m_threadSpin->value());
     prefs.setMaxRamUsage(m_ramSpin->value());
 

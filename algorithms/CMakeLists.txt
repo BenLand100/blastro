@@ -31,6 +31,7 @@ add_library(blastro_algorithms
     BackgroundExtractionAlgorithm.cpp
     StretchingAlgorithmWrapper.cpp
     ImageOperations.cpp
+    PlatesolveAlgorithm.cpp
     PreprocessingPipeline.cpp
 )
 target_include_directories(blastro_algorithms PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/..)

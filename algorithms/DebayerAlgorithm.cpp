@@ -73,6 +73,7 @@ static RGBImagePtr debayerFrame(GrayscaleImagePtr src, const std::string& patter
         int outW = w / 2;
         int outH = h / 2;
         auto outRGB = std::make_shared<RGBImage>(outW, outH);
+        outRGB->setMetadata(src->metadata());
         
         float* rData = outRGB->r()->buffer()->data();
         float* gData = outRGB->g()->buffer()->data();
@@ -99,6 +100,7 @@ static RGBImagePtr debayerFrame(GrayscaleImagePtr src, const std::string& patter
     } else {
         // Bilinear interpolation: preserves full resolution
         auto outRGB = std::make_shared<RGBImage>(w, h);
+        outRGB->setMetadata(src->metadata());
         float* rData = outRGB->r()->buffer()->data();
         float* gData = outRGB->g()->buffer()->data();
         float* bData = outRGB->b()->buffer()->data();

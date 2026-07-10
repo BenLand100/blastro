@@ -61,6 +61,12 @@ public:
     std::vector<std::string> getUpdateRepositories() const;
     void setUpdateRepositories(const std::vector<std::string>& repos);
 
+    std::string getAstapBinaryPath() const;
+    void setAstapBinaryPath(const std::string& path);
+
+    std::string getSolveFieldBinaryPath() const;
+    void setSolveFieldBinaryPath(const std::string& path);
+
     // Save and load
     void load();
     void save();
@@ -80,6 +86,8 @@ private:
     std::string m_stackingMode;
     int m_maxRamUsage;
     std::vector<std::string> m_updateRepositories;
+    std::string m_astapBinaryPath;
+    std::string m_solveFieldBinaryPath;
 
     mutable std::mutex m_mutex;
 };

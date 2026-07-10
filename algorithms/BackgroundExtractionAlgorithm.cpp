@@ -105,15 +105,21 @@ void BackgroundExtractionAlgorithm::execute(WorkspaceRegistry& workspace,
             ImageVariant extracted;
 
             if (std::holds_alternative<GrayscaleImagePtr>(frame)) {
-                extracted = BackgroundExtractor::extractGrayscale(
-                    std::get<GrayscaleImagePtr>(frame),
+                auto gray = std::get<GrayscaleImagePtr>(frame);
+                auto res = BackgroundExtractor::extractGrayscale(
+                    gray,
                     order, sigmaCut, sampleFrac, huberDelta, equalize,
                     nullptr, 0, 100, method, rbfSmoothing);
+                res->setMetadata(gray->metadata());
+                extracted = res;
             } else if (std::holds_alternative<RGBImagePtr>(frame)) {
-                extracted = BackgroundExtractor::extractRGB(
-                    std::get<RGBImagePtr>(frame),
+                auto rgb = std::get<RGBImagePtr>(frame);
+                auto res = BackgroundExtractor::extractRGB(
+                    rgb,
                     order, sigmaCut, sampleFrac, huberDelta, equalize,
                     nullptr, method, rbfSmoothing);
+                res->setMetadata(rgb->metadata());
+                extracted = res;
             } else {
                 throw std::runtime_error("Unsupported frame type in batch background extraction");
             }
@@ -160,15 +166,21 @@ void BackgroundExtractionAlgorithm::execute(WorkspaceRegistry& workspace,
     // -----------------------------------------------------------------------
     WorkspaceElement outputElem;
     if (std::holds_alternative<GrayscaleImagePtr>(inputElem)) {
-        outputElem = BackgroundExtractor::extractGrayscale(
-            std::get<GrayscaleImagePtr>(inputElem),
+        auto gray = std::get<GrayscaleImagePtr>(inputElem);
+        auto res = BackgroundExtractor::extractGrayscale(
+            gray,
             order, sigmaCut, sampleFrac, huberDelta, equalize,
             progress, 5, 95, method, rbfSmoothing);
+        res->setMetadata(gray->metadata());
+        outputElem = res;
     } else if (std::holds_alternative<RGBImagePtr>(inputElem)) {
-        outputElem = BackgroundExtractor::extractRGB(
-            std::get<RGBImagePtr>(inputElem),
+        auto rgb = std::get<RGBImagePtr>(inputElem);
+        auto res = BackgroundExtractor::extractRGB(
+            rgb,
             order, sigmaCut, sampleFrac, huberDelta, equalize,
             progress, method, rbfSmoothing);
+        res->setMetadata(rgb->metadata());
+        outputElem = res;
     } else {
         throw std::runtime_error("Background extraction is not supported on this element type");
     }

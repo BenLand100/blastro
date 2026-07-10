@@ -23,9 +23,31 @@
 
 namespace blastro {
 
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+
+inline double lanczosKernel(double x, double a) {
+    if (x == 0.0) return 1.0;
+    if (std::abs(x) >= a) return 0.0;
+    double pix = M_PI * x;
+    return a * std::sin(pix) * std::sin(pix / a) / (pix * pix);
+}
+
+inline double bicubicKernel(double x) {
+    double absX = std::abs(x);
+    if (absX < 1.0) {
+        return 1.5 * absX * absX * absX - 2.5 * absX * absX + 1.0;
+    } else if (absX < 2.0) {
+        return -0.5 * absX * absX * absX + 2.5 * absX * absX - 4.0 * absX + 2.0;
+    }
+    return 0.0;
+}
+
 GrayscaleImagePtr Warping::warpGrayscale(GrayscaleImagePtr src,
-                                        double dx, double dy, double theta,
-                                        double drizzleScale) {
+                                        const std::array<double, 6>& transform,
+                                        double drizzleScale,
+                                        const std::string& interpolation) {
     if (!src) return nullptr;
 
     int w_in = src->width();
@@ -38,8 +60,26 @@ GrayscaleImagePtr Warping::warpGrayscale(GrayscaleImagePtr src,
     float* outData = outBuffer->data();
     const float* inData = src->buffer()->data();
 
-    double cosT = std::cos(theta);
-    double sinT = std::sin(theta);
+    double a = transform[0];
+    double b = transform[1];
+    double tx = transform[2];
+    double c = transform[3];
+    double d = transform[4];
+    double ty = transform[5];
+
+    double det = a * d - b * c;
+    double inv_a = 1.0, inv_b = 0.0, inv_tx = 0.0;
+    double inv_c = 0.0, inv_d = 1.0, inv_ty = 0.0;
+
+    if (std::abs(det) > 1e-9) {
+        double inv_det = 1.0 / det;
+        inv_a = d * inv_det;
+        inv_b = -b * inv_det;
+        inv_tx = (-d * tx + b * ty) * inv_det;
+        inv_c = -c * inv_det;
+        inv_d = a * inv_det;
+        inv_ty = (c * tx - a * ty) * inv_det;
+    }
 
     // Parallelize pixel warping with OpenMP
     #pragma omp parallel for
@@ -49,36 +89,146 @@ GrayscaleImagePtr Warping::warpGrayscale(GrayscaleImagePtr src,
             double y_ref = y_out / drizzleScale;
 
             // Backward mapping (resolving where the reference space lands in the input space)
-            double x_img = (x_ref - dx) * cosT + (y_ref - dy) * sinT;
-            double y_img = -(x_ref - dx) * sinT + (y_ref - dy) * cosT;
+            double x_img = inv_a * x_ref + inv_b * y_ref + inv_tx;
+            double y_img = inv_c * x_ref + inv_d * y_ref + inv_ty;
 
             long idx_out = y_out * w_out + x_out;
 
-            if (x_img < 0.0 || x_img >= w_in - 1 || y_img < 0.0 || y_img >= h_in - 1) {
-                outData[idx_out] = std::numeric_limits<float>::quiet_NaN();
-            } else {
+            if (interpolation == "lanczos3") {
                 int x0 = std::floor(x_img);
                 int y0 = std::floor(y_img);
-                int x1 = x0 + 1;
-                int y1 = y0 + 1;
-
-                double u = x_img - x0;
-                double v = y_img - y0;
-
-                float p00 = inData[y0 * w_in + x0];
-                float p10 = inData[y0 * w_in + x1];
-                float p01 = inData[y1 * w_in + x0];
-                float p11 = inData[y1 * w_in + x1];
-
-                // If any of the input pixels is NaN, propagate NaN to the output
-                if (std::isnan(p00) || std::isnan(p10) || std::isnan(p01) || std::isnan(p11)) {
+                if (x0 - 2 < 0 || x0 + 3 >= w_in || y0 - 2 < 0 || y0 + 3 >= h_in) {
                     outData[idx_out] = std::numeric_limits<float>::quiet_NaN();
                 } else {
-                    double val = (1.0 - u) * (1.0 - v) * p00 +
-                                 u * (1.0 - v) * p10 +
-                                 (1.0 - u) * v * p01 +
-                                 u * v * p11;
-                    outData[idx_out] = static_cast<float>(val);
+                    double w_x[6], w_y[6];
+                    for (int i = 0; i < 6; ++i) w_x[i] = lanczosKernel(x_img - (x0 - 2 + i), 3.0);
+                    for (int j = 0; j < 6; ++j) w_y[j] = lanczosKernel(y_img - (y0 - 2 + j), 3.0);
+
+                    double sum_val = 0.0;
+                    double sum_weight = 0.0;
+                    bool has_nan = false;
+
+                    for (int j = 0; j < 6; ++j) {
+                        int py = y0 - 2 + j;
+                        for (int i = 0; i < 6; ++i) {
+                            int px = x0 - 2 + i;
+                            float val = inData[py * w_in + px];
+                            if (std::isnan(val)) {
+                                has_nan = true;
+                                break;
+                            }
+                            double w = w_x[i] * w_y[j];
+                            sum_val += val * w;
+                            sum_weight += w;
+                        }
+                        if (has_nan) break;
+                    }
+
+                    if (has_nan || sum_weight <= 0.0) {
+                        outData[idx_out] = std::numeric_limits<float>::quiet_NaN();
+                    } else {
+                        outData[idx_out] = static_cast<float>(sum_val / sum_weight);
+                    }
+                }
+            } else if (interpolation == "lanczos4") {
+                int x0 = std::floor(x_img);
+                int y0 = std::floor(y_img);
+                if (x0 - 3 < 0 || x0 + 4 >= w_in || y0 - 3 < 0 || y0 + 4 >= h_in) {
+                    outData[idx_out] = std::numeric_limits<float>::quiet_NaN();
+                } else {
+                    double w_x[8], w_y[8];
+                    for (int i = 0; i < 8; ++i) w_x[i] = lanczosKernel(x_img - (x0 - 3 + i), 4.0);
+                    for (int j = 0; j < 8; ++j) w_y[j] = lanczosKernel(y_img - (y0 - 3 + j), 4.0);
+
+                    double sum_val = 0.0;
+                    double sum_weight = 0.0;
+                    bool has_nan = false;
+
+                    for (int j = 0; j < 8; ++j) {
+                        int py = y0 - 3 + j;
+                        for (int i = 0; i < 8; ++i) {
+                            int px = x0 - 3 + i;
+                            float val = inData[py * w_in + px];
+                            if (std::isnan(val)) {
+                                has_nan = true;
+                                break;
+                            }
+                            double w = w_x[i] * w_y[j];
+                            sum_val += val * w;
+                            sum_weight += w;
+                        }
+                        if (has_nan) break;
+                    }
+
+                    if (has_nan || sum_weight <= 0.0) {
+                        outData[idx_out] = std::numeric_limits<float>::quiet_NaN();
+                    } else {
+                        outData[idx_out] = static_cast<float>(sum_val / sum_weight);
+                    }
+                }
+            } else if (interpolation == "bicubic") {
+                int x0 = std::floor(x_img);
+                int y0 = std::floor(y_img);
+                if (x0 - 1 < 0 || x0 + 2 >= w_in || y0 - 1 < 0 || y0 + 2 >= h_in) {
+                    outData[idx_out] = std::numeric_limits<float>::quiet_NaN();
+                } else {
+                    double w_x[4], w_y[4];
+                    for (int i = 0; i < 4; ++i) w_x[i] = bicubicKernel(x_img - (x0 - 1 + i));
+                    for (int j = 0; j < 4; ++j) w_y[j] = bicubicKernel(y_img - (y0 - 1 + j));
+
+                    double sum_val = 0.0;
+                    double sum_weight = 0.0;
+                    bool has_nan = false;
+
+                    for (int j = 0; j < 4; ++j) {
+                        int py = y0 - 1 + j;
+                        for (int i = 0; i < 4; ++i) {
+                            int px = x0 - 1 + i;
+                            float val = inData[py * w_in + px];
+                            if (std::isnan(val)) {
+                                has_nan = true;
+                                break;
+                            }
+                            double w = w_x[i] * w_y[j];
+                            sum_val += val * w;
+                            sum_weight += w;
+                        }
+                        if (has_nan) break;
+                    }
+
+                    if (has_nan || sum_weight <= 0.0) {
+                        outData[idx_out] = std::numeric_limits<float>::quiet_NaN();
+                    } else {
+                        outData[idx_out] = static_cast<float>(sum_val / sum_weight);
+                    }
+                }
+            } else {
+                // Default: Bilinear
+                if (x_img < 0.0 || x_img >= w_in - 1 || y_img < 0.0 || y_img >= h_in - 1) {
+                    outData[idx_out] = std::numeric_limits<float>::quiet_NaN();
+                } else {
+                    int x0 = std::floor(x_img);
+                    int y0 = std::floor(y_img);
+                    int x1 = x0 + 1;
+                    int y1 = y0 + 1;
+
+                    double u = x_img - x0;
+                    double v = y_img - y0;
+
+                    float p00 = inData[y0 * w_in + x0];
+                    float p10 = inData[y0 * w_in + x1];
+                    float p01 = inData[y1 * w_in + x0];
+                    float p11 = inData[y1 * w_in + x1];
+
+                    if (std::isnan(p00) || std::isnan(p10) || std::isnan(p01) || std::isnan(p11)) {
+                        outData[idx_out] = std::numeric_limits<float>::quiet_NaN();
+                    } else {
+                        double val = (1.0 - u) * (1.0 - v) * p00 +
+                                     u * (1.0 - v) * p10 +
+                                     (1.0 - u) * v * p01 +
+                                     u * v * p11;
+                        outData[idx_out] = static_cast<float>(val);
+                    }
                 }
             }
         }
@@ -88,14 +238,14 @@ GrayscaleImagePtr Warping::warpGrayscale(GrayscaleImagePtr src,
 }
 
 RGBImagePtr Warping::warpRGB(RGBImagePtr src,
-                             double dx, double dy, double theta,
-                             double drizzleScale) {
+                             const std::array<double, 6>& transform,
+                             double drizzleScale,
+                             const std::string& interpolation) {
     if (!src) return nullptr;
 
-    // Warp each channel independently
-    auto warpedR = warpGrayscale(src->r(), dx, dy, theta, drizzleScale);
-    auto warpedG = warpGrayscale(src->g(), dx, dy, theta, drizzleScale);
-    auto warpedB = warpGrayscale(src->b(), dx, dy, theta, drizzleScale);
+    auto warpedR = warpGrayscale(src->r(), transform, drizzleScale, interpolation);
+    auto warpedG = warpGrayscale(src->g(), transform, drizzleScale, interpolation);
+    auto warpedB = warpGrayscale(src->b(), transform, drizzleScale, interpolation);
 
     return std::make_shared<RGBImage>(warpedR, warpedG, warpedB);
 }

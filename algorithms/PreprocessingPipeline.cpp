@@ -37,6 +37,19 @@
 
 namespace blastro {
 
+static std::array<double, 6> multiplyAffine(const std::array<double, 6>& A, const std::array<double, 6>& B) {
+    double a  = A[0]*B[0] + A[1]*B[3];
+    double b  = A[0]*B[1] + A[1]*B[4];
+    double tx = A[0]*B[2] + A[1]*B[5] + A[2];
+    
+    double c  = A[3]*B[0] + A[4]*B[3];
+    double d  = A[3]*B[1] + A[4]*B[4];
+    double ty = A[3]*B[2] + A[4]*B[5] + A[5];
+    
+    return {a, b, tx, c, d, ty};
+}
+
+
 std::function<bool()> PreprocessingPipeline::s_cancelCallback = nullptr;
 
 bool PreprocessingPipeline::isCancelled() {
@@ -668,18 +681,24 @@ void PreprocessingPipeline::execute(WorkspaceRegistry& workspace,
                 Logger::info("Preprocessing", "Registering calibrated light frames...");
                 std::string starMinSnr = config.count("star_min_snr") ? config.at("star_min_snr") : "4.0";
                 std::string starMinFwhm = config.count("star_min_fwhm") ? config.at("star_min_fwhm") : "1.5";
+                std::string starDetectMethod = config.count("star_detection_method") ? config.at("star_detection_method") : "sota";
+                std::string starMaxStars = config.count("star_max_stars") ? config.at("star_max_stars") : "500";
+                std::string starMaxEcc = config.count("star_max_eccentricity") ? config.at("star_max_eccentricity") : "0.9";
+                std::string transModel = config.count("transformation_model") ? config.at("transformation_model") : "rigid";
 
                 RegisterAlgorithm registerer;
                 runStep(registerer, {
                     {"input_name", registerInputName},
                     {"ref_frame_index", "0"},
-                    {"detection_method", "starfinder"},
+                    {"detection_method", starDetectMethod},
                     {"snr_min", starMinSnr},
                     {"min_fwhm", starMinFwhm},
-                    {"max_stars", "500"},
-                    {"max_eccentricity", "0.9"},
-                    {"match_tolerance", "0.05"}
+                    {"max_stars", starMaxStars},
+                    {"max_eccentricity", starMaxEcc},
+                    {"match_tolerance", config.count("match_tolerance") ? config.at("match_tolerance") : "1.5"},
+                    {"transformation_model", transModel}
                 });
+
 
                 std::string finalBatchName = outPrefix + "preprocessed_lights_" + g.filter;
                 workspace.renameElement(registerInputName, finalBatchName);
@@ -746,18 +765,24 @@ void PreprocessingPipeline::execute(WorkspaceRegistry& workspace,
 
             std::string starMinSnr = config.count("star_min_snr") ? config.at("star_min_snr") : "4.0";
             std::string starMinFwhm = config.count("star_min_fwhm") ? config.at("star_min_fwhm") : "1.5";
+            std::string starDetectMethod = config.count("star_detection_method") ? config.at("star_detection_method") : "sota";
+            std::string starMaxStars = config.count("star_max_stars") ? config.at("star_max_stars") : "500";
+            std::string starMaxEcc = config.count("star_max_eccentricity") ? config.at("star_max_eccentricity") : "0.9";
+            std::string transModel = config.count("transformation_model") ? config.at("transformation_model") : "rigid";
 
             RegisterAlgorithm registerer;
             runStep(registerer, {
                 {"input_name", name},
                 {"ref_frame_index", std::to_string(bestFrameIdx)},
-                {"detection_method", "starfinder"},
+                {"detection_method", starDetectMethod},
                 {"snr_min", starMinSnr},
                 {"min_fwhm", starMinFwhm},
-                {"max_stars", "500"},
-                {"max_eccentricity", "0.9"},
-                {"match_tolerance", "0.05"}
+                {"max_stars", starMaxStars},
+                {"max_eccentricity", starMaxEcc},
+                {"match_tolerance", config.count("match_tolerance") ? config.at("match_tolerance") : "1.5"},
+                {"transformation_model", transModel}
             });
+
 
             // Retrieve registered stars of the local reference frame
             FrameMetadata refMeta = batch->frameMetadata(bestFrameIdx);
@@ -794,7 +819,7 @@ void PreprocessingPipeline::execute(WorkspaceRegistry& workspace,
                          .arg(QString::fromStdString(globalRefBatchName)).arg(globalMaxSnr));
 
             // Align all other batches to the global reference batch
-            double matchTolerance = std::stod(config.count("match_tolerance") ? config.at("match_tolerance") : "0.05");
+            double matchTolerance = std::stod(config.count("match_tolerance") ? config.at("match_tolerance") : "1.5");
 
             for (const auto& reg : batchRegs) {
                 if (reg.name == globalRefBatchName) {
@@ -804,7 +829,8 @@ void PreprocessingPipeline::execute(WorkspaceRegistry& workspace,
                 Logger::info("Preprocessing", QString("Mutually aligning reference frame of batch '%1' to global reference...")
                              .arg(QString::fromStdString(reg.name)));
 
-                auto alignRes = ConstellationMatcher::match(globalRefStars, reg.refStars, 7, matchTolerance);
+                bool useAffine = (config.count("transformation_model") && config.at("transformation_model") == "affine");
+                auto alignRes = ConstellationMatcher::match(globalRefStars, reg.refStars, 7, matchTolerance, useAffine);
                 if (!alignRes.success) {
                     throw std::runtime_error("Failed to mutually align reference frame of batch " + reg.name + 
                                              " to the global reference frame. Verify that the frames overlap and contain matching star patterns.");
@@ -813,31 +839,25 @@ void PreprocessingPipeline::execute(WorkspaceRegistry& workspace,
                 Logger::success("Preprocessing", QString("Mutual alignment of batch '%1' successful: dx=%2, dy=%3, theta=%4")
                                 .arg(QString::fromStdString(reg.name)).arg(alignRes.dx).arg(alignRes.dy).arg(alignRes.theta));
 
-                // Compose offsets for all frames in this batch
+                // Compose offsets for all frames in this batch using affine matrix multiplication
                 auto batch = std::get<ImageBatchPtr>(workspace.getElement(reg.name));
                 int count = batch->count();
-                double theta_batch = alignRes.theta;
-                double dx_batch = alignRes.dx;
-                double dy_batch = alignRes.dy;
-                double cosB = std::cos(theta_batch);
-                double sinB = std::sin(theta_batch);
+                std::array<double, 6> T_batch = alignRes.transform;
 
                 for (int i = 0; i < count; ++i) {
                     if (batch->isFrameSelected(i)) {
                         FrameMetadata meta = batch->frameMetadata(i);
                         if (meta.registered) {
-                            double dx_i = meta.dx;
-                            double dy_i = meta.dy;
-                            double theta_i = meta.theta;
-
-                            meta.dx = dx_batch + dx_i * cosB - dy_i * sinB;
-                            meta.dy = dy_batch + dx_i * sinB + dy_i * cosB;
-                            meta.theta = theta_i + theta_batch;
-
+                            std::array<double, 6> T_final = multiplyAffine(T_batch, meta.transform);
+                            meta.transform = T_final;
+                            meta.dx = T_final[2];
+                            meta.dy = T_final[5];
+                            meta.theta = std::atan2(T_final[3] - T_final[1], T_final[0] + T_final[4]);
                             batch->setFrameMetadata(i, meta);
                         }
                     }
                 }
+
             }
 
             // Calculate global average center offsets if needed
@@ -904,11 +924,13 @@ void PreprocessingPipeline::execute(WorkspaceRegistry& workspace,
             std::string alignedBatchName = name + "_aligned";
             Logger::info("Preprocessing", QString("Aligning light frames to reference for batch %1...").arg(QString::fromStdString(name)));
 
+            std::string interpMethod = config.count("interpolation_method") ? config.at("interpolation_method") : "bilinear";
             std::map<std::string, std::string> alignConfig = {
                 {"input_name", name},
                 {"output_name", alignedBatchName},
                 {"drizzle_scale", std::to_string(drizzleScale)},
                 {"reference_mode", alignRefMode},
+                {"interpolation_method", interpMethod},
                 {"evict_cache", "true"}
             };
             if (hasCustomRef) {
@@ -916,6 +938,7 @@ void PreprocessingPipeline::execute(WorkspaceRegistry& workspace,
                 alignConfig["ref_dy"] = std::to_string(globalRefDy);
                 alignConfig["ref_theta"] = std::to_string(globalRefTheta);
             }
+
 
             AlignAlgorithm aligner;
             runStep(aligner, alignConfig);

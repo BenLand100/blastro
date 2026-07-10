@@ -34,6 +34,7 @@ class DebayerDialog;
 class CalibrationDialog;
 class PixelMathDialog;
 class PreprocessingWizardDialog;
+class PlatesolveDialog;
 }
 class QMainWindow;
 
@@ -50,6 +51,7 @@ struct DialogSet {
     CalibrationDialog*         calibration = nullptr;
     PixelMathDialog*           pixelMath   = nullptr;
     PreprocessingWizardDialog* ppw         = nullptr;
+    PlatesolveDialog*          platesolve  = nullptr;
 };
 
 /// Central service for reading and writing project files and session files.

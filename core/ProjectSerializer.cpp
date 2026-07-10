@@ -30,6 +30,7 @@
 #include "ui/CalibrationDialog.h"
 #include "ui/PixelMathDialog.h"
 #include "ui/PreprocessingWizardDialog.h"
+#include "ui/PlatesolveDialog.h"
 #include "ui/WorkspaceImageWindow.h"
 #include "ui/LogWindow.h"
 #include <QMainWindow>
@@ -89,6 +90,7 @@ QJsonObject ProjectSerializer::serializeDialogs(const DialogSet& dialogs) {
     if (dialogs.calibration) obj["calibration"]           = dialogs.calibration->serializeState();
     if (dialogs.pixelMath)   obj["pixel_math"]            = dialogs.pixelMath->serializeState();
     if (dialogs.ppw)         obj["ppw_control"]           = dialogs.ppw->serializeControlState();
+    if (dialogs.platesolve)  obj["platesolve"]            = dialogs.platesolve->serializeState();
     return obj;
 }
 
@@ -111,6 +113,8 @@ void ProjectSerializer::restoreDialogs(const QJsonObject& obj, const DialogSet& 
         dialogs.pixelMath->restoreState(obj["pixel_math"].toObject());
     if (dialogs.ppw         && obj.contains("ppw_control"))
         dialogs.ppw->restoreControlState(obj["ppw_control"].toObject());
+    if (dialogs.platesolve  && obj.contains("platesolve"))
+        dialogs.platesolve->restoreState(obj["platesolve"].toObject());
 }
 
 // ─── tool window serialization ────────────────────────────────────────────────
@@ -131,6 +135,7 @@ static QList<ToolWindowDef> toolWindowDefs(const DialogSet& dialogs) {
         { "CalibrationDialog",         dialogs.calibration },
         { "PixelMathDialog",           dialogs.pixelMath },
         { "PreprocessingWizardDialog", dialogs.ppw },
+        { "PlatesolveDialog",          dialogs.platesolve },
         { "LogWindow",                 LogWindow::instance() }
     };
 }
@@ -243,9 +248,31 @@ QJsonObject ProjectSerializer::serializeWorkspace(const QString& projectDir,
                     metaObj["dx"] = meta.dx;
                     metaObj["dy"] = meta.dy;
                     metaObj["theta"] = meta.theta;
+                    QJsonArray transArr;
+                    for (int k = 0; k < 6; ++k) {
+                        transArr.append(meta.transform[k]);
+                    }
+                    metaObj["transform"] = transArr;
                     metaObj["star_count"] = meta.starCount;
                     metaObj["fwhm"] = meta.fwhm;
                     metaObj["snr"] = meta.snr;
+
+                    QJsonObject wcsObj;
+                    wcsObj["solved"] = meta.baseMetadata.wcsSolved;
+                    wcsObj["ra"] = meta.baseMetadata.wcsRaCenter;
+                    wcsObj["dec"] = meta.baseMetadata.wcsDecCenter;
+                    wcsObj["scale"] = meta.baseMetadata.wcsPixelScale;
+                    wcsObj["rotation"] = meta.baseMetadata.wcsRotation;
+                    wcsObj["exposure"] = meta.baseMetadata.exposureTime;
+                    wcsObj["gain"] = meta.baseMetadata.gain;
+                    wcsObj["filter"] = QString::fromStdString(meta.baseMetadata.filter);
+                    QJsonObject kwObj;
+                    for (const auto& pair : meta.baseMetadata.fitsKeywords) {
+                        kwObj[QString::fromStdString(pair.first)] = QString::fromStdString(pair.second);
+                    }
+                    wcsObj["keywords"] = kwObj;
+                    metaObj["wcs"] = wcsObj;
+
                     frame["metadata"] = metaObj;
                     frames.append(frame);
                 }

@@ -46,6 +46,7 @@ private:
     QString m_outputPattern;
     QComboBox* m_drizzleCombo;
     QComboBox* m_refModeCombo;
+    QComboBox* m_interpolationCombo;
 
     // Advanced Preferences
     int m_stripHeight = 256;

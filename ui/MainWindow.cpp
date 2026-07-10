@@ -38,6 +38,8 @@
 #include "AlignDialog.h"
 #include "BackgroundExtractionDialog.h"
 #include "StretchingDialog.h"
+#include "PlatesolveDialog.h"
+#include "algorithms/PlatesolveAlgorithm.h"
 #include "PreferencesWindow.h"
 #include "UpdateManagerDialog.h"
 #include "core/TempDirectory.h"
@@ -184,6 +186,7 @@ MainWindow::MainWindow(QWidget* parent)
     m_calibrationDlg = new CalibrationDialog(m_workspace, this);
     m_pixelMathDlg   = new PixelMathDialog(m_workspace, this);
     m_ppwDlg         = new PreprocessingWizardDialog(m_workspace, this);
+    m_platesolveDlg  = new PlatesolveDialog(m_workspace, this);
 
     // Wire persistent dialog signals
     connect(m_stretchingDlg,  &StretchingDialog::algorithmExecuted,          this, &MainWindow::executeAlgorithmSlot);
@@ -194,6 +197,7 @@ MainWindow::MainWindow(QWidget* parent)
     connect(m_debayerDlg,      &DebayerDialog::algorithmExecuted,             this, &MainWindow::executeAlgorithmSlot);
     connect(m_calibrationDlg,  &CalibrationDialog::algorithmExecuted,        this, &MainWindow::executeAlgorithmSlot);
     connect(m_pixelMathDlg,    &PixelMathDialog::algorithmExecuted,           this, &MainWindow::executeAlgorithmSlot);
+    connect(m_platesolveDlg,   &PlatesolveDialog::algorithmExecuted,          this, &MainWindow::executeAlgorithmSlot);
 
     // Add them to MDI area and hide them initially
     m_stretchingSub  = m_workspaceArea->addSubWindow(m_stretchingDlg);  m_stretchingSub->hide();
@@ -205,6 +209,7 @@ MainWindow::MainWindow(QWidget* parent)
     m_calibrationSub = m_workspaceArea->addSubWindow(m_calibrationDlg); m_calibrationSub->hide();
     m_pixelMathSub   = m_workspaceArea->addSubWindow(m_pixelMathDlg);   m_pixelMathSub->hide();
     m_ppwSub         = m_workspaceArea->addSubWindow(m_ppwDlg);         m_ppwSub->hide();
+    m_platesolveSub  = m_workspaceArea->addSubWindow(m_platesolveDlg);  m_platesolveSub->hide();
 
     // Disable WA_DeleteOnClose to keep dialog widgets alive on close
     m_stretchingSub->setAttribute(Qt::WA_DeleteOnClose, false);
@@ -216,6 +221,7 @@ MainWindow::MainWindow(QWidget* parent)
     m_calibrationSub->setAttribute(Qt::WA_DeleteOnClose, false);
     m_pixelMathSub->setAttribute(Qt::WA_DeleteOnClose, false);
     m_ppwSub->setAttribute(Qt::WA_DeleteOnClose, false);
+    m_platesolveSub->setAttribute(Qt::WA_DeleteOnClose, false);
 }
 
 void MainWindow::createMenus() {
@@ -372,6 +378,10 @@ void MainWindow::createMenus() {
     m_stackingAct = new QAction("&Stacking", this);
     connect(m_stackingAct, &QAction::triggered, this, &MainWindow::onOpenStacking);
     m_algoMenu->addAction(m_stackingAct);
+
+    m_platesolveAct = new QAction("Platesolving", this);
+    connect(m_platesolveAct, &QAction::triggered, this, &MainWindow::onOpenPlatesolve);
+    m_algoMenu->addAction(m_platesolveAct);
 
     m_algoMenu->addSeparator();
 
@@ -756,6 +766,14 @@ void MainWindow::onOpenCalibration() {
     m_workspaceArea->setActiveSubWindow(m_calibrationSub);
 }
 
+void MainWindow::onOpenPlatesolve() {
+    m_platesolveDlg->refreshWorkspaceElements();
+    m_platesolveDlg->show();
+    m_platesolveSub->show();
+    m_platesolveSub->raise();
+    m_workspaceArea->setActiveSubWindow(m_platesolveSub);
+}
+
 void MainWindow::onOpenDebayer() {
     m_debayerDlg->refreshWorkspaceElements();
     m_debayerDlg->show();
@@ -821,6 +839,8 @@ void AlgorithmWorker::run() {
             alg = std::make_unique<BackgroundExtractionAlgorithm>();
         } else if (m_name == "Stretching") {
             alg = std::make_unique<StretchingAlgorithmWrapper>();
+        } else if (m_name == "Platesolve") {
+            alg = std::make_unique<PlatesolveAlgorithm>();
         } else {
             throw std::runtime_error("Unknown algorithm: " + m_name);
         }
@@ -2101,6 +2121,7 @@ DialogSet MainWindow::buildDialogSet() const {
     ds.calibration = m_calibrationDlg;
     ds.pixelMath   = m_pixelMathDlg;
     ds.ppw         = m_ppwDlg;
+    ds.platesolve  = m_platesolveDlg;
     return ds;
 }
 

@@ -17,46 +17,37 @@
  */
 
 #pragma once
-#include <QWidget>
-#include <QLineEdit>
-#include <QCheckBox>
-#include <QSpinBox>
+#include "AlgorithmDialog.h"
 #include <QComboBox>
-#include <QListWidget>
+#include <QLineEdit>
+#include <QPushButton>
+#include <QDoubleSpinBox>
+#include <QSpinBox>
 
 namespace blastro {
 
-class PreferencesWindow : public QWidget {
+class PlatesolveDialog : public AlgorithmDialog {
     Q_OBJECT
 public:
-    explicit PreferencesWindow(QWidget* parent = nullptr);
-    ~PreferencesWindow() override = default;
+    PlatesolveDialog(WorkspaceRegistry& workspace, QWidget* parent = nullptr);
+    ~PlatesolveDialog() override = default;
+
+    std::map<std::string, std::string> getConfig() const override;
+    std::string algorithmName() const override { return "Platesolve"; }
+    QJsonObject serializeState() const override;
+    void restoreState(const QJsonObject& obj) override;
+    void refreshWorkspaceElements() override;
 
 private slots:
-    void onSaveClicked();
-    void onBrowseModule();
-    void onBrowseLib();
-    void onBrowseLibrary();
-    void onBrowseTemp();
-    void onBrowseAstap();
-    void onBrowseSolveField();
-    void onAddRepo();
-    void onRemoveRepo();
+    void onRunClicked();
 
 private:
-    QLineEdit* m_moduleEdit;
-    QLineEdit* m_libEdit;
-    QLineEdit* m_libraryEdit;
-    QCheckBox* m_preloadChk;
-    QLineEdit* m_tensorflowUrlEdit;
-    QLineEdit* m_tempEdit;
-    QLineEdit* m_processFolderEdit;
-    QLineEdit* m_astapPathEdit;
-    QLineEdit* m_solveFieldPathEdit;
-    QSpinBox* m_threadSpin;
-    QSpinBox* m_ramSpin;
-    QListWidget* m_reposListWidget;
-    QLineEdit* m_newRepoEdit;
+    QComboBox* m_targetInputCombo;
+    QComboBox* m_solverCombo;
+    QDoubleSpinBox* m_raHintSpin;
+    QDoubleSpinBox* m_decHintSpin;
+    QDoubleSpinBox* m_focalLengthSpin;
+    QDoubleSpinBox* m_pixelSizeSpin;
 };
 
 } // namespace blastro

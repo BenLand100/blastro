@@ -17,32 +17,19 @@
  */
 
 #pragma once
-#include "ImageBuffer.h"
-#include "ImageMetadata.h"
+#include "Algorithm.h"
 
 namespace blastro {
 
-class GrayscaleImage {
+class PlatesolveAlgorithm : public Algorithm {
 public:
-    GrayscaleImage(int width, int height);
-    GrayscaleImage(ImageBufferPtr buffer);
-    ~GrayscaleImage() = default;
-    
-    int width() const { return m_buffer->width(); }
-    int height() const { return m_buffer->height(); }
-    
-    ImageBufferPtr buffer() { return m_buffer; }
-    const ImageBufferPtr buffer() const { return m_buffer; }
+    PlatesolveAlgorithm() = default;
+    ~PlatesolveAlgorithm() override = default;
 
-    const ImageMetadata& metadata() const { return m_metadata; }
-    void setMetadata(const ImageMetadata& meta) { m_metadata = meta; }
-    ImageMetadata& metadata() { return m_metadata; }
-
-private:
-    ImageBufferPtr m_buffer;
-    ImageMetadata m_metadata;
+    std::string name() const override { return "Platesolve"; }
+    void execute(WorkspaceRegistry& workspace, 
+                 const std::map<std::string, std::string>& config, 
+                 ProgressCallback progress = nullptr) override;
 };
-
-using GrayscaleImagePtr = std::shared_ptr<GrayscaleImage>;
 
 } // namespace blastro

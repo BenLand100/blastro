@@ -42,6 +42,20 @@ struct ImageBindings {
     double currentB = 0.0;
 };
 
+static ImageMetadata getFirstBindingMetadata(const std::vector<ImageBindings>& bindings) {
+    ImageMetadata meta;
+    if (bindings.empty()) return meta;
+    const auto& bind = bindings[0];
+    if (bind.grayImage) {
+        meta = bind.grayImage->metadata();
+    } else if (bind.rgbImage) {
+        meta = bind.rgbImage->metadata();
+    } else if (bind.batchImage && bind.batchImage->count() > 0) {
+        meta = bind.batchImage->frameMetadata(0).baseMetadata;
+    }
+    return meta;
+}
+
 void PixelMathAlgorithm::execute(WorkspaceRegistry& workspace, 
                                  const std::map<std::string, std::string>& config, 
                                  ProgressCallback progress) {
@@ -191,11 +205,15 @@ void PixelMathAlgorithm::execute(WorkspaceRegistry& workspace,
     GrayscaleImagePtr outK = nullptr;
     RGBImagePtr outRGB = nullptr;
 
+    ImageMetadata inputMeta = getFirstBindingMetadata(bindings);
+
     if (isRGB) {
         outRGB = std::make_shared<RGBImage>(width, height);
+        outRGB->setMetadata(inputMeta);
         outputElem = outRGB;
     } else {
         outK = std::make_shared<GrayscaleImage>(width, height);
+        outK->setMetadata(inputMeta);
         outputElem = outK;
     }
 

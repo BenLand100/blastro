@@ -29,6 +29,7 @@ add_library(blastro_ui
     RegisterDialog.cpp
     AlignDialog.cpp
     BackgroundExtractionDialog.cpp
+    PlatesolveDialog.cpp
     StretchingDialog.cpp
     LogWindow.cpp
     PreferencesWindow.cpp

@@ -152,6 +152,15 @@ To ensure BLastro remains extremely performant and reliable under typical astron
 - **Window Cleanup**: When an MDI image window is closed, clean up all references, active timers, and menu hooks immediately to prevent dangling pointer errors and menu list desynchronizations.
 - **Middle-Elided Titles**: Image window titles and tabs should be elided in the middle (`...`) using `QFontMetrics::elidedText` with `Qt::ElideMiddle` so they do not take up excessive width, while permitting tab expansion when workspace views are collapsed/expanded.
 - **Disabled UI Element Contrast**: Ensure that all custom-styled widgets (especially `QPushButton` in dialogs) have highly distinct disabled states. When overriding styles dynamically (e.g. coloring the cancel button or execution buttons), explicitly define the `:disabled` selector (e.g. background `#222222`, text `#555555`, border `#2a2a2a`) to ensure disabled controls are visually muted and distinct from enabled states in dark mode.
+- **Configurable Options in UI**: All algorithm-configurable parameters (e.g., RANSAC tolerances, threshold values, max star counts, and detection parameters) must be fully exposed in the graphical user interface dialogs and automation wizards (like the Preprocessing Wizard) with sane, robust default values. Avoid hardcoding parameters in background pipelines; always check the configuration map and use the UI-provided parameters.
+
+### 6. FITS Metadata & WCS Coordinates Preservation
+- **Generalized ImageMetadata**: All workspace image types (`GrayscaleImage`, `RGBImage`) and batch subframes (`FrameMetadata::baseMetadata`) hold an `ImageMetadata` instance. This struct stores structured astrometry (WCS solved flag, RA/Dec center, pixel scale, rotation), exposure parameters (time, gain, filter), and a key-value map of all original FITS keywords.
+- **Header Parsing/Writing**: The `FitsIO` reader extracts all FITS header cards into the metadata keyword map (excluding internal struct keys). The writer outputs these keywords back to disk, preserving arbitrary header cards across read/write cycles.
+- **Preservation Rules**:
+  - *1:1 Operations*: Algorithms performing 1:1 image/frame transformations (such as Debayering, Alignment, Calibration, Background Extraction) must deep-copy the `ImageMetadata` from input to output image/frame.
+  - *Many-to-One Operations*: Stacking and integration processes copy all metadata directly from the chosen reference frame. In addition, the stacking algorithm must update the `EXPTIME` key with the aggregated sum of all exposure times, and add the `STACKCNT` keyword indicating the number of integrated subframes.
+  - *Mathematical Operations*: Pixel math or generic multi-input operations copy metadata from the first referenced image in their bindings by default, unless specific overrides are requested.
 
 #### MDI Persistent Subwindow Lifecycle
 
@@ -213,6 +222,11 @@ All `AlgorithmDialog` subclasses follow the layout conventions established by th
 ### 10. Thread-Safe Workspace & Suffix Auto-generation
 - **Thread-Safe Workspace Registry**: Since algorithms are executed asynchronously inside background threads (`AlgorithmWorker`), they may register or unregister workspace elements concurrently with the main thread reading them. To prevent race conditions and segfaults, `WorkspaceRegistry` uses a `std::lock_guard<std::mutex>` to lock all read and write operations.
 - **Dynamic Suffix Auto-generation**: Rerunning preprocessing runs or final stacking passes can cause name collisions for output stacked masters (e.g. `preprocessed_lights_Ha_stacked`). To prevent overwriting and allow easy comparison of runs, the Preprocessing Pipeline checks for naming collisions and appends an increasing unique suffix (e.g. `_1`, `_2`, etc.). The wizard's completion callback automatically resolves and displays the highest suffix/most recent run.
+
+### 11. High-Performance Image Alignment & Interpolation (Affine, Bicubic, Lanczos)
+- **Affine Transformation Solving**: When selected, constellation matching solves for a full 6-element affine transformation matrix mapping the target coordinate system to the reference coordinate system via a Least Squares formulation of RANSAC inliers. This accounts for scale and shear variations.
+- **Matrix Composition & Inversion**: All coordinate transformations in alignment are performed using 2D affine matrix algebra. Sub-pixel relative alignments (e.g., centering average frames or mutual stacking alignments) multiply target transformations by the inverse of the reference transformation.
+- **Advanced Interpolation**: Bilinear warping is supplemented with Bicubic, Lanczos-3, and Lanczos-4 interpolators to preserve details (high-frequency star profiles) during warping. Standard separable precomputations on X and Y coordinate weights are implemented to optimize computation time.
 
 ## Build Requirements
 

@@ -309,10 +309,14 @@ void CalibrationAlgorithm::execute(WorkspaceRegistry& workspace,
                 auto calR = calibrateChannel(rgb->r(), biasR, darkR, flatR, flatMeanR);
                 auto calG = calibrateChannel(rgb->g(), biasG, darkG, flatG, flatMeanG);
                 auto calB = calibrateChannel(rgb->b(), biasB, darkB, flatB, flatMeanB);
-                calibratedFrame = std::make_shared<RGBImage>(calR, calG, calB);
+                auto calRgb = std::make_shared<RGBImage>(calR, calG, calB);
+                calRgb->setMetadata(rgb->metadata());
+                calibratedFrame = calRgb;
             } else {
                 auto gray = std::get<GrayscaleImagePtr>(frame);
-                calibratedFrame = calibrateChannel(gray, biasR, darkR, flatR, flatMeanR);
+                auto calGray = calibrateChannel(gray, biasR, darkR, flatR, flatMeanR);
+                calGray->setMetadata(gray->metadata());
+                calibratedFrame = calGray;
             }
 
             // Generate intermediate filename: e.g. light_001_calibrated.fits
@@ -377,10 +381,12 @@ void CalibrationAlgorithm::execute(WorkspaceRegistry& workspace,
             auto calG = calibrateChannel(rgb->g(), biasG, darkG, flatG, flatMeanG, [progress](int p) { if (progress) progress(33 + p / 3); });
             auto calB = calibrateChannel(rgb->b(), biasB, darkB, flatB, flatMeanB, [progress](int p) { if (progress) progress(66 + p / 3); });
             auto calRGB = std::make_shared<RGBImage>(calR, calG, calB);
+            calRGB->setMetadata(rgb->metadata());
             workspace.registerElement(outputName, calRGB);
         } else {
             auto gray = std::get<GrayscaleImagePtr>(inputElem);
             auto calGray = calibrateChannel(gray, biasR, darkR, flatR, flatMeanR, progress);
+            calGray->setMetadata(gray->metadata());
             workspace.registerElement(outputName, calGray);
         }
         Logger::success("Calibration", QString("Single image calibration completed in %1 ms").arg(totalTimer.elapsed()));

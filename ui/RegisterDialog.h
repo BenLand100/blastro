@@ -48,6 +48,7 @@ private:
     QDoubleSpinBox* m_snrSpin;
     QDoubleSpinBox* m_minFwhmSpin;
     QSpinBox* m_refIdxSpin;
+    QComboBox* m_modelCombo;
 
     // Advanced Preferences
     int m_maxStars = 250;

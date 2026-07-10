@@ -131,11 +131,17 @@ private:
     // Control Tab — Registration (Star Finding) section
     QDoubleSpinBox* m_starMinSnrSpin;
     QDoubleSpinBox* m_starMinFwhmSpin;
+    QComboBox* m_transformationModelCombo;
+    QComboBox* m_starDetectionMethodCombo;
+    QSpinBox* m_starMaxStarsSpin;
+    QDoubleSpinBox* m_starMatchToleranceSpin;
+    QDoubleSpinBox* m_starMaxEccentricitySpin;
 
     // Control Tab — Alignment section
     QComboBox* m_alignRefModeCombo;
     QDoubleSpinBox* m_drizzleScaleSpin;
     QCheckBox* m_alignMutuallyChk;
+    QComboBox* m_interpolationMethodCombo;
 
     // Control Tab — Light Stacking section
     QComboBox* m_lightStackMethodCombo;

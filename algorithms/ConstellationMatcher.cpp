@@ -106,7 +106,8 @@ std::vector<Triangle> ConstellationMatcher::buildTriangles(const std::vector<Sta
 AlignmentResult ConstellationMatcher::match(const std::vector<Star>& refStars,
                                              const std::vector<Star>& targetStars,
                                              int kNearest,
-                                             double matchTolerance) {
+                                             double matchTolerance,
+                                             bool useAffine) {
     AlignmentResult result;
     if (refStars.size() < 3 || targetStars.size() < 3) {
         return result;
@@ -123,32 +124,101 @@ AlignmentResult ConstellationMatcher::match(const std::vector<Star>& refStars,
         if (pairs.size() < 3) return r;
 
         double dx = 0.0, dy = 0.0, theta = 0.0;
+        std::array<double, 6> trans = {1.0, 0.0, 0.0, 0.0, 1.0, 0.0};
         std::vector<bool> inliers(pairs.size(), true);
         int numInliers = pairs.size();
+        bool localUseAffine = useAffine;
 
         for (int iter = 0; iter < 15; ++iter) {
             if (numInliers < 3) break;
 
-            double mrx = 0, mry = 0, mtx = 0, mty = 0;
-            for (size_t i = 0; i < pairs.size(); ++i) {
-                if (!inliers[i]) continue;
-                mrx += pairs[i].ref.x;   mry += pairs[i].ref.y;
-                mtx += pairs[i].target.x; mty += pairs[i].target.y;
-            }
-            mrx /= numInliers; mry /= numInliers;
-            mtx /= numInliers; mty /= numInliers;
+            if (localUseAffine) {
+                double sum_x = 0, sum_y = 0, sum_xx = 0, sum_xy = 0, sum_yy = 0;
+                double sum_rx = 0, sum_ry = 0;
+                double sum_x_rx = 0, sum_y_rx = 0;
+                double sum_x_ry = 0, sum_y_ry = 0;
+                double n = 0;
 
-            double Sxx=0, Sxy=0, Syx=0, Syy=0;
-            for (size_t i = 0; i < pairs.size(); ++i) {
-                if (!inliers[i]) continue;
-                double rx = pairs[i].ref.x    - mrx, ry = pairs[i].ref.y    - mry;
-                double tx = pairs[i].target.x - mtx, ty = pairs[i].target.y - mty;
-                Sxx += tx*rx; Sxy += tx*ry; Syx += ty*rx; Syy += ty*ry;
+                for (size_t i = 0; i < pairs.size(); ++i) {
+                    if (!inliers[i]) continue;
+                    double tx = pairs[i].target.x;
+                    double ty = pairs[i].target.y;
+                    double rx = pairs[i].ref.x;
+                    double ry = pairs[i].ref.y;
+
+                    sum_x += tx;
+                    sum_y += ty;
+                    sum_xx += tx * tx;
+                    sum_yy += ty * ty;
+                    sum_xy += tx * ty;
+                    sum_rx += rx;
+                    sum_ry += ry;
+                    sum_x_rx += tx * rx;
+                    sum_y_rx += ty * rx;
+                    sum_x_ry += tx * ry;
+                    sum_y_ry += ty * ry;
+                    n += 1.0;
+                }
+
+                double M00 = sum_xx, M01 = sum_xy, M02 = sum_x;
+                double M10 = sum_xy, M11 = sum_yy, M12 = sum_y;
+                double M20 = sum_x,  M21 = sum_y,  M22 = n;
+
+                double det = M00*(M11*M22 - M12*M21) - M01*(M10*M22 - M12*M20) + M02*(M10*M21 - M11*M20);
+                if (std::abs(det) < 1e-9) {
+                    localUseAffine = false;
+                } else {
+                    double invDet = 1.0 / det;
+                    double I00 = (M11*M22 - M12*M21) * invDet;
+                    double I01 = (M02*M21 - M01*M22) * invDet;
+                    double I02 = (M01*M12 - M02*M11) * invDet;
+                    
+                    double I10 = (M12*M20 - M10*M22) * invDet;
+                    double I11 = (M00*M22 - M02*M20) * invDet;
+                    double I12 = (M02*M10 - M00*M12) * invDet;
+                    
+                    double I20 = (M10*M21 - M11*M20) * invDet;
+                    double I21 = (M01*M20 - M00*M21) * invDet;
+                    double I22 = (M00*M11 - M01*M10) * invDet;
+
+                    double a  = I00 * sum_x_rx + I01 * sum_y_rx + I02 * sum_rx;
+                    double b  = I10 * sum_x_rx + I11 * sum_y_rx + I12 * sum_rx;
+                    double tx = I20 * sum_x_rx + I21 * sum_y_rx + I22 * sum_rx;
+
+                    double c  = I00 * sum_x_ry + I01 * sum_y_ry + I02 * sum_ry;
+                    double d  = I10 * sum_x_ry + I11 * sum_y_ry + I12 * sum_ry;
+                    double ty = I20 * sum_x_ry + I21 * sum_y_ry + I22 * sum_ry;
+
+                    trans = {a, b, tx, c, d, ty};
+                    dx = tx;
+                    dy = ty;
+                    theta = std::atan2(c - b, a + d);
+                }
             }
-            theta = std::atan2(Sxy - Syx, Sxx + Syy);
-            double c = std::cos(theta), s = std::sin(theta);
-            dx = mrx - (mtx*c - mty*s);
-            dy = mry - (mty*c + mtx*s);
+
+            if (!localUseAffine) {
+                double mrx = 0, mry = 0, mtx = 0, mty = 0;
+                for (size_t i = 0; i < pairs.size(); ++i) {
+                    if (!inliers[i]) continue;
+                    mrx += pairs[i].ref.x;   mry += pairs[i].ref.y;
+                    mtx += pairs[i].target.x; mty += pairs[i].target.y;
+                }
+                mrx /= numInliers; mry /= numInliers;
+                mtx /= numInliers; mty /= numInliers;
+
+                double Sxx=0, Sxy=0, Syx=0, Syy=0;
+                for (size_t i = 0; i < pairs.size(); ++i) {
+                    if (!inliers[i]) continue;
+                    double rx = pairs[i].ref.x    - mrx, ry = pairs[i].ref.y    - mry;
+                    double tx = pairs[i].target.x - mtx, ty = pairs[i].target.y - mty;
+                    Sxx += tx*rx; Sxy += tx*ry; Syx += ty*rx; Syy += ty*ry;
+                }
+                theta = std::atan2(Sxy - Syx, Sxx + Syy);
+                double cosT = std::cos(theta), sinT = std::sin(theta);
+                dx = mrx - (mtx*cosT - mty*sinT);
+                dy = mry - (mty*cosT + mtx*sinT);
+                trans = {cosT, -sinT, dx, sinT, cosT, dy};
+            }
 
             double iterThresh = matchTolerance;
             if (iter >= 3) iterThresh = std::min(iterThresh, 1.5);
@@ -158,8 +228,10 @@ AlignmentResult ConstellationMatcher::match(const std::vector<Star>& refStars,
             std::vector<bool> next(pairs.size(), false);
             for (size_t i = 0; i < pairs.size(); ++i) {
                 double tx = pairs[i].target.x, ty = pairs[i].target.y;
-                double res = std::hypot(pairs[i].ref.x - (tx*c - ty*s + dx),
-                                       pairs[i].ref.y - (ty*c + tx*s + dy));
+                double px = trans[0]*tx + trans[1]*ty + trans[2];
+                double py = trans[3]*tx + trans[4]*ty + trans[5];
+                double res = std::hypot(pairs[i].ref.x - px,
+                                       pairs[i].ref.y - py);
                 if (res < iterThresh) { next[i] = true; nextN++; }
             }
             if (next == inliers && iter >= 6) break;
@@ -168,15 +240,17 @@ AlignmentResult ConstellationMatcher::match(const std::vector<Star>& refStars,
 
         if (numInliers < 3) return r;
 
-        double c = std::cos(theta), s = std::sin(theta), sse = 0;
+        double sse = 0;
         for (size_t i = 0; i < pairs.size(); ++i) {
             if (!inliers[i]) continue;
             double tx = pairs[i].target.x, ty = pairs[i].target.y;
-            double ex = pairs[i].ref.x - (tx*c - ty*s + dx);
-            double ey = pairs[i].ref.y - (ty*c + tx*s + dy);
+            double px = trans[0]*tx + trans[1]*ty + trans[2];
+            double py = trans[3]*tx + trans[4]*ty + trans[5];
+            double ex = pairs[i].ref.x - px;
+            double ey = pairs[i].ref.y - py;
             sse += ex*ex + ey*ey;
         }
-        r.success = true; r.dx = dx; r.dy = dy; r.theta = theta;
+        r.success = true; r.dx = dx; r.dy = dy; r.theta = theta; r.transform = trans;
         r.rmsError = std::sqrt(sse / numInliers); r.matchedStars = numInliers;
         return r;
     };
@@ -255,6 +329,15 @@ AlignmentResult ConstellationMatcher::match(const std::vector<Star>& refStars,
                 r.theta = M_PI + r.theta;   // fold back the π offset
                 r.dx = r.dx + estW;
                 r.dy = r.dy + estH;
+                // Correct transform matrix for flip
+                double new_tx = r.transform[0] * estW + r.transform[1] * estH + r.transform[2];
+                double new_ty = r.transform[3] * estW + r.transform[4] * estH + r.transform[5];
+                r.transform[0] = -r.transform[0];
+                r.transform[1] = -r.transform[1];
+                r.transform[2] = new_tx;
+                r.transform[3] = -r.transform[3];
+                r.transform[4] = -r.transform[4];
+                r.transform[5] = new_ty;
             }
             return r;
         }

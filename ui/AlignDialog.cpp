@@ -93,6 +93,17 @@ AlignDialog::AlignDialog(WorkspaceRegistry& workspace, QWidget* parent)
     m_refModeCombo->addItem("Use Reference", "registration");
     formLayout->addRow("Alignment Reference Mode:", m_refModeCombo);
 
+    // 5. Interpolation Method ComboBox
+    m_interpolationCombo = new QComboBox(this);
+    m_interpolationCombo->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    m_interpolationCombo->addItem("Bilinear (Fast, Softer)", "bilinear");
+    m_interpolationCombo->addItem("Bicubic Spline", "bicubic");
+    m_interpolationCombo->addItem("Lanczos-3 (High Quality, Sharper)", "lanczos3");
+    m_interpolationCombo->addItem("Lanczos-4 (Highest Quality)", "lanczos4");
+    m_interpolationCombo->setCurrentIndex(2); // Default to Lanczos-3
+    formLayout->addRow("Interpolation Method:", m_interpolationCombo);
+
+
     mainLayout->addLayout(formLayout);
 
     mainLayout->addStretch(1); // Content top-justifies; buttons pin to bottom
@@ -181,6 +192,8 @@ std::map<std::string, std::string> AlignDialog::getConfig() const {
     config["output_name"] = m_outputName->text().trimmed().toStdString();
     config["drizzle_scale"] = std::to_string(m_drizzleCombo->currentData().toDouble());
     config["reference_mode"] = m_refModeCombo->currentData().toString().toStdString();
+    config["interpolation_method"] = m_interpolationCombo->currentData().toString().toStdString();
+
     config["strip_height"] = std::to_string(m_stripHeight);
     config["threads"] = std::to_string(m_threads);
     config["evict_cache"] = m_evictCache ? "true" : "false";
@@ -207,6 +220,8 @@ QJsonObject AlignDialog::serializeState() const {
     QJsonObject obj;
     obj["drizzle_scale"] = m_drizzleCombo->currentData().toDouble();
     obj["reference_mode"] = m_refModeCombo->currentData().toString();
+    obj["interpolation_method"] = m_interpolationCombo->currentData().toString();
+
     obj["strip_height"] = m_stripHeight;
     obj["threads"] = m_threads;
     obj["evict_cache"] = m_evictCache;
@@ -227,6 +242,11 @@ void AlignDialog::restoreState(const QJsonObject& obj) {
         int idx = m_refModeCombo->findData(obj["reference_mode"].toString());
         if (idx >= 0) m_refModeCombo->setCurrentIndex(idx);
     }
+    if (obj.contains("interpolation_method")) {
+        int idx = m_interpolationCombo->findData(obj["interpolation_method"].toString());
+        if (idx >= 0) m_interpolationCombo->setCurrentIndex(idx);
+    }
+
     if (obj.contains("strip_height"))
         m_stripHeight = obj["strip_height"].toInt();
     if (obj.contains("threads"))

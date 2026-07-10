@@ -25,6 +25,7 @@
 #include "algorithms/BackgroundExtractionAlgorithm.h"
 #include "algorithms/StretchingAlgorithm.h"
 #include "algorithms/PreprocessingPipeline.h"
+#include "algorithms/PlatesolveAlgorithm.h"
 #include "core/WorkspaceRegistry.h"
 #include "core/ImageBatch.h"
 #include "core/GrayscaleImage.h"
@@ -1654,6 +1655,91 @@ void testMutualStackAlignment() {
     QDir(QString::fromStdString(tempDir)).removeRecursively();
 }
 
+void testPlatesolvingAndMetadataPreservation() {
+    std::cout << "Running Platesolving and Metadata Preservation Test..." << std::endl;
+
+    std::string tempDir = TempDirectory::createTempDir("test_meta");
+    std::string testFits = tempDir + "/test_meta.fits";
+
+    auto img = std::make_shared<GrayscaleImage>(50, 50);
+    img->metadata().exposureTime = 120.0;
+    img->metadata().gain = 100.0;
+    img->metadata().filter = "Ha";
+    img->metadata().fitsKeywords["TELESCOP"] = "Apo80";
+
+    FitsIO io;
+    assert(io.writeImage(testFits, img));
+
+    ImageVariant reloadedVar = io.readImage(testFits);
+    assert(std::holds_alternative<GrayscaleImagePtr>(reloadedVar));
+    auto reloaded = std::get<GrayscaleImagePtr>(reloadedVar);
+
+    assert(approxEqual(reloaded->metadata().exposureTime, 120.0));
+    assert(approxEqual(reloaded->metadata().gain, 100.0));
+    assert(reloaded->metadata().filter == "Ha");
+    assert(reloaded->metadata().fitsKeywords.count("TELESCOP") > 0);
+    assert(reloaded->metadata().fitsKeywords["TELESCOP"] == "Apo80");
+    std::cout << "[+] FITS read/write metadata check passed." << std::endl;
+
+    WorkspaceRegistry workspace;
+    std::vector<std::string> names = {"f1", "f2"};
+    std::vector<std::string> paths = {testFits, testFits};
+    auto loader = [testFits](int) -> ImageVariant {
+        FitsIO io;
+        return io.readImage(testFits);
+    };
+    auto batch = std::make_shared<ImageBatch>(2, loader, names, paths);
+    batch->setFrameSelected(0, true);
+    batch->setFrameSelected(1, true);
+
+    FrameMetadata m0;
+    m0.baseMetadata.exposureTime = 120.0;
+    m0.baseMetadata.gain = 100.0;
+    m0.baseMetadata.filter = "Ha";
+    m0.registered = true;
+    m0.dx = 0.0; m0.dy = 0.0; m0.theta = 0.0;
+    batch->setFrameMetadata(0, m0);
+
+    FrameMetadata m1;
+    m1.baseMetadata.exposureTime = 120.0;
+    m1.baseMetadata.gain = 100.0;
+    m1.baseMetadata.filter = "Ha";
+    m1.registered = true;
+    m1.dx = 5.0; m1.dy = 2.0; m1.theta = 0.1;
+    batch->setFrameMetadata(1, m1);
+
+    workspace.registerElement("input_batch", batch);
+
+    std::map<std::string, std::string> stackConfig = {
+        {"input_name", "input_batch"},
+        {"output_name", "stacked_master"},
+        {"method", "average"},
+        {"rejection", "none"},
+        {"sigma_low", "3.0"},
+        {"sigma_high", "3.0"},
+        {"quantile_low", "0.2"},
+        {"quantile_high", "0.2"},
+        {"stacking_mode", "ram"}
+    };
+
+    StackingAlgorithm stackAlg;
+    stackAlg.execute(workspace, stackConfig);
+
+    assert(workspace.contains("stacked_master"));
+    auto masterElem = workspace.getElement("stacked_master");
+    assert(std::holds_alternative<GrayscaleImagePtr>(masterElem));
+    auto master = std::get<GrayscaleImagePtr>(masterElem);
+
+    assert(approxEqual(master->metadata().exposureTime, 240.0));
+    assert(master->metadata().filter == "Ha");
+    assert(master->metadata().fitsKeywords.count("STACKCNT") > 0);
+    assert(master->metadata().fitsKeywords["STACKCNT"] == "2");
+    std::cout << "[+] Stacking metadata coalescing check passed." << std::endl;
+
+    QDir(QString::fromStdString(tempDir)).removeRecursively();
+    std::cout << "[+] Platesolving and Metadata Preservation Test PASSED." << std::endl << std::endl;
+}
+
 int main() {
     std::cout << "========================================" << std::endl;
     std::cout << "Starting Blastro Algorithm Unit Tests..." << std::endl;
@@ -1670,6 +1756,7 @@ int main() {
     testPreprocessingPipeline();
     testPreprocessingCalibrationSelection();
     testMutualStackAlignment();
+    testPlatesolvingAndMetadataPreservation();
 
     std::cout << "========================================" << std::endl;
     std::cout << "All Blastro Algorithm Unit Tests PASSED!" << std::endl;
