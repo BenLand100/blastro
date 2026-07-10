@@ -28,6 +28,8 @@
 #include <QDir>
 #include <QFile>
 #include <QElapsedTimer>
+#include <limits>
+#include "ConstellationMatcher.h"
 #include <algorithm>
 #include <set>
 #include <cmath>
@@ -691,6 +693,17 @@ void PreprocessingPipeline::execute(WorkspaceRegistry& workspace,
         std::string registeredBatchName = config.at("registered_light_batch_name");
         std::vector<std::string> batchNames = splitString(registeredBatchName, ';');
 
+        bool alignMutually = config.count("align_mutually") ? (config.at("align_mutually") == "true") : true;
+
+        struct BatchRegistration {
+            std::string name;
+            int bestFrameIdx;
+            double maxSnr;
+            std::vector<Star> refStars;
+        };
+        std::vector<BatchRegistration> batchRegs;
+
+        // 1. Local Registration Phase: Register each batch against its own local best frame
         for (const auto& name : batchNames) {
             if (m_cancelCallback && m_cancelCallback()) {
                 throw std::runtime_error("Preprocessing cancelled by user.");
@@ -702,7 +715,6 @@ void PreprocessingPipeline::execute(WorkspaceRegistry& workspace,
             auto batch = std::get<ImageBatchPtr>(workspace.getElement(name));
             int count = batch->count();
 
-            // 1. Identify global reference frame among the approved/selected ones
             int bestFrameIdx = -1;
             double maxSnr = -1.0;
 
@@ -726,10 +738,10 @@ void PreprocessingPipeline::execute(WorkspaceRegistry& workspace,
             }
 
             if (bestFrameIdx == -1) {
-                throw std::runtime_error("No approved frames found in the batch for alignment.");
+                throw std::runtime_error("No approved frames found in batch " + name + " for alignment.");
             }
 
-            Logger::info("Preprocessing", QString("Selected global reference frame: index %1 (SNR = %2) for batch %3")
+            Logger::info("Preprocessing", QString("Selected local reference frame: index %1 (SNR = %2) for batch %3")
                          .arg(bestFrameIdx).arg(maxSnr).arg(QString::fromStdString(name)));
 
             std::string starMinSnr = config.count("star_min_snr") ? config.at("star_min_snr") : "4.0";
@@ -747,17 +759,166 @@ void PreprocessingPipeline::execute(WorkspaceRegistry& workspace,
                 {"match_tolerance", "0.05"}
             });
 
+            // Retrieve registered stars of the local reference frame
+            FrameMetadata refMeta = batch->frameMetadata(bestFrameIdx);
+            batchRegs.push_back({name, bestFrameIdx, maxSnr, refMeta.stars});
+        }
+
+        // 2. Mutual Alignment Phase (if enabled)
+        bool hasCustomRef = false;
+        double globalRefDx = 0.0;
+        double globalRefDy = 0.0;
+        double globalRefTheta = 0.0;
+        std::string alignRefMode = config.count("align_ref_mode") ? config.at("align_ref_mode") : "average_center";
+
+        if (alignMutually && batchRegs.size() > 0) {
+            // Find global reference batch (highest SNR reference frame)
+            std::string globalRefBatchName = "";
+            std::vector<Star> globalRefStars;
+            double globalMaxSnr = -1.0;
+
+            for (const auto& reg : batchRegs) {
+                if (reg.maxSnr > globalMaxSnr) {
+                    globalMaxSnr = reg.maxSnr;
+                    globalRefBatchName = reg.name;
+                    globalRefStars = reg.refStars;
+                }
+            }
+
+            if (globalRefBatchName.empty() && !batchRegs.empty()) {
+                globalRefBatchName = batchRegs[0].name;
+                globalRefStars = batchRegs[0].refStars;
+            }
+
+            Logger::info("Preprocessing", QString("Selected global reference batch: '%1' (SNR = %2)")
+                         .arg(QString::fromStdString(globalRefBatchName)).arg(globalMaxSnr));
+
+            // Align all other batches to the global reference batch
+            double matchTolerance = std::stod(config.count("match_tolerance") ? config.at("match_tolerance") : "0.05");
+
+            for (const auto& reg : batchRegs) {
+                if (reg.name == globalRefBatchName) {
+                    continue;
+                }
+
+                Logger::info("Preprocessing", QString("Mutually aligning reference frame of batch '%1' to global reference...")
+                             .arg(QString::fromStdString(reg.name)));
+
+                auto alignRes = ConstellationMatcher::match(globalRefStars, reg.refStars, 7, matchTolerance);
+                if (!alignRes.success) {
+                    throw std::runtime_error("Failed to mutually align reference frame of batch " + reg.name + 
+                                             " to the global reference frame. Verify that the frames overlap and contain matching star patterns.");
+                }
+
+                Logger::success("Preprocessing", QString("Mutual alignment of batch '%1' successful: dx=%2, dy=%3, theta=%4")
+                                .arg(QString::fromStdString(reg.name)).arg(alignRes.dx).arg(alignRes.dy).arg(alignRes.theta));
+
+                // Compose offsets for all frames in this batch
+                auto batch = std::get<ImageBatchPtr>(workspace.getElement(reg.name));
+                int count = batch->count();
+                double theta_batch = alignRes.theta;
+                double dx_batch = alignRes.dx;
+                double dy_batch = alignRes.dy;
+                double cosB = std::cos(theta_batch);
+                double sinB = std::sin(theta_batch);
+
+                for (int i = 0; i < count; ++i) {
+                    if (batch->isFrameSelected(i)) {
+                        FrameMetadata meta = batch->frameMetadata(i);
+                        if (meta.registered) {
+                            double dx_i = meta.dx;
+                            double dy_i = meta.dy;
+                            double theta_i = meta.theta;
+
+                            meta.dx = dx_batch + dx_i * cosB - dy_i * sinB;
+                            meta.dy = dy_batch + dx_i * sinB + dy_i * cosB;
+                            meta.theta = theta_i + theta_batch;
+
+                            batch->setFrameMetadata(i, meta);
+                        }
+                    }
+                }
+            }
+
+            // Calculate global average center offsets if needed
+            if (alignRefMode == "average_center" && !globalRefBatchName.empty()) {
+                auto globalBatch = std::get<ImageBatchPtr>(workspace.getElement(globalRefBatchName));
+                int globalCount = globalBatch->count();
+                double sumDx = 0.0;
+                double sumDy = 0.0;
+                int validCount = 0;
+                for (int i = 0; i < globalCount; ++i) {
+                    if (globalBatch->isFrameSelected(i)) {
+                        FrameMetadata meta = globalBatch->frameMetadata(i);
+                        if (meta.registered) {
+                            sumDx += meta.dx;
+                            sumDy += meta.dy;
+                            validCount++;
+                        }
+                    }
+                }
+                if (validCount > 0) {
+                    double avgDx = sumDx / validCount;
+                    double avgDy = sumDy / validCount;
+                    double minDist = std::numeric_limits<double>::max();
+                    int centerFrameIdx = -1;
+                    for (int i = 0; i < globalCount; ++i) {
+                        if (globalBatch->isFrameSelected(i)) {
+                            FrameMetadata meta = globalBatch->frameMetadata(i);
+                            if (meta.registered) {
+                                double dist = (meta.dx - avgDx) * (meta.dx - avgDx) + 
+                                              (meta.dy - avgDy) * (meta.dy - avgDy);
+                                if (dist < minDist) {
+                                    minDist = dist;
+                                    centerFrameIdx = i;
+                                }
+                            }
+                        }
+                    }
+                    if (centerFrameIdx != -1) {
+                        FrameMetadata centerMeta = globalBatch->frameMetadata(centerFrameIdx);
+                        globalRefDx = centerMeta.dx;
+                        globalRefDy = centerMeta.dy;
+                        globalRefTheta = centerMeta.theta;
+                        hasCustomRef = true;
+                        Logger::info("Preprocessing", QString("Global Average Center Mode: Selected frame %1 in batch '%2' as center reference (offsets relative to global ref: dx=%3, dy=%4, theta=%5)")
+                                     .arg(centerFrameIdx)
+                                     .arg(QString::fromStdString(globalRefBatchName))
+                                     .arg(globalRefDx).arg(globalRefDy).arg(globalRefTheta));
+                    }
+                }
+            } else if (alignRefMode == "registration") {
+                globalRefDx = 0.0;
+                globalRefDy = 0.0;
+                globalRefTheta = 0.0;
+                hasCustomRef = true;
+            }
+        }
+
+        // 3. Align and Stack Phase: Align and stack each batch
+        for (const auto& name : batchNames) {
+            if (m_cancelCallback && m_cancelCallback()) {
+                throw std::runtime_error("Preprocessing cancelled by user.");
+            }
+
             std::string alignedBatchName = name + "_aligned";
             Logger::info("Preprocessing", QString("Aligning light frames to reference for batch %1...").arg(QString::fromStdString(name)));
-            std::string alignRefMode = config.count("align_ref_mode") ? config.at("align_ref_mode") : "average_center";
-            AlignAlgorithm aligner;
-            runStep(aligner, {
+
+            std::map<std::string, std::string> alignConfig = {
                 {"input_name", name},
                 {"output_name", alignedBatchName},
                 {"drizzle_scale", std::to_string(drizzleScale)},
                 {"reference_mode", alignRefMode},
                 {"evict_cache", "true"}
-            });
+            };
+            if (hasCustomRef) {
+                alignConfig["ref_dx"] = std::to_string(globalRefDx);
+                alignConfig["ref_dy"] = std::to_string(globalRefDy);
+                alignConfig["ref_theta"] = std::to_string(globalRefTheta);
+            }
+
+            AlignAlgorithm aligner;
+            runStep(aligner, alignConfig);
 
             if (keepIntermediate) {
                 relocateBatchFiles(workspace, alignedBatchName, "light_align", outDir, true);

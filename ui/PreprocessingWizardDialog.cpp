@@ -95,6 +95,7 @@ PreprocessingWizardDialog::PreprocessingWizardDialog(WorkspaceRegistry& workspac
       // Alignment
       m_alignRefModeCombo(new QComboBox(this)),
       m_drizzleScaleSpin(new QDoubleSpinBox(this)),
+      m_alignMutuallyChk(new QCheckBox(this)),
       // Light Stacking
       m_lightStackMethodCombo(new QComboBox(this)),
       m_lightRejectionCombo(new QComboBox(this)),
@@ -400,6 +401,9 @@ PreprocessingWizardDialog::PreprocessingWizardDialog(WorkspaceRegistry& workspac
         m_drizzleScaleSpin->setDecimals(1);
         m_drizzleScaleSpin->setSuffix("×");
         form->addRow("Drizzle Scale:", m_drizzleScaleSpin);
+
+        m_alignMutuallyChk->setChecked(true);
+        form->addRow("Mutually Align Stacks:", m_alignMutuallyChk);
     }
 
     controlLayout->addSpacing(4);
@@ -1436,6 +1440,7 @@ void PreprocessingWizardDialog::onResumeStacking() {
     config["registered_light_batch_name"] = joinedNames;
     config["drizzle_scale"] = QString::number(m_drizzleScaleSpin->value()).toStdString();
     config["align_ref_mode"] = m_alignRefModeCombo->currentData().toString().toStdString();
+    config["align_mutually"] = m_alignMutuallyChk->isChecked() ? "true" : "false";
     config["keep_intermediate"] = m_keepIntermediateChk->isChecked() ? "true" : "false";
     config["out_dir"] = QDir::current().filePath(
         QString::fromStdString(Preferences::instance().getProcessFolderName())).toStdString();
@@ -1828,6 +1833,7 @@ void PreprocessingWizardDialog::updateStepsPlan(const std::string& dummyStage) {
     config["stage"] = "align_stack";
     config["drizzle_scale"] = QString::number(m_drizzleScaleSpin->value()).toStdString();
     config["align_ref_mode"] = m_alignRefModeCombo->currentData().toString().toStdString();
+    config["align_mutually"] = m_alignMutuallyChk->isChecked() ? "true" : "false";
     std::string prefix = m_outPrefixEdit->text().toStdString();
     if (!prefix.empty() && prefix.back() != '_') {
         prefix += "_";
@@ -2074,6 +2080,7 @@ QJsonObject PreprocessingWizardDialog::serializeControlState() const {
     // Alignment
     obj["align_ref_mode"] = m_alignRefModeCombo->currentData().toString();
     obj["drizzle_scale"] = m_drizzleScaleSpin->value();
+    obj["align_mutually"] = m_alignMutuallyChk->isChecked();
     // Light Stacking
     obj["light_stack_method"] = m_lightStackMethodCombo->currentData().toString();
     obj["light_rejection"] = m_lightRejectionCombo->currentData().toString();
@@ -2116,6 +2123,7 @@ void PreprocessingWizardDialog::restoreControlState(const QJsonObject& obj) {
     if (obj.contains("star_min_fwhm")) m_starMinFwhmSpin->setValue(obj["star_min_fwhm"].toDouble());
     if (obj.contains("align_ref_mode")) setCombo(m_alignRefModeCombo, obj["align_ref_mode"].toString());
     if (obj.contains("drizzle_scale")) m_drizzleScaleSpin->setValue(obj["drizzle_scale"].toDouble());
+    if (obj.contains("align_mutually")) m_alignMutuallyChk->setChecked(obj["align_mutually"].toBool());
     if (obj.contains("light_stack_method")) setCombo(m_lightStackMethodCombo, obj["light_stack_method"].toString());
     if (obj.contains("light_rejection")) setCombo(m_lightRejectionCombo, obj["light_rejection"].toString());
     if (obj.contains("light_sigma_low")) m_lightSigmaLowSpin->setValue(obj["light_sigma_low"].toDouble());

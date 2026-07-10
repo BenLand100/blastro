@@ -77,8 +77,16 @@ void AlignAlgorithm::execute(WorkspaceRegistry& workspace,
     double refDx = 0.0;
     double refDy = 0.0;
     double refTheta = 0.0;
+    bool hasCustomRef = false;
 
-    if (refMode == "average_center") {
+    if (config.count("ref_dx") && config.count("ref_dy") && config.count("ref_theta")) {
+        refDx = std::stod(config.at("ref_dx"));
+        refDy = std::stod(config.at("ref_dy"));
+        refTheta = std::stod(config.at("ref_theta"));
+        hasCustomRef = true;
+        Logger::info("Align", QString("Using custom reference offsets: dx=%1, dy=%2, theta=%3")
+                     .arg(refDx).arg(refDy).arg(refTheta));
+    } else if (refMode == "average_center") {
         double sumDx = 0.0;
         double sumDy = 0.0;
         int validCount = 0;
@@ -170,7 +178,7 @@ void AlignAlgorithm::execute(WorkspaceRegistry& workspace,
         double targetDy = meta.dy;
         double targetTheta = meta.theta;
 
-        if (centerFrameIdx != -1) {
+        if (hasCustomRef || centerFrameIdx != -1) {
             double cosRef = std::cos(refTheta);
             double sinRef = std::sin(refTheta);
             double diffDx = meta.dx - refDx;

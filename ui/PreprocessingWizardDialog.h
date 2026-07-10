@@ -135,6 +135,7 @@ private:
     // Control Tab — Alignment section
     QComboBox* m_alignRefModeCombo;
     QDoubleSpinBox* m_drizzleScaleSpin;
+    QCheckBox* m_alignMutuallyChk;
 
     // Control Tab — Light Stacking section
     QComboBox* m_lightStackMethodCombo;

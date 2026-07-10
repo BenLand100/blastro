@@ -1578,6 +1578,82 @@ void testPreprocessingCalibrationSelection() {
     QDir(QString::fromStdString(tempDir)).removeRecursively();
 }
 
+void testMutualStackAlignment() {
+    std::cout << "Running Preprocessing Pipeline Mutual Alignment Test..." << std::endl;
+
+    std::string tempDir = TempDirectory::createTempDir("mutual_align_test");
+    assert(!tempDir.empty() && "Failed to create temp directory");
+
+    std::string lightHa = tempDir + "/light_Ha_001.fits";
+    std::string lightOiii = tempDir + "/light_Oiii_001.fits";
+
+    createDummyFitsWithHeader(lightHa, "LIGHT", 10.0, "Ha", true);
+    createDummyFitsWithHeader(lightOiii, "LIGHT", 10.0, "OIII", true);
+
+    WorkspaceRegistry workspace;
+
+    // Load light batches manually into workspace
+    FitsIO fits;
+    auto batchHa = std::make_shared<ImageBatch>(
+        1,
+        [lightHa](int) { FitsIO f; return f.readImage(lightHa); },
+        std::vector<std::string>{"light_Ha_001"},
+        std::vector<std::string>{lightHa}
+    );
+    batchHa->setFrameSelected(0, true);
+    // Add dummy metadata so we skip calibration/registration step 1
+    FrameMetadata metaHa;
+    metaHa.registered = true;
+    metaHa.dx = 0.0; metaHa.dy = 0.0; metaHa.theta = 0.0;
+    metaHa.snr = 20.0;
+    batchHa->setFrameMetadata(0, metaHa);
+    workspace.registerElement("preprocessed_lights_Ha", batchHa);
+
+    auto batchOiii = std::make_shared<ImageBatch>(
+        1,
+        [lightOiii](int) { FitsIO f; return f.readImage(lightOiii); },
+        std::vector<std::string>{"light_Oiii_001"},
+        std::vector<std::string>{lightOiii}
+    );
+    batchOiii->setFrameSelected(0, true);
+    FrameMetadata metaOiii;
+    metaOiii.registered = true;
+    metaOiii.dx = 0.0; metaOiii.dy = 0.0; metaOiii.theta = 0.0;
+    metaOiii.snr = 15.0; // slightly lower SNR so Ha is chosen as global reference
+    batchOiii->setFrameMetadata(0, metaOiii);
+    workspace.registerElement("preprocessed_lights_OIII", batchOiii);
+
+    // Run stage 2 with align_mutually = true
+    PreprocessingPipeline pipeline;
+    std::map<std::string, std::string> configAlign = {
+        {"stage", "align_stack"},
+        {"registered_light_batch_name", "preprocessed_lights_Ha;preprocessed_lights_OIII"},
+        {"drizzle_scale", "1.0"},
+        {"align_ref_mode", "average_center"},
+        {"align_mutually", "true"},
+        {"keep_intermediate", "false"},
+        {"out_dir", tempDir}
+    };
+
+    pipeline.execute(workspace, configAlign);
+
+    assert(workspace.contains("preprocessed_lights_Ha_stacked"));
+    assert(workspace.contains("preprocessed_lights_OIII_stacked"));
+
+    // Run stage 2 with align_mutually = false
+    workspace.unregisterElement("preprocessed_lights_Ha_stacked");
+    workspace.unregisterElement("preprocessed_lights_OIII_stacked");
+
+    configAlign["align_mutually"] = "false";
+    pipeline.execute(workspace, configAlign);
+
+    assert(workspace.contains("preprocessed_lights_Ha_stacked"));
+    assert(workspace.contains("preprocessed_lights_OIII_stacked"));
+
+    std::cout << "[+] Preprocessing Pipeline Mutual Alignment Test PASSED." << std::endl << std::endl;
+    QDir(QString::fromStdString(tempDir)).removeRecursively();
+}
+
 int main() {
     std::cout << "========================================" << std::endl;
     std::cout << "Starting Blastro Algorithm Unit Tests..." << std::endl;
@@ -1593,6 +1669,7 @@ int main() {
     testRbfBackgroundExtraction();
     testPreprocessingPipeline();
     testPreprocessingCalibrationSelection();
+    testMutualStackAlignment();
 
     std::cout << "========================================" << std::endl;
     std::cout << "All Blastro Algorithm Unit Tests PASSED!" << std::endl;
