@@ -29,12 +29,10 @@ CalibrationDialog::CalibrationDialog(WorkspaceRegistry& workspace, QWidget* pare
     : AlgorithmDialog(workspace, parent) {
     
     setWindowTitle("Image Calibration");
-    resize(360, 240);
 
 
 
     QVBoxLayout* mainLayout = new QVBoxLayout(this);
-    mainLayout->setSizeConstraint(QLayout::SetFixedSize);
     mainLayout->setContentsMargins(15, 15, 15, 15);
     mainLayout->setSpacing(12);
 
@@ -87,6 +85,8 @@ CalibrationDialog::CalibrationDialog(WorkspaceRegistry& workspace, QWidget* pare
     formLayout->addRow("Flat Image (Optional):", m_flatCombo);
 
     mainLayout->addLayout(formLayout);
+
+    mainLayout->addStretch(1); // Content top-justifies; buttons pin to bottom
 
     // 6. Buttons Box
     QHBoxLayout* btnLayout = new QHBoxLayout();

@@ -34,14 +34,12 @@ StackingDialog::StackingDialog(WorkspaceRegistry& workspace, QWidget* parent)
     : AlgorithmDialog(workspace, parent) {
     
     setWindowTitle("Image Stacking");
-    resize(380, 260);
 
 
 
     m_outputPattern = "{input}_stacked";
 
     QVBoxLayout* mainLayout = new QVBoxLayout(this);
-    mainLayout->setSizeConstraint(QLayout::SetFixedSize);
     mainLayout->setContentsMargins(15, 15, 15, 15);
     mainLayout->setSpacing(12);
 
@@ -121,6 +119,8 @@ StackingDialog::StackingDialog(WorkspaceRegistry& workspace, QWidget* parent)
     formLayout->addRow(m_clipLabel, clipLayout);
 
     mainLayout->addLayout(formLayout);
+
+    mainLayout->addStretch(1); // Content top-justifies; buttons pin to bottom
 
     // Initial trigger for label adjustments
     onRejectionChanged(m_rejectionCombo->currentText());

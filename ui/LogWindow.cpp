@@ -22,6 +22,7 @@
 #include <QDateTime>
 #include <QScrollBar>
 #include <QMetaObject>
+#include <QCloseEvent>
 
 namespace blastro {
 
@@ -187,6 +188,12 @@ LogWindow::LogWindow(QWidget* parent)
 LogWindow::~LogWindow() {
     Logger::registerCallback(nullptr);
     unregisterInstance(this);
+}
+
+void LogWindow::closeEvent(QCloseEvent* event) {
+    // Ignore close so the QMdiSubWindow hides itself without hiding
+    // this widget — log history is preserved for when it is reopened.
+    event->ignore();
 }
 
 void LogWindow::registerInstance(LogWindow* instance) {

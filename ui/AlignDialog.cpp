@@ -34,14 +34,12 @@ AlignDialog::AlignDialog(WorkspaceRegistry& workspace, QWidget* parent)
     : AlgorithmDialog(workspace, parent) {
     
     setWindowTitle("Image Alignment & Drizzle");
-    resize(360, 200);
 
 
 
     m_outputPattern = "{input}_aligned";
 
     QVBoxLayout* mainLayout = new QVBoxLayout(this);
-    mainLayout->setSizeConstraint(QLayout::SetFixedSize);
     mainLayout->setContentsMargins(15, 15, 15, 15);
     mainLayout->setSpacing(12);
 
@@ -93,6 +91,8 @@ AlignDialog::AlignDialog(WorkspaceRegistry& workspace, QWidget* parent)
     formLayout->addRow("Alignment Reference Mode:", m_refModeCombo);
 
     mainLayout->addLayout(formLayout);
+
+    mainLayout->addStretch(1); // Content top-justifies; buttons pin to bottom
 
     // Buttons Box
     QHBoxLayout* btnLayout = new QHBoxLayout();

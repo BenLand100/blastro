@@ -51,6 +51,9 @@ private:
     QPlainTextEdit* m_textEdit;
     static LogWindow* s_instance;
     static QMutex s_mutex;
+
+protected:
+    void closeEvent(QCloseEvent* event) override;
 };
 
 } // namespace blastro

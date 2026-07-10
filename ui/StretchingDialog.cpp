@@ -71,13 +71,11 @@ StretchingDialog::StretchingDialog(WorkspaceRegistry& workspace, QWidget* parent
       m_previewTimer(new QTimer(this)) {
     
     setWindowTitle("Stretching Transformation");
-    resize(480, 520);
 
     m_previewTimer->setSingleShot(true);
     connect(m_previewTimer, &QTimer::timeout, this, &StretchingDialog::updatePreview);
 
     QVBoxLayout* mainLayout = new QVBoxLayout(this);
-    mainLayout->setSizeConstraint(QLayout::SetFixedSize);
     mainLayout->setContentsMargins(12, 12, 12, 12);
     mainLayout->setSpacing(10);
 
@@ -85,7 +83,7 @@ StretchingDialog::StretchingDialog(WorkspaceRegistry& workspace, QWidget* parent
     m_histogramWidget = new HistogramWidget(this);
     m_histogramWidget->setMinimumHeight(150);
     m_histogramWidget->setActive(true);
-    mainLayout->addWidget(m_histogramWidget);
+    mainLayout->addWidget(m_histogramWidget, 1); // Histogram absorbs vertical resize space
 
     connect(m_histogramWidget, &HistogramWidget::stretchParamsChanged, this, &StretchingDialog::onHtParamsChanged);
     connect(m_histogramWidget, &HistogramWidget::ghsParamsChanged, this, &StretchingDialog::onGhsParamsChanged);
@@ -312,7 +310,9 @@ StretchingDialog::StretchingDialog(WorkspaceRegistry& workspace, QWidget* parent
 
     m_tabWidget->addTab(ghsTab, "Generalized Hyperbolic (GHS)");
 
-    mainLayout->addWidget(m_tabWidget);
+    mainLayout->addWidget(m_tabWidget, 0); // Controls tab stays compact
+
+    mainLayout->addStretch(1); // Push control row and buttons to the bottom
 
     // 3. General control box
     QHBoxLayout* ctrlLayout = new QHBoxLayout();
@@ -369,7 +369,7 @@ void StretchingDialog::closeEvent(QCloseEvent* event) {
     if (auto win = getActiveImageWindow()) {
         win->restoreOriginalImage();
     }
-    QWidget::closeEvent(event);
+    event->ignore();
 }
 
 WorkspaceImageWindow* StretchingDialog::getActiveImageWindow() const {

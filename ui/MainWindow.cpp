@@ -733,42 +733,49 @@ void MainWindow::onSaveActiveBatch() {
 }
 
 void MainWindow::onOpenPixelMath() {
+    m_pixelMathDlg->refreshWorkspaceElements();
     m_pixelMathSub->show();
     m_pixelMathSub->raise();
     m_workspaceArea->setActiveSubWindow(m_pixelMathSub);
 }
 
 void MainWindow::onOpenStacking() {
+    m_stackingDlg->refreshWorkspaceElements();
     m_stackingSub->show();
     m_stackingSub->raise();
     m_workspaceArea->setActiveSubWindow(m_stackingSub);
 }
 
 void MainWindow::onOpenCalibration() {
+    m_calibrationDlg->refreshWorkspaceElements();
     m_calibrationSub->show();
     m_calibrationSub->raise();
     m_workspaceArea->setActiveSubWindow(m_calibrationSub);
 }
 
 void MainWindow::onOpenDebayer() {
+    m_debayerDlg->refreshWorkspaceElements();
     m_debayerSub->show();
     m_debayerSub->raise();
     m_workspaceArea->setActiveSubWindow(m_debayerSub);
 }
 
 void MainWindow::onOpenRegister() {
+    m_registerDlg->refreshWorkspaceElements();
     m_registerSub->show();
     m_registerSub->raise();
     m_workspaceArea->setActiveSubWindow(m_registerSub);
 }
 
 void MainWindow::onOpenAlign() {
+    m_alignDlg->refreshWorkspaceElements();
     m_alignSub->show();
     m_alignSub->raise();
     m_workspaceArea->setActiveSubWindow(m_alignSub);
 }
 
 void MainWindow::onOpenBackgroundExtraction() {
+    m_bgeDlg->refreshWorkspaceElements();
     m_bgeSub->show();
     m_bgeSub->raise();
     m_workspaceArea->setActiveSubWindow(m_bgeSub);

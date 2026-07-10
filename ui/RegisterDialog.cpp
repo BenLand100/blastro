@@ -33,12 +33,10 @@ RegisterDialog::RegisterDialog(WorkspaceRegistry& workspace, QWidget* parent)
     : AlgorithmDialog(workspace, parent) {
     
     setWindowTitle("Star Registration");
-    resize(380, 240);
 
 
 
     QVBoxLayout* mainLayout = new QVBoxLayout(this);
-    mainLayout->setSizeConstraint(QLayout::SetFixedSize);
     mainLayout->setContentsMargins(15, 15, 15, 15);
     mainLayout->setSpacing(12);
 
@@ -80,6 +78,8 @@ RegisterDialog::RegisterDialog(WorkspaceRegistry& workspace, QWidget* parent)
     formLayout->addRow("Min Star FWHM:", m_minFwhmSpin);
 
     mainLayout->addLayout(formLayout);
+
+    mainLayout->addStretch(1); // Content top-justifies; buttons pin to bottom
 
     // Buttons Box
     QHBoxLayout* btnLayout = new QHBoxLayout();

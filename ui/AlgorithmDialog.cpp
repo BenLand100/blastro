@@ -18,6 +18,7 @@
 
 #include "AlgorithmDialog.h"
 #include <QMdiSubWindow>
+#include <QCloseEvent>
 
 namespace blastro {
 
@@ -70,6 +71,13 @@ void AlgorithmDialog::onClose() {
         p = p->parentWidget();
     }
     close();
+}
+
+void AlgorithmDialog::closeEvent(QCloseEvent* event) {
+    // Ignore the close event so the QMdiSubWindow hides itself
+    // without hiding this inner widget — preserving all widget state
+    // for when the subwindow is reopened.
+    event->ignore();
 }
 
 } // namespace blastro

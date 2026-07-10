@@ -25,6 +25,8 @@
 #include <QPushButton>
 #include <QLabel>
 #include <QMessageBox>
+#include <QScrollArea>
+#include <QMdiSubWindow>
 
 namespace blastro {
 
@@ -43,18 +45,25 @@ PixelMathDialog::PixelMathDialog(WorkspaceRegistry& workspace, QWidget* parent)
       m_replaceTargetImage(new QRadioButton("Replace target image:", this)) {
 
     setWindowTitle("Pixel Math");
-    resize(500, 400);
 
     QVBoxLayout* mainLayout = new QVBoxLayout(this);
-    mainLayout->setSizeConstraint(QLayout::SetFixedSize);
 
     // 1. Image References Info Box
     QGroupBox* infoBox = new QGroupBox("Available Images (use as variables)", this);
     QVBoxLayout* infoLayout = new QVBoxLayout(infoBox);
     
+    QScrollArea* scrollArea = new QScrollArea(this);
+    scrollArea->setWidgetResizable(true);
+    scrollArea->setMaximumHeight(120);
+    scrollArea->setMinimumHeight(60);
+    scrollArea->setStyleSheet("QScrollArea { background-color: transparent; border: none; }");
+    
     m_infoLabel = new QLabel(this);
-    m_infoLabel->setStyleSheet("font-family: monospace; color: #88ff88;");
-    infoLayout->addWidget(m_infoLabel);
+    m_infoLabel->setStyleSheet("font-family: monospace; color: #88ff88; background-color: transparent;");
+    m_infoLabel->setWordWrap(true);
+    
+    scrollArea->setWidget(m_infoLabel);
+    infoLayout->addWidget(scrollArea);
     mainLayout->addWidget(infoBox);
 
     // 2. Color Space / Expression type
@@ -233,7 +242,8 @@ void PixelMathDialog::refreshWorkspaceElements() {
             for (const auto& name : keys) {
                 infoText += QString("  - %1\n").arg(QString::fromStdString(name));
             }
-            infoText += "\nNote: For RGB images, you can also use suffix _r, _g, _b (e.g. Image1_r)";
+            infoText += "\nNote: For RGB images, you can also use suffix _r, _g, _b (e.g. Image1_r)\n";
+            infoText += "Any valid image name in the workspace registry can be used as a variable.";
         }
         m_infoLabel->setText(infoText);
     }

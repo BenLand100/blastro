@@ -146,10 +146,8 @@ BackgroundExtractionDialog::BackgroundExtractionDialog(WorkspaceRegistry& worksp
     : AlgorithmDialog(workspace, parent) {
     
     setWindowTitle("Background Gradient Extraction");
-    resize(380, 300);
 
     QVBoxLayout* mainLayout = new QVBoxLayout(this);
-    mainLayout->setSizeConstraint(QLayout::SetFixedSize);
     mainLayout->setContentsMargins(15, 15, 15, 15);
     mainLayout->setSpacing(12);
 
@@ -292,6 +290,8 @@ BackgroundExtractionDialog::BackgroundExtractionDialog(WorkspaceRegistry& worksp
     formLayout->addRow("", togglesLayout);
 
     mainLayout->addLayout(formLayout);
+
+    mainLayout->addStretch(1); // Content top-justifies; buttons pin to bottom
 
     // Buttons Box
     QHBoxLayout* btnLayout = new QHBoxLayout();

@@ -34,14 +34,12 @@ DebayerDialog::DebayerDialog(WorkspaceRegistry& workspace, QWidget* parent)
     : AlgorithmDialog(workspace, parent) {
     
     setWindowTitle("Debayer");
-    resize(360, 220);
 
 
 
     m_outputPattern = "{input}_debayered";
 
     QVBoxLayout* mainLayout = new QVBoxLayout(this);
-    mainLayout->setSizeConstraint(QLayout::SetFixedSize);
     mainLayout->setContentsMargins(15, 15, 15, 15);
     mainLayout->setSpacing(12);
 
@@ -93,6 +91,8 @@ DebayerDialog::DebayerDialog(WorkspaceRegistry& workspace, QWidget* parent)
     formLayout->addRow("Debayer Method:", m_methodCombo);
 
     mainLayout->addLayout(formLayout);
+
+    mainLayout->addStretch(1); // Content top-justifies; buttons pin to bottom
 
     // Buttons Box
     QHBoxLayout* btnLayout = new QHBoxLayout();

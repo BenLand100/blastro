@@ -140,15 +140,49 @@ To ensure BLastro remains extremely performant and reliable under typical astron
 - **Safe Extraction Scans**: Always verify the contents of download packages using dry-run zip/tar file list queries (`unzip -Z -1` or `tar -tf`) before extraction, warning the user of potential file collisions and allowing them to uninstall conflicting modules.
 
 ### 4. Image Stacking & NaN Handling
-- **NaN Rejection**: Spatial transformations (alignment, rotation) produce out-of-bounds pixels represented as `NaN` (Not a Number). When stacking frames, do not propagate `NaN` values to the output master as they will corrupt subsequent fitters and stretching algorithms.
-- **Dynamic Normalization**: At each stacked pixel location, count the number of valid (non-NaN) frames. Divide the summed pixel intensity by the dynamic count of valid frames rather than the constant total frame count.
 
-### 5. UI/UX Cascading, Renaming, & Cleanup
+- **NaN as Masked/Missing Data**: In BLastro, `NaN` (Not a Number) values represent masked or missing pixel data rather than arithmetic errors. This includes sparse data patterns (like raw bayer channels before debayering), aligned frame edges (due to dithering and rotation shifts), or mosaic overlaps. Stacking algorithms must treat `NaN`s as missing observations, not outliers to reject.
+- **Dynamic Normalization**: At each stacked pixel location, stacking algorithms must only calculate statistics (means, medians, and sigmas) using non-NaN pixel values. When normalizing (averaging) at a pixel location, the summed intensity of valid pixels is divided by the dynamic count of non-NaN frames contributing at that specific location, rather than the constant total frame count. E.g., if an average stack has 50 frames, 5 NaN and 45 with value 0.15, the output is `(45 * 0.15) / 45 = 0.15`, not `(45 * 0.15) / 50`.
+- **All-NaN Pixel Propagation**: If every contributing frame has a `NaN` value at a given pixel, the stacked output pixel must be set to `NaN` (to indicate that no data exists at that location), rather than falling back to a arbitrary numeric value like `0.0f`.
+- **NaN Handling in Other Algorithms**: Other algorithms (like Stretching, Background Extraction, Calibration, or Histogram calculation) must safely propagate or ignore `NaN` values. Any sorting of pixel values (e.g., finding medians or quantiles for background fitting or auto-stretching) must filter out `NaN`s beforehand to prevent undefined behavior in `std::sort`.
+
+### 5. UI/UX Cascading, Renaming, Cleanup & Dialog Layout
 - **Window Cascading**: When opening new image windows, offset their initial MDI position slightly sequentially in X and Y (e.g. 20-30 pixels) to avoid stacking them perfectly on top of each other, cascading them naturally over time.
 - **Output Filename Patterning**: All algorithm dialogs should support output name patterning. By default, suggest naming patterns like `{input}_calib`, `{input}_aligned`, or `{input}_registered` to automatically base the output filename on the active input element name.
 - **Window Cleanup**: When an MDI image window is closed, clean up all references, active timers, and menu hooks immediately to prevent dangling pointer errors and menu list desynchronizations.
 - **Middle-Elided Titles**: Image window titles and tabs should be elided in the middle (`...`) using `QFontMetrics::elidedText` with `Qt::ElideMiddle` so they do not take up excessive width, while permitting tab expansion when workspace views are collapsed/expanded.
 - **Disabled UI Element Contrast**: Ensure that all custom-styled widgets (especially `QPushButton` in dialogs) have highly distinct disabled states. When overriding styles dynamically (e.g. coloring the cancel button or execution buttons), explicitly define the `:disabled` selector (e.g. background `#222222`, text `#555555`, border `#2a2a2a`) to ensure disabled controls are visually muted and distinct from enabled states in dark mode.
+
+#### MDI Persistent Subwindow Lifecycle
+
+BLastro distinguishes between two kinds of MDI subwindows:
+
+- **Persistent** (`WA_DeleteOnClose = false`): Algorithm dialogs (all `AlgorithmDialog` subclasses), the Preprocessing Wizard, and the Process Console. These windows retain their state (form values, log history, open file lists) across open/close cycles. They must **never** be destroyed and reopened; the same widget instance is reused each time.
+- **Transient** (`WA_DeleteOnClose = true`): Image viewer windows, Preferences, plugin sub-windows. These are created fresh each open and destroyed on close.
+
+**The Hidden-Widget Trap**: When a `QMdiSubWindow` is closed, Qt sends a `QCloseEvent` to its inner child widget. If the child accepts the event (default `QWidget` and `QDialog` behaviour), Qt marks the child as hidden. Re-showing the subwindow wrapper via `sub->show()` restores the frame but leaves the child hidden, producing an empty gray box.
+
+**The Fix**: Override `closeEvent` in every persistent inner widget class and call `event->ignore()`. When the child ignores the close event, `QMdiSubWindow` falls back to hiding only itself — the inner widget's visibility and all its state are fully preserved.
+
+```cpp
+// In any persistent MDI inner widget (AlgorithmDialog, LogWindow, PreprocessingWizardDialog):
+void MyDialog::closeEvent(QCloseEvent* event) {
+    // Optional: perform any cleanup (e.g. stop timers, restore preview)
+    event->ignore(); // Do NOT accept — keeps inner widget visible inside the hidden subwindow
+}
+```
+
+Persistent subwindows must also be created with `WA_DeleteOnClose = false` (which `MainWindow` applies to all algorithm and wizard subwindows at startup). The `onOpen...` slots in `MainWindow` simply call `sub->show()`, `sub->raise()`, and `setActiveSubWindow()` — no re-instantiation or re-showing of the inner widget is needed.
+
+#### Algorithm Dialog Layout Rules
+
+All `AlgorithmDialog` subclasses follow the layout conventions established by the Preferences window, targeting a uniform resize behavior:
+
+1. **No size locks**: Do not call `mainLayout->setSizeConstraint(QLayout::SetFixedSize)` or `setFixedSize(...)`. Dialogs must be freely resizable by the user.
+2. **No hardcoded initial size**: Do not call `resize(w, h)` in the constructor. Let `sizeHint()` drive the initial size.
+3. **Top-justify content, pin buttons to bottom**: Add `mainLayout->addStretch(1)` between the last content section and the button row. This ensures that form fields stay at the top and the button row stays pinned to the bottom as the dialog is resized taller.
+4. **Horizontally expanding fields**: Wrap bare `QComboBox`, `QLineEdit`, or `QSlider` fields in a `QHBoxLayout` with `addWidget(field, 1)` stretch factor so they fill the available row width. Fields that should not expand (e.g. small spin boxes beside a slider) are exempt.
+5. **Priority expand widget**: Dialogs that contain a large view widget (e.g. the histogram in `StretchingDialog`) should add that widget to the vertical layout with a stretch factor of `1` (`mainLayout->addWidget(histogram, 1)`), and add the controls section with stretch `0`. This way the view widget absorbs all extra vertical space on resize while the controls remain compact.
 
 ### 6. Log Infrastructure & PCL Progress Interception
 - **Process Console Routing**: Do not route low-level debug warnings (e.g., Qt internal notifications, widget desync warnings) to the Process Console; let them output to the terminal (stdout). Only print high-level, actionable, formatted information (algorithm execution, load module confirmations, file actions) to the Rich HTML Process Console.
