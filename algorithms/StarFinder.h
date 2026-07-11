@@ -38,12 +38,13 @@ public:
     // Finds stars in a grayscale image.
     // Methods: "centroid" (fast centroid), "gaussian" (global threshold + Gaussian fit), "adaptive" (local block-based max search + hybrid fit)
     static std::vector<Star> findStars(GrayscaleImagePtr img,
-                                       int maxStars = 250,
+                                       int maxStars = 10000,
                                        double snrMin = 5.0,
                                        const std::string& method = "adaptive",
                                        int patchRadius = 10,
                                        double minFwhm = 2.0,
-                                       double maxEccentricity = 0.85);
+                                       double maxEccentricity = 0.85,
+                                       int maxRefinedStars = 250);
 };
 
 } // namespace blastro

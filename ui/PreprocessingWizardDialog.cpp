@@ -99,6 +99,7 @@ PreprocessingWizardDialog::PreprocessingWizardDialog(WorkspaceRegistry& workspac
       m_transformationModelCombo(new QComboBox(this)),
       m_starDetectionMethodCombo(new QComboBox(this)),
       m_starMaxStarsSpin(new QSpinBox(this)),
+      m_starMaxRefinedSpin(new QSpinBox(this)),
       m_starMatchToleranceSpin(new QDoubleSpinBox(this)),
       m_starMaxEccentricitySpin(new QDoubleSpinBox(this)),
       // Alignment
@@ -111,12 +112,17 @@ PreprocessingWizardDialog::PreprocessingWizardDialog(WorkspaceRegistry& workspac
       m_lightRejectionCombo(new QComboBox(this)),
       m_lightSigmaLowSpin(new QDoubleSpinBox(this)),
       m_lightSigmaHighSpin(new QDoubleSpinBox(this)),
-      m_lightWeightCombo(new QComboBox(this)),
       m_runBgeChk(new QCheckBox(this)),
-      m_bgeOrderSpin(new QSpinBox(this)),
-      m_bgeSigmaCutSpin(new QDoubleSpinBox(this)),
-      m_bgeSampleFracSpin(new QDoubleSpinBox(this)),
       m_bgeMethodCombo(new QComboBox(this)),
+      m_bgeOrderSlider(new QSlider(Qt::Horizontal, this)),
+      m_bgeOrderSpin(new QSpinBox(this)),
+      m_bgeRbfSmoothingSlider(new QSlider(Qt::Horizontal, this)),
+      m_bgeRbfSmoothingSpin(new QDoubleSpinBox(this)),
+      m_bgeGridColsSpin(new QSpinBox(this)),
+      m_bgeGridRowsSpin(new QSpinBox(this)),
+      m_bgeAutoExcludeChk(new QCheckBox("Enable Rejection", this)),
+      m_bgeMaxDeviationSpin(new QDoubleSpinBox(this)),
+      m_bgeMaxStructureSpin(new QDoubleSpinBox(this)),
       m_lightScaleAdditiveChk(new QCheckBox(this)),
       m_lightScaleMultiplicativeChk(new QCheckBox(this)),
       // Other
@@ -414,9 +420,13 @@ PreprocessingWizardDialog::PreprocessingWizardDialog(WorkspaceRegistry& workspac
         m_starMinFwhmSpin->setSuffix(" px");
         form->addRow("Minimum Star FWHM:", m_starMinFwhmSpin);
 
-        m_starMaxStarsSpin->setRange(10, 5000);
-        m_starMaxStarsSpin->setValue(500);
+        m_starMaxStarsSpin->setRange(10, 50000);
+        m_starMaxStarsSpin->setValue(10000);
         form->addRow("Max Stars to Detect:", m_starMaxStarsSpin);
+
+        m_starMaxRefinedSpin->setRange(10, 5000);
+        m_starMaxRefinedSpin->setValue(250);
+        form->addRow("Max Stars to Refine:", m_starMaxRefinedSpin);
 
         m_starMaxEccentricitySpin->setRange(0.1, 1.0);
         m_starMaxEccentricitySpin->setValue(0.9);
@@ -479,27 +489,110 @@ PreprocessingWizardDialog::PreprocessingWizardDialog(WorkspaceRegistry& workspac
         m_bgeMethodCombo->addItem("Radial Basis Function (RBF)", "RBF");
         form->addRow("Model Method:", m_bgeMethodCombo);
 
-        m_bgeOrderSpin->setRange(1, 10);
+        // Polynomial Order
+        QHBoxLayout* orderLayout = new QHBoxLayout();
+        m_bgeOrderSlider->setRange(1, 5);
+        m_bgeOrderSlider->setValue(3);
+        m_bgeOrderSpin->setRange(1, 5);
         m_bgeOrderSpin->setValue(3);
-        form->addRow("Polynomial Order:", m_bgeOrderSpin);
+        orderLayout->addWidget(m_bgeOrderSlider, 1);
+        orderLayout->addWidget(m_bgeOrderSpin);
+        form->addRow("Polynomial Order:", orderLayout);
 
-        m_bgeSigmaCutSpin->setRange(0.5, 10.0);
-        m_bgeSigmaCutSpin->setValue(3.0);
-        m_bgeSigmaCutSpin->setSingleStep(0.5);
-        form->addRow("Rejection Sigma Cut:", m_bgeSigmaCutSpin);
+        connect(m_bgeOrderSlider, &QSlider::valueChanged, m_bgeOrderSpin, &QSpinBox::setValue);
+        connect(m_bgeOrderSpin, qOverload<int>(&QSpinBox::valueChanged), m_bgeOrderSlider, &QSlider::setValue);
 
-        m_bgeSampleFracSpin->setRange(0.001, 1.0);
-        m_bgeSampleFracSpin->setValue(0.01);
-        m_bgeSampleFracSpin->setSingleStep(0.01);
-        m_bgeSampleFracSpin->setDecimals(3);
-        form->addRow("Sample Grid Fraction:", m_bgeSampleFracSpin);
+        // RBF Smoothing
+        QHBoxLayout* rbfSmoothingLayout = new QHBoxLayout();
+        m_bgeRbfSmoothingSlider->setRange(0, 100);
+        m_bgeRbfSmoothingSlider->setValue(50);
+        m_bgeRbfSmoothingSpin->setRange(0.0, 1000.0);
+        m_bgeRbfSmoothingSpin->setSingleStep(0.01);
+        m_bgeRbfSmoothingSpin->setValue(0.5);
+        rbfSmoothingLayout->addWidget(m_bgeRbfSmoothingSlider, 1);
+        rbfSmoothingLayout->addWidget(m_bgeRbfSmoothingSpin);
+        form->addRow("RBF Smoothing:", rbfSmoothingLayout);
 
-        connect(m_runBgeChk, &QCheckBox::toggled, this, [this](bool checked) {
-            m_bgeMethodCombo->setEnabled(checked);
-            m_bgeOrderSpin->setEnabled(checked);
-            m_bgeSigmaCutSpin->setEnabled(checked);
-            m_bgeSampleFracSpin->setEnabled(checked);
+        connect(m_bgeRbfSmoothingSlider, &QSlider::valueChanged, this, [this](int val) {
+            m_bgeRbfSmoothingSpin->blockSignals(true);
+            m_bgeRbfSmoothingSpin->setValue(val / 100.0);
+            m_bgeRbfSmoothingSpin->blockSignals(false);
         });
+        connect(m_bgeRbfSmoothingSpin, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double val) {
+            m_bgeRbfSmoothingSlider->blockSignals(true);
+            if (val >= 0.0 && val <= 1.0) {
+                m_bgeRbfSmoothingSlider->setValue(static_cast<int>(val * 100.0));
+            } else {
+                m_bgeRbfSmoothingSlider->setValue(0);
+            }
+            m_bgeRbfSmoothingSlider->blockSignals(false);
+        });
+
+        // Dynamic show/hide
+        connect(m_bgeMethodCombo, qOverload<int>(&QComboBox::currentIndexChanged), this, [this, form, orderLayout, rbfSmoothingLayout](int index) {
+            form->setRowVisible(orderLayout, index == 0);
+            form->setRowVisible(rbfSmoothingLayout, index == 1);
+        });
+        form->setRowVisible(rbfSmoothingLayout, false);
+
+        // Grid Dimensions
+        QHBoxLayout* gridLayout = new QHBoxLayout();
+        gridLayout->addWidget(new QLabel("Cols:", this));
+        m_bgeGridColsSpin->setRange(3, 30);
+        m_bgeGridColsSpin->setValue(5);
+        m_bgeGridColsSpin->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        gridLayout->addWidget(m_bgeGridColsSpin);
+
+        gridLayout->addWidget(new QLabel("Rows:", this));
+        m_bgeGridRowsSpin->setRange(3, 30);
+        m_bgeGridRowsSpin->setValue(5);
+        m_bgeGridRowsSpin->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        gridLayout->addWidget(m_bgeGridRowsSpin);
+        form->addRow("Grid Dimensions:", gridLayout);
+
+        // Bad Point Rejection
+        QHBoxLayout* rejectLayout = new QHBoxLayout();
+        m_bgeAutoExcludeChk->setChecked(true);
+        rejectLayout->addWidget(m_bgeAutoExcludeChk);
+
+        rejectLayout->addWidget(new QLabel("Max Dev:", this));
+        m_bgeMaxDeviationSpin->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        m_bgeMaxDeviationSpin->setRange(0.5, 10.0);
+        m_bgeMaxDeviationSpin->setSingleStep(0.5);
+        m_bgeMaxDeviationSpin->setValue(3.0);
+        rejectLayout->addWidget(m_bgeMaxDeviationSpin);
+
+        rejectLayout->addWidget(new QLabel("Max Struct:", this));
+        m_bgeMaxStructureSpin->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        m_bgeMaxStructureSpin->setRange(0.1, 10.0);
+        m_bgeMaxStructureSpin->setSingleStep(0.1);
+        m_bgeMaxStructureSpin->setValue(1.5);
+        rejectLayout->addWidget(m_bgeMaxStructureSpin);
+        form->addRow("Bad Point Rejection:", rejectLayout);
+
+        connect(m_bgeAutoExcludeChk, &QCheckBox::toggled, this, [this](bool checked) {
+            m_bgeMaxDeviationSpin->setEnabled(checked);
+            m_bgeMaxStructureSpin->setEnabled(checked);
+        });
+
+        connect(m_runBgeChk, &QCheckBox::toggled, this, [this, form, orderLayout, rbfSmoothingLayout](bool checked) {
+            m_bgeMethodCombo->setEnabled(checked);
+            if (checked) {
+                form->setRowVisible(orderLayout, m_bgeMethodCombo->currentIndex() == 0);
+                form->setRowVisible(rbfSmoothingLayout, m_bgeMethodCombo->currentIndex() == 1);
+            } else {
+                form->setRowVisible(orderLayout, false);
+                form->setRowVisible(rbfSmoothingLayout, false);
+            }
+            m_bgeGridColsSpin->setEnabled(checked);
+            m_bgeGridRowsSpin->setEnabled(checked);
+            m_bgeAutoExcludeChk->setEnabled(checked);
+            m_bgeMaxDeviationSpin->setEnabled(checked && m_bgeAutoExcludeChk->isChecked());
+            m_bgeMaxStructureSpin->setEnabled(checked && m_bgeAutoExcludeChk->isChecked());
+        });
+
+        // Trigger initial state
+        m_bgeMethodCombo->currentIndexChanged(m_bgeMethodCombo->currentIndex());
     }
 
     controlLayout->addSpacing(4);
@@ -515,10 +608,7 @@ PreprocessingWizardDialog::PreprocessingWizardDialog(WorkspaceRegistry& workspac
             m_lightSigmaLowSpin,     m_lightSigmaHighSpin,
             "average", "winsorized", 3.0, 3.0);
 
-        m_lightWeightCombo->addItem("Equal Weights", "none");
-        m_lightWeightCombo->addItem("SNR-based Weighting", "snr");
-        m_lightWeightCombo->addItem("FWHM-based Weighting", "fwhm");
-        form->addRow("Frame Weighting:", m_lightWeightCombo);
+
 
         m_lightScaleAdditiveChk->setChecked(true);
         form->addRow("Additive Normalization:", m_lightScaleAdditiveChk);
@@ -1234,6 +1324,7 @@ void PreprocessingWizardDialog::onRunCalibrationRegister() {
     config["star_min_fwhm"] = QString::number(m_starMinFwhmSpin->value()).toStdString();
     config["star_detection_method"] = m_starDetectionMethodCombo->currentData().toString().toStdString();
     config["star_max_stars"] = std::to_string(m_starMaxStarsSpin->value());
+    config["star_max_refined_stars"] = std::to_string(m_starMaxRefinedSpin->value());
     config["star_max_eccentricity"] = std::to_string(m_starMaxEccentricitySpin->value());
     config["match_tolerance"] = std::to_string(m_starMatchToleranceSpin->value());
     config["transformation_model"] = m_transformationModelCombo->currentData().toString().toStdString();
@@ -1561,6 +1652,7 @@ void PreprocessingWizardDialog::onResumeStacking() {
     config["star_min_fwhm"] = QString::number(m_starMinFwhmSpin->value()).toStdString();
     config["star_detection_method"] = m_starDetectionMethodCombo->currentData().toString().toStdString();
     config["star_max_stars"] = std::to_string(m_starMaxStarsSpin->value());
+    config["star_max_refined_stars"] = std::to_string(m_starMaxRefinedSpin->value());
     config["star_max_eccentricity"] = std::to_string(m_starMaxEccentricitySpin->value());
     config["match_tolerance"] = std::to_string(m_starMatchToleranceSpin->value());
     config["out_prefix"] = m_outPrefixEdit->text().toStdString();
@@ -1569,15 +1661,18 @@ void PreprocessingWizardDialog::onResumeStacking() {
     config["run_bge"] = m_runBgeChk->isChecked() ? "true" : "false";
     config["bge_model_method"] = m_bgeMethodCombo->currentData().toString().toStdString();
     config["bge_poly_order"] = std::to_string(m_bgeOrderSpin->value());
-    config["bge_sigma_cut"] = QString::number(m_bgeSigmaCutSpin->value()).toStdString();
-    config["bge_sample_fraction"] = QString::number(m_bgeSampleFracSpin->value()).toStdString();
+    config["bge_grid_cols"] = std::to_string(m_bgeGridColsSpin->value());
+    config["bge_grid_rows"] = std::to_string(m_bgeGridRowsSpin->value());
+    config["bge_rbf_smoothing"] = QString::number(m_bgeRbfSmoothingSpin->value()).toStdString();
+    config["bge_auto_exclude"] = m_bgeAutoExcludeChk->isChecked() ? "true" : "false";
+    config["bge_max_deviation"] = QString::number(m_bgeMaxDeviationSpin->value()).toStdString();
+    config["bge_max_structure"] = QString::number(m_bgeMaxStructureSpin->value()).toStdString();
 
     // Light stacking settings
     config["light_stack_method"] = m_lightStackMethodCombo->currentData().toString().toStdString();
     config["light_rejection"]    = m_lightRejectionCombo->currentData().toString().toStdString();
     config["light_sigma_low"]    = QString::number(m_lightSigmaLowSpin->value()).toStdString();
     config["light_sigma_high"]   = QString::number(m_lightSigmaHighSpin->value()).toStdString();
-    config["light_weight_method"]= m_lightWeightCombo->currentData().toString().toStdString();
     config["scale_additive"]     = m_lightScaleAdditiveChk->isChecked() ? "true" : "false";
     config["scale_multiplicative"] = m_lightScaleMultiplicativeChk->isChecked() ? "true" : "false";
 
@@ -1910,7 +2005,7 @@ static QString getStageFromStepName(const std::string& stepName) {
         return "Register";
     } else if (stepName.rfind("User Frame Selection", 0) == 0) {
         return "Frame Selection";
-    } else if (stepName.rfind("Register ", 0) == 0) {
+    } else if (stepName.rfind("Finalize Registration", 0) == 0) {
         return "Align (Register)";
     } else if (stepName.rfind("Background Normalization", 0) == 0) {
         return "Align (Normalize)";
@@ -2213,6 +2308,7 @@ QJsonObject PreprocessingWizardDialog::serializeControlState() const {
     obj["star_min_fwhm"] = m_starMinFwhmSpin->value();
     obj["star_detection_method"] = m_starDetectionMethodCombo->currentData().toString();
     obj["star_max_stars"] = m_starMaxStarsSpin->value();
+    obj["star_max_refined_stars"] = m_starMaxRefinedSpin->value();
     obj["star_max_eccentricity"] = m_starMaxEccentricitySpin->value();
     obj["match_tolerance"] = m_starMatchToleranceSpin->value();
     obj["transformation_model"] = m_transformationModelCombo->currentData().toString();
@@ -2226,13 +2322,16 @@ QJsonObject PreprocessingWizardDialog::serializeControlState() const {
     obj["light_rejection"] = m_lightRejectionCombo->currentData().toString();
     obj["light_sigma_low"] = m_lightSigmaLowSpin->value();
     obj["light_sigma_high"] = m_lightSigmaHighSpin->value();
-    obj["light_weight_method"] = m_lightWeightCombo->currentData().toString();
     // Background Normalization
     obj["run_bge"] = m_runBgeChk->isChecked();
     obj["bge_model_method"] = m_bgeMethodCombo->currentData().toString();
     obj["bge_poly_order"] = m_bgeOrderSpin->value();
-    obj["bge_sigma_cut"] = m_bgeSigmaCutSpin->value();
-    obj["bge_sample_fraction"] = m_bgeSampleFracSpin->value();
+    obj["bge_grid_cols"] = m_bgeGridColsSpin->value();
+    obj["bge_grid_rows"] = m_bgeGridRowsSpin->value();
+    obj["bge_rbf_smoothing"] = m_bgeRbfSmoothingSpin->value();
+    obj["bge_auto_exclude"] = m_bgeAutoExcludeChk->isChecked();
+    obj["bge_max_deviation"] = m_bgeMaxDeviationSpin->value();
+    obj["bge_max_structure"] = m_bgeMaxStructureSpin->value();
     // Scaling Normalizations
     obj["scale_additive"] = m_lightScaleAdditiveChk->isChecked();
     obj["scale_multiplicative"] = m_lightScaleMultiplicativeChk->isChecked();
@@ -2276,6 +2375,7 @@ void PreprocessingWizardDialog::restoreControlState(const QJsonObject& obj) {
     if (obj.contains("star_min_fwhm")) m_starMinFwhmSpin->setValue(obj["star_min_fwhm"].toDouble());
     if (obj.contains("star_detection_method")) setCombo(m_starDetectionMethodCombo, obj["star_detection_method"].toString());
     if (obj.contains("star_max_stars")) m_starMaxStarsSpin->setValue(obj["star_max_stars"].toInt());
+    if (obj.contains("star_max_refined_stars")) m_starMaxRefinedSpin->setValue(obj["star_max_refined_stars"].toInt());
     if (obj.contains("star_max_eccentricity")) m_starMaxEccentricitySpin->setValue(obj["star_max_eccentricity"].toDouble());
     if (obj.contains("match_tolerance")) m_starMatchToleranceSpin->setValue(obj["match_tolerance"].toDouble());
     if (obj.contains("transformation_model")) setCombo(m_transformationModelCombo, obj["transformation_model"].toString());
@@ -2287,12 +2387,15 @@ void PreprocessingWizardDialog::restoreControlState(const QJsonObject& obj) {
     if (obj.contains("light_rejection")) setCombo(m_lightRejectionCombo, obj["light_rejection"].toString());
     if (obj.contains("light_sigma_low")) m_lightSigmaLowSpin->setValue(obj["light_sigma_low"].toDouble());
     if (obj.contains("light_sigma_high")) m_lightSigmaHighSpin->setValue(obj["light_sigma_high"].toDouble());
-    if (obj.contains("light_weight_method")) setCombo(m_lightWeightCombo, obj["light_weight_method"].toString());
     if (obj.contains("run_bge")) m_runBgeChk->setChecked(obj["run_bge"].toBool());
     if (obj.contains("bge_model_method")) setCombo(m_bgeMethodCombo, obj["bge_model_method"].toString());
     if (obj.contains("bge_poly_order")) m_bgeOrderSpin->setValue(obj["bge_poly_order"].toInt());
-    if (obj.contains("bge_sigma_cut")) m_bgeSigmaCutSpin->setValue(obj["bge_sigma_cut"].toDouble());
-    if (obj.contains("bge_sample_fraction")) m_bgeSampleFracSpin->setValue(obj["bge_sample_fraction"].toDouble());
+    if (obj.contains("bge_grid_cols")) m_bgeGridColsSpin->setValue(obj["bge_grid_cols"].toInt());
+    if (obj.contains("bge_grid_rows")) m_bgeGridRowsSpin->setValue(obj["bge_grid_rows"].toInt());
+    if (obj.contains("bge_rbf_smoothing")) m_bgeRbfSmoothingSpin->setValue(obj["bge_rbf_smoothing"].toDouble());
+    if (obj.contains("bge_auto_exclude")) m_bgeAutoExcludeChk->setChecked(obj["bge_auto_exclude"].toBool());
+    if (obj.contains("bge_max_deviation")) m_bgeMaxDeviationSpin->setValue(obj["bge_max_deviation"].toDouble());
+    if (obj.contains("bge_max_structure")) m_bgeMaxStructureSpin->setValue(obj["bge_max_structure"].toDouble());
     if (obj.contains("scale_additive")) m_lightScaleAdditiveChk->setChecked(obj["scale_additive"].toBool());
     if (obj.contains("scale_multiplicative")) m_lightScaleMultiplicativeChk->setChecked(obj["scale_multiplicative"].toBool());
 }

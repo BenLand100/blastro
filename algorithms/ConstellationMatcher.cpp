@@ -107,11 +107,29 @@ AlignmentResult ConstellationMatcher::match(const std::vector<Star>& refStars,
                                              const std::vector<Star>& targetStars,
                                              int kNearest,
                                              double matchTolerance,
-                                             bool useAffine) {
+                                             bool useAffine,
+                                             int maxStars) {
     AlignmentResult result;
     if (refStars.size() < 3 || targetStars.size() < 3) {
         return result;
     }
+
+    std::vector<Star> refSorted = refStars;
+    if (maxStars > 0 && refSorted.size() > static_cast<size_t>(maxStars)) {
+        std::sort(refSorted.begin(), refSorted.end(), [](const Star& a, const Star& b) {
+            return a.snr > b.snr;
+        });
+        refSorted.resize(maxStars);
+    }
+
+    std::vector<Star> targetSorted = targetStars;
+    if (maxStars > 0 && targetSorted.size() > static_cast<size_t>(maxStars)) {
+        std::sort(targetSorted.begin(), targetSorted.end(), [](const Star& a, const Star& b) {
+            return a.snr > b.snr;
+        });
+        targetSorted.resize(maxStars);
+    }
+
 
     // -----------------------------------------------------------------------
     // Helper: run iterative Procrustes + RANSAC on a set of (ref, target)
@@ -264,8 +282,8 @@ AlignmentResult ConstellationMatcher::match(const std::vector<Star>& refStars,
 
     // Estimate image centre from star bounding boxes
     double maxX = 0, maxY = 0;
-    for (const auto& s : refStars)    { maxX = std::max(maxX, s.x); maxY = std::max(maxY, s.y); }
-    for (const auto& s : targetStars) { maxX = std::max(maxX, s.x); maxY = std::max(maxY, s.y); }
+    for (const auto& s : refSorted)    { maxX = std::max(maxX, s.x); maxY = std::max(maxY, s.y); }
+    for (const auto& s : targetSorted) { maxX = std::max(maxX, s.x); maxY = std::max(maxY, s.y); }
     // Add a small margin to get approximate image size
     double estW = maxX + 50.0;  // approximate W-1
     double estH = maxY + 50.0;  // approximate H-1
@@ -283,10 +301,10 @@ AlignmentResult ConstellationMatcher::match(const std::vector<Star>& refStars,
 
     std::map<VoteKey, std::vector<std::pair<int,int>>> votes;
 
-    for (int i = 0; i < (int)refStars.size(); ++i) {
-        const Star& r = refStars[i];
-        for (int j = 0; j < (int)targetStars.size(); ++j) {
-            const Star& t = targetStars[j];
+    for (int i = 0; i < (int)refSorted.size(); ++i) {
+        const Star& r = refSorted[i];
+        for (int j = 0; j < (int)targetSorted.size(); ++j) {
+            const Star& t = targetSorted[j];
             // Normal translation vote
             votes[{(int)std::floor((r.x - t.x)/binW),
                    (int)std::floor((r.y - t.y)/binW), 0}].emplace_back(i, j);
@@ -313,12 +331,12 @@ AlignmentResult ConstellationMatcher::match(const std::vector<Star>& refStars,
                 for (auto [i, j] : it->second) {
                     if (used.count({i,j})) continue;
                     used.insert({i,j});
-                    Star ts = targetStars[j];
+                    Star ts = targetSorted[j];
                     if (bestKey.flipped) {
                         ts.x = estW - ts.x;
                         ts.y = estH - ts.y;
                     }
-                    cands.push_back({refStars[i], ts});
+                    cands.push_back({refSorted[i], ts});
                 }
             }
         }
@@ -347,8 +365,8 @@ AlignmentResult ConstellationMatcher::match(const std::vector<Star>& refStars,
     // PASS 2: Triangle-ratio matching for arbitrary rotations (fallback).
     //   Normalise side lengths by longest side to get shape descriptors.
     // -----------------------------------------------------------------------
-    std::vector<Triangle> refTris    = buildTriangles(refStars,    kNearest);
-    std::vector<Triangle> targetTris = buildTriangles(targetStars, kNearest);
+    std::vector<Triangle> refTris    = buildTriangles(refSorted,    kNearest);
+    std::vector<Triangle> targetTris = buildTriangles(targetSorted, kNearest);
 
     if (refTris.empty() || targetTris.empty()) return result;
 

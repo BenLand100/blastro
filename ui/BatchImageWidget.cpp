@@ -176,13 +176,6 @@ BatchImageWidget::BatchImageWidget(ImageBatchPtr batch, QWidget* parent)
     });
     
     connect(m_checkBox, &QCheckBox::toggled, this, [this](bool checked) {
-        FrameMetadata meta = m_batch->frameMetadata(m_currentIndex);
-        if (!meta.registered && checked) {
-            m_checkBox->blockSignals(true);
-            m_checkBox->setChecked(false);
-            m_checkBox->blockSignals(false);
-            return;
-        }
         m_batch->setFrameSelected(m_currentIndex, checked);
         m_imageView->setFrameSelectedStatus(checked);
         updateComboBoxItems();
@@ -232,7 +225,7 @@ void BatchImageWidget::onIndexChanged(int index) {
     
     m_checkBox->blockSignals(true);
     m_checkBox->setChecked(m_batch->isFrameSelected(index));
-    m_checkBox->setEnabled(m_batch->frameMetadata(index).registered);
+    m_checkBox->setEnabled(true);
     m_checkBox->blockSignals(false);
     
     m_imageView->setFrameSelectedStatus(m_batch->isFrameSelected(index));
@@ -316,47 +309,44 @@ void BatchImageWidget::updateBottomBarReadout() {
     if (!m_bottomBar) return;
 
     bool hasReg = false;
+    bool hasStars = false;
     for (int i = 0; i < m_batch->count(); ++i) {
-        if (m_batch->frameMetadata(i).registered) {
+        FrameMetadata meta = m_batch->frameMetadata(i);
+        if (meta.registered) {
             hasReg = true;
+        }
+        if (meta.starCount > 0 || !meta.stars.empty()) {
+            hasStars = true;
+        }
+        if (hasReg && hasStars) {
             break;
         }
     }
-    m_bottomBar->setVisible(hasReg);
+    m_bottomBar->setVisible(hasReg || hasStars);
 
-    if (hasReg && m_currentIndex >= 0 && m_currentIndex < m_batch->count()) {
+    if ((hasReg || hasStars) && m_currentIndex >= 0 && m_currentIndex < m_batch->count()) {
         FrameMetadata meta = m_batch->frameMetadata(m_currentIndex);
         if (meta.registered) {
             m_dxLabel->setText(QString("dx: %1").arg(meta.dx, 0, 'f', 2));
             m_dyLabel->setText(QString("dy: %1").arg(meta.dy, 0, 'f', 2));
             m_thetaLabel->setText(QString("θ: %1°").arg(meta.theta * 180.0 / M_PI, 0, 'f', 3));
-            m_starsLabel->setText(QString("Stars: %1").arg(meta.starCount));
-            
-            bool starsAvailable = !meta.stars.empty();
-            m_showStarsCheck->setEnabled(starsAvailable);
-            m_showConstCheck->setEnabled(starsAvailable);
-            if (!starsAvailable) {
-                m_showStarsCheck->blockSignals(true);
-                m_showConstCheck->blockSignals(true);
-                m_showStarsCheck->setChecked(false);
-                m_showConstCheck->setChecked(false);
-                m_showStarsCheck->blockSignals(false);
-                m_showConstCheck->blockSignals(false);
-            }
         } else {
             m_dxLabel->setText("dx: -");
             m_dyLabel->setText("dy: -");
             m_thetaLabel->setText("θ: -");
-            m_starsLabel->setText("Stars: -");
-            
+        }
+        m_starsLabel->setText(QString("Stars: %1").arg(meta.starCount));
+        
+        bool starsAvailable = !meta.stars.empty();
+        m_showStarsCheck->setEnabled(starsAvailable);
+        m_showConstCheck->setEnabled(starsAvailable);
+        if (!starsAvailable) {
             m_showStarsCheck->blockSignals(true);
             m_showConstCheck->blockSignals(true);
             m_showStarsCheck->setChecked(false);
             m_showConstCheck->setChecked(false);
             m_showStarsCheck->blockSignals(false);
             m_showConstCheck->blockSignals(false);
-            m_showStarsCheck->setEnabled(false);
-            m_showConstCheck->setEnabled(false);
         }
     }
 }

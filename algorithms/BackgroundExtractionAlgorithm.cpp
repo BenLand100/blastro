@@ -51,13 +51,16 @@ void BackgroundExtractionAlgorithm::execute(WorkspaceRegistry& workspace,
         outputName = inputName + "_neutralized";
 
     int    order      = config.count("order")       ? std::stoi(config.at("order"))       : 3;
-    double sigmaCut   = config.count("sigma_cut")   ? std::stod(config.at("sigma_cut"))   : 3.0;
-    bool   equalize   = config.count("equalize")    ? (config.at("equalize") == "true")   : true;
-    double sampleFrac = config.count("sample_frac") ? std::stod(config.at("sample_frac")) : 0.01;
+    bool   normalize  = config.count("normalize")   ? (config.at("normalize") == "true")  : true;
+    int gridSize = config.count("grid_size") ? std::stoi(config.at("grid_size")) : 10;
     double huberDelta = config.count("huber_delta") ? std::stod(config.at("huber_delta")) : 5.0;
     std::string method = config.count("method") ? config.at("method") : "Polynomial";
     double rbfSmoothing = config.count("rbf_smoothing") ? std::stod(config.at("rbf_smoothing")) : 0.0;
-    bool restoreMedian = config.count("restore_median") ? (config.at("restore_median") == "true") : false;
+    bool autoExclude = config.count("auto_exclude") ? (config.at("auto_exclude") == "true") : true;
+    double maxDeviation = config.count("max_deviation") ? std::stod(config.at("max_deviation")) : 3.0;
+    double maxStructure = config.count("max_structure") ? std::stod(config.at("max_structure")) : 1.5;
+    double effectiveMaxDeviation = autoExclude ? maxDeviation : 9999.0;
+    double effectiveMaxStructure = autoExclude ? maxStructure : 9999.0;
 
     int threads = config.count("threads") ? std::stoi(config.at("threads")) : -1;
     if (threads <= 0) {
@@ -67,11 +70,11 @@ void BackgroundExtractionAlgorithm::execute(WorkspaceRegistry& workspace,
         omp_set_num_threads(threads);
     }
 
-    Logger::header("BackgroundExtraction", QString("Starting BGE execution. Input: %1, Output: %2, Method: %3, Order: %4, RbfSmoothing: %5, SigmaCut: %6, Equalize: %7, RestoreMedian: %8, Threads: %9")
+    Logger::header("BackgroundExtraction", QString("Starting BGE execution. Input: %1, Output: %2, Method: %3, Order: %4, RbfSmoothing: %5, Normalize: %6, AutoExclude: %7, MaxDeviation: %8, MaxStructure: %9, Threads: %10")
                    .arg(QString::fromStdString(inputName))
                    .arg(QString::fromStdString(outputName))
                    .arg(QString::fromStdString(method))
-                   .arg(order).arg(rbfSmoothing).arg(sigmaCut).arg(equalize).arg(restoreMedian).arg(threads));
+                   .arg(order).arg(rbfSmoothing).arg(normalize).arg(autoExclude).arg(maxDeviation).arg(maxStructure).arg(threads));
 
     QElapsedTimer totalTimer;
     totalTimer.start();
@@ -115,6 +118,7 @@ void BackgroundExtractionAlgorithm::execute(WorkspaceRegistry& workspace,
 
         // 2. Establish sample points on reference frame
         ImageVariant refFrame = inputBatch->getImage(refFrameIdx);
+        auto refMeta = inputBatch->frameMetadata(refFrameIdx);
         auto refChannel = getExtractionChannel(refFrame);
         if (!refChannel) {
             throw std::runtime_error("Failed to extract reference channel from reference frame");
@@ -123,7 +127,7 @@ void BackgroundExtractionAlgorithm::execute(WorkspaceRegistry& workspace,
         std::vector<std::pair<double, double>> refPts = refChannel->buffer()->bgeControlPoints();
         if (refPts.empty()) {
             Logger::info("BackgroundExtraction", "No manual control points on reference frame. Auto-generating sample grid...");
-            refPts = BackgroundExtractor::generateSamplePoints(refChannel, sigmaCut, sampleFrac);
+            refPts = BackgroundExtractor::generateGridPoints(refChannel, gridSize, gridSize, effectiveMaxDeviation, effectiveMaxStructure);
         }
 
         Logger::info("BackgroundExtraction", QString("Established %1 sample points on reference frame").arg(refPts.size()));
@@ -154,8 +158,9 @@ void BackgroundExtractionAlgorithm::execute(WorkspaceRegistry& workspace,
             std::vector<std::pair<double, double>> targetPts;
             if (meta.registered) {
                 auto invTrans = MathUtils::invertAffine(meta.transform);
+                auto tRefToTarget = MathUtils::multiplyAffine(invTrans, refMeta.transform);
                 for (const auto& pt : refPts) {
-                    auto transPt = MathUtils::transformPoint(invTrans, pt.first, pt.second);
+                    auto transPt = MathUtils::transformPoint(tRefToTarget, pt.first, pt.second);
                     targetPts.push_back(transPt);
                 }
             } else {
@@ -167,16 +172,16 @@ void BackgroundExtractionAlgorithm::execute(WorkspaceRegistry& workspace,
                 auto gray = std::get<GrayscaleImagePtr>(frame);
                 auto res = BackgroundExtractor::extractGrayscale(
                     gray,
-                    order, sigmaCut, sampleFrac, huberDelta, equalize,
-                    nullptr, 0, 100, method, rbfSmoothing, restoreMedian, targetPts);
+                    order, gridSize, huberDelta, normalize,
+                    nullptr, 0, 100, method, rbfSmoothing, targetPts, effectiveMaxDeviation, effectiveMaxStructure);
                 res->setMetadata(gray->metadata());
                 extracted = res;
             } else if (std::holds_alternative<RGBImagePtr>(frame)) {
                 auto rgb = std::get<RGBImagePtr>(frame);
                 auto res = BackgroundExtractor::extractRGB(
                     rgb,
-                    order, sigmaCut, sampleFrac, huberDelta, equalize,
-                    nullptr, method, rbfSmoothing, restoreMedian, targetPts);
+                    order, gridSize, huberDelta, normalize,
+                    nullptr, method, rbfSmoothing, targetPts, effectiveMaxDeviation, effectiveMaxStructure);
                 res->setMetadata(rgb->metadata());
                 extracted = res;
             } else {
@@ -225,16 +230,16 @@ void BackgroundExtractionAlgorithm::execute(WorkspaceRegistry& workspace,
         auto gray = std::get<GrayscaleImagePtr>(inputElem);
         auto res = BackgroundExtractor::extractGrayscale(
             gray,
-            order, sigmaCut, sampleFrac, huberDelta, equalize,
-            progress, 5, 95, method, rbfSmoothing, restoreMedian);
+            order, gridSize, huberDelta, normalize,
+            progress, 5, 95, method, rbfSmoothing, {}, effectiveMaxDeviation, effectiveMaxStructure);
         res->setMetadata(gray->metadata());
         outputElem = res;
     } else if (std::holds_alternative<RGBImagePtr>(inputElem)) {
         auto rgb = std::get<RGBImagePtr>(inputElem);
         auto res = BackgroundExtractor::extractRGB(
             rgb,
-            order, sigmaCut, sampleFrac, huberDelta, equalize,
-            progress, method, rbfSmoothing, restoreMedian);
+            order, gridSize, huberDelta, normalize,
+            progress, method, rbfSmoothing, {}, effectiveMaxDeviation, effectiveMaxStructure);
         res->setMetadata(rgb->metadata());
         outputElem = res;
     } else {

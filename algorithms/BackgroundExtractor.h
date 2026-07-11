@@ -25,34 +25,36 @@ public:
     // Fits a 2D polynomial surface to the background of a single channel and subtracts it.
     static GrayscaleImagePtr extractGrayscale(GrayscaleImagePtr src,
                                              int order = 3,
-                                             double sigmaCut = 3.0,
-                                             double sampleFrac = 0.01,
+                                             int gridSize = 10,
                                              double huberDelta = 5.0,
-                                             bool equalize = true,
+                                             bool normalize = true,
                                              ProgressCallback progress = nullptr,
                                              int progressStart = 0,
                                              int progressEnd = 100,
                                              const std::string& method = "Polynomial",
                                              double rbfSmoothing = 0.0,
-                                             bool restoreMedian = false,
-                                             const std::vector<std::pair<double, double>>& customControlPoints = {});
+                                             const std::vector<std::pair<double, double>>& customControlPoints = {},
+                                             double maxDeviation = 3.0,
+                                             double maxStructure = 1.5);
 
     static RGBImagePtr extractRGB(RGBImagePtr src,
                                   int order = 3,
-                                  double sigmaCut = 3.0,
-                                  double sampleFrac = 0.01,
+                                  int gridSize = 10,
                                   double huberDelta = 5.0,
-                                  bool equalize = true,
+                                  bool normalize = true,
                                   ProgressCallback progress = nullptr,
                                   const std::string& method = "Polynomial",
                                   double rbfSmoothing = 0.0,
-                                  bool restoreMedian = false,
-                                  const std::vector<std::pair<double, double>>& customControlPoints = {});
+                                  const std::vector<std::pair<double, double>>& customControlPoints = {},
+                                  double maxDeviation = 3.0,
+                                  double maxStructure = 1.5);
 
-    // Automatically generates sample points based on statistics
-    static std::vector<std::pair<double, double>> generateSamplePoints(GrayscaleImagePtr img,
-                                                                       double sigmaCut = 3.0,
-                                                                       double sampleFrac = 0.01);
+    // Automatically generates sample points based on statistics (grid-based)
+    static std::vector<std::pair<double, double>> generateGridPoints(GrayscaleImagePtr img,
+                                                                     int cols = 10,
+                                                                     int rows = 10,
+                                                                     double maxDeviation = 3.0,
+                                                                     double maxStructure = 1.5);
 };
 
 } // namespace blastro

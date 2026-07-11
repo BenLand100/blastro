@@ -98,9 +98,14 @@ void StarFindingDialog::onPrefsClicked() {
     form->setSpacing(10);
 
     QSpinBox* maxStarsSpin = new QSpinBox(&dlg);
-    maxStarsSpin->setRange(10, 10000);
+    maxStarsSpin->setRange(10, 50000);
     maxStarsSpin->setValue(m_maxStars);
-    form->addRow("Max Stars to Keep:", maxStarsSpin);
+    form->addRow("Max Stars to Detect:", maxStarsSpin);
+
+    QSpinBox* maxRefinedSpin = new QSpinBox(&dlg);
+    maxRefinedSpin->setRange(10, 5000);
+    maxRefinedSpin->setValue(m_maxRefinedStars);
+    form->addRow("Max Stars to Refine:", maxRefinedSpin);
 
     QDoubleSpinBox* maxEccSpin = new QDoubleSpinBox(&dlg);
     maxEccSpin->setRange(0.1, 1.0);
@@ -126,6 +131,7 @@ void StarFindingDialog::onPrefsClicked() {
 
     if (dlg.exec() == QDialog::Accepted) {
         m_maxStars = maxStarsSpin->value();
+        m_maxRefinedStars = maxRefinedSpin->value();
         m_maxEccentricity = maxEccSpin->value();
         m_threads = threadSpin->value();
     }
@@ -146,6 +152,7 @@ std::map<std::string, std::string> StarFindingDialog::getConfig() const {
     config["snr_min"] = std::to_string(m_snrSpin->value());
     config["min_fwhm"] = std::to_string(m_minFwhmSpin->value());
     config["max_stars"] = std::to_string(m_maxStars);
+    config["max_refined_stars"] = std::to_string(m_maxRefinedStars);
     config["max_eccentricity"] = std::to_string(m_maxEccentricity);
     config["threads"] = std::to_string(m_threads);
     return config;
@@ -173,6 +180,7 @@ QJsonObject StarFindingDialog::serializeState() const {
     obj["snr_min"] = m_snrSpin->value();
     obj["min_fwhm"] = m_minFwhmSpin->value();
     obj["max_stars"] = m_maxStars;
+    obj["max_refined_stars"] = m_maxRefinedStars;
     obj["max_eccentricity"] = m_maxEccentricity;
     obj["threads"] = m_threads;
     return obj;
@@ -189,6 +197,8 @@ void StarFindingDialog::restoreState(const QJsonObject& obj) {
         m_minFwhmSpin->setValue(obj["min_fwhm"].toDouble());
     if (obj.contains("max_stars"))
         m_maxStars = obj["max_stars"].toInt();
+    if (obj.contains("max_refined_stars"))
+        m_maxRefinedStars = obj["max_refined_stars"].toInt();
     if (obj.contains("max_eccentricity"))
         m_maxEccentricity = obj["max_eccentricity"].toDouble();
     if (obj.contains("threads"))

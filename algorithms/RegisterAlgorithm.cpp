@@ -37,7 +37,7 @@ void RegisterAlgorithm::execute(WorkspaceRegistry& workspace,
     }
     
     std::string refStrategy = config.count("reference_strategy") ? config.at("reference_strategy") : "snr";
-    int maxStars = config.count("max_stars") ? std::stoi(config.at("max_stars")) : 500;
+    int maxStars = config.count("max_stars") ? std::stoi(config.at("max_stars")) : 250;
     double matchTolerance = config.count("match_tolerance") ? std::stod(config.at("match_tolerance")) : 1.5;
     bool useAffine = (config.count("transformation_model") && config.at("transformation_model") == "affine");
 
@@ -179,7 +179,7 @@ void RegisterAlgorithm::execute(WorkspaceRegistry& workspace,
                 continue;
             }
 
-            auto alignRes = ConstellationMatcher::match(refStarsForMatching, targetStarsForMatching, 7, matchTolerance, useAffine);
+            auto alignRes = ConstellationMatcher::match(refStarsForMatching, targetStarsForMatching, 7, matchTolerance, useAffine, maxStars);
             if (alignRes.success) {
                 meta.registered = true;
                 meta.dx = alignRes.dx;

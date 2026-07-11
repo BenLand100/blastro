@@ -138,6 +138,7 @@ private:
     QComboBox* m_transformationModelCombo;
     QComboBox* m_starDetectionMethodCombo;
     QSpinBox* m_starMaxStarsSpin;
+    QSpinBox* m_starMaxRefinedSpin;
     QDoubleSpinBox* m_starMatchToleranceSpin;
     QDoubleSpinBox* m_starMaxEccentricitySpin;
 
@@ -147,19 +148,23 @@ private:
     QCheckBox* m_alignMutuallyChk;
     QComboBox* m_interpolationMethodCombo;
 
-    // Control Tab — Background Normalization section
     QCheckBox* m_runBgeChk;
-    QSpinBox* m_bgeOrderSpin;
-    QDoubleSpinBox* m_bgeSigmaCutSpin;
-    QDoubleSpinBox* m_bgeSampleFracSpin;
     QComboBox* m_bgeMethodCombo;
+    QSlider* m_bgeOrderSlider;
+    QSpinBox* m_bgeOrderSpin;
+    QSlider* m_bgeRbfSmoothingSlider;
+    QDoubleSpinBox* m_bgeRbfSmoothingSpin;
+    QSpinBox* m_bgeGridColsSpin;
+    QSpinBox* m_bgeGridRowsSpin;
+    QCheckBox* m_bgeAutoExcludeChk;
+    QDoubleSpinBox* m_bgeMaxDeviationSpin;
+    QDoubleSpinBox* m_bgeMaxStructureSpin;
 
     // Control Tab — Light Stacking section
     QComboBox* m_lightStackMethodCombo;
     QComboBox* m_lightRejectionCombo;
     QDoubleSpinBox* m_lightSigmaLowSpin;
     QDoubleSpinBox* m_lightSigmaHighSpin;
-    QComboBox* m_lightWeightCombo;
     QCheckBox* m_lightScaleAdditiveChk;
     QCheckBox* m_lightScaleMultiplicativeChk;
 

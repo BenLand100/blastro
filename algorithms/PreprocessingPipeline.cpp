@@ -692,9 +692,11 @@ void PreprocessingPipeline::execute(WorkspaceRegistry& workspace,
                 std::string starMinSnr = config.count("star_min_snr") ? config.at("star_min_snr") : "4.0";
                 std::string starMinFwhm = config.count("star_min_fwhm") ? config.at("star_min_fwhm") : "1.5";
                 std::string starDetectMethod = config.count("star_detection_method") ? config.at("star_detection_method") : "adaptive";
-                std::string starMaxStars = config.count("star_max_stars") ? config.at("star_max_stars") : "500";
+                std::string starMaxStars = config.count("star_max_stars") ? config.at("star_max_stars") : "10000";
+                std::string starMaxRefinedStars = config.count("star_max_refined_stars") ? config.at("star_max_refined_stars") : "250";
                 std::string starMaxEcc = config.count("star_max_eccentricity") ? config.at("star_max_eccentricity") : "0.9";
                 std::string transModel = config.count("transformation_model") ? config.at("transformation_model") : "rigid";
+                std::string registerMaxStars = config.count("register_max_stars") ? config.at("register_max_stars") : starMaxRefinedStars;
 
                 // Star finding
                 Logger::info("Preprocessing", "Detecting stars in calibrated light frames...");
@@ -705,6 +707,7 @@ void PreprocessingPipeline::execute(WorkspaceRegistry& workspace,
                     {"snr_min", starMinSnr},
                     {"min_fwhm", starMinFwhm},
                     {"max_stars", starMaxStars},
+                    {"max_refined_stars", starMaxRefinedStars},
                     {"max_eccentricity", starMaxEcc}
                 });
 
@@ -715,7 +718,7 @@ void PreprocessingPipeline::execute(WorkspaceRegistry& workspace,
                     {"input_name", registerInputName},
                     {"ref_frame_index", config.count("ref_frame_index") ? config.at("ref_frame_index") : ""},
                     {"reference_strategy", config.count("reference_strategy") ? config.at("reference_strategy") : "snr"},
-                    {"max_stars", starMaxStars},
+                    {"max_stars", registerMaxStars},
                     {"match_tolerance", config.count("match_tolerance") ? config.at("match_tolerance") : "1.5"},
                     {"transformation_model", transModel}
                 });
@@ -743,9 +746,17 @@ void PreprocessingPipeline::execute(WorkspaceRegistry& workspace,
         };
         std::vector<BatchRegistration> batchRegs;
 
-        // 1. Local Registration Phase: Register each batch against its own local best frame
+        bool runBGE = config.count("run_bge") ? (config.at("run_bge") == "true") : true;
+
+        // 1. Finalize Registration
+        if (m_stepCallback) {
+            m_stepCallback(currentStepIndex, 0, 0.0, false, false);
+        }
+        stepTimer.start();
+
         std::vector<std::string> currentBatchNames = batchNames;
 
+        // Pass 1: Find local reference frame and ensure stars exist for each batch
         for (const auto& name : batchNames) {
             if (m_cancelCallback && m_cancelCallback()) {
                 throw std::runtime_error("Preprocessing cancelled by user.");
@@ -796,25 +807,8 @@ void PreprocessingPipeline::execute(WorkspaceRegistry& workspace,
                 batch->setFrameMetadata(bestFrameIdx, bestFrameMeta);
             }
 
-            // Adjust registrations of all frames in the batch relative to bestFrameIdx
-            std::array<double, 6> T_best_inv = MathUtils::invertAffine(bestFrameMeta.transform);
-            for (int i = 0; i < count; ++i) {
-                if (batch->isFrameSelected(i)) {
-                    FrameMetadata meta = batch->frameMetadata(i);
-                    if (meta.registered) {
-                        std::array<double, 6> T_final = MathUtils::multiplyAffine(T_best_inv, meta.transform);
-                        meta.transform = T_final;
-                        meta.dx = T_final[2];
-                        meta.dy = T_final[5];
-                        meta.theta = std::atan2(T_final[3] - T_final[1], T_final[0] + T_final[4]);
-                        batch->setFrameMetadata(i, meta);
-                    }
-                }
-            }
-
             // Retrieve registered stars of the local reference frame.
-            FrameMetadata refMeta = batch->frameMetadata(bestFrameIdx);
-            std::vector<Star> refStars = refMeta.stars;
+            std::vector<Star> refStars = bestFrameMeta.stars;
             if (refStars.size() < 3) {
                 Logger::info("Preprocessing", QString("Detecting stars on local reference frame (index %1) for mutual alignment...")
                              .arg(bestFrameIdx));
@@ -826,126 +820,104 @@ void PreprocessingPipeline::execute(WorkspaceRegistry& workspace,
                 std::string starMinSnr = config.count("star_min_snr") ? config.at("star_min_snr") : "4.0";
                 std::string starMinFwhm = config.count("star_min_fwhm") ? config.at("star_min_fwhm") : "1.5";
                 std::string starDetectMethod = config.count("star_detection_method") ? config.at("star_detection_method") : "adaptive";
-                std::string starMaxStars = config.count("star_max_stars") ? config.at("star_max_stars") : "500";
+                std::string starMaxStars = config.count("star_max_stars") ? config.at("star_max_stars") : "10000";
+                std::string starMaxRefinedStars = config.count("star_max_refined_stars") ? config.at("star_max_refined_stars") : "250";
                 std::string starMaxEcc = config.count("star_max_eccentricity") ? config.at("star_max_eccentricity") : "0.9";
 
                 double snrMin = std::stod(starMinSnr);
                 double minFwhm = std::stod(starMinFwhm);
                 int maxStars = std::stoi(starMaxStars);
+                int maxRefined = std::stoi(starMaxRefinedStars);
                 double maxEcc = std::stod(starMaxEcc);
 
-                int maxStarsDetect = (starDetectMethod == "adaptive") ? 10000 : maxStars;
-                refStars = StarFinder::findStars(refChannel, maxStarsDetect, snrMin, starDetectMethod, 10, minFwhm, maxEcc);
+                refStars = StarFinder::findStars(refChannel, maxStars, snrMin, starDetectMethod, 10, minFwhm, maxEcc, maxRefined);
 
-                refMeta.stars = refStars;
-                batch->setFrameMetadata(bestFrameIdx, refMeta);
+                bestFrameMeta.stars = refStars;
+                batch->setFrameMetadata(bestFrameIdx, bestFrameMeta);
             }
 
             batchRegs.push_back({name, bestFrameIdx, maxSnr, refStars});
         }
 
-        // 1.5 Background Normalization Phase (BGE)
-        bool runBGE = config.count("run_bge") ? (config.at("run_bge") == "true") : true;
-        if (runBGE) {
-            for (size_t k = 0; k < batchNames.size(); ++k) {
-                std::string name = batchNames[k];
-                std::string bgeBatchName = name + "_bge";
-                int bestFrameIdx = batchRegs[k].bestFrameIdx;
-                
-                BackgroundExtractionAlgorithm bge;
-                std::map<std::string, std::string> bgeConfig = {
-                    {"input_name", name},
-                    {"output_name", bgeBatchName},
-                    {"order", config.count("bge_order") ? config.at("bge_order") : "3"},
-                    {"sigma_cut", config.count("bge_sigma_cut") ? config.at("bge_sigma_cut") : "3.0"},
-                    {"sample_frac", config.count("bge_sample_frac") ? config.at("bge_sample_frac") : "0.01"},
-                    {"method", config.count("bge_method") ? config.at("bge_method") : "Polynomial"},
-                    {"equalize", "false"},
-                    {"restore_median", "true"},
-                    {"ref_frame_index", std::to_string(bestFrameIdx)}
-                };
-                
-                Logger::info("Preprocessing", QString("Running Background Normalization on batch '%1'...").arg(QString::fromStdString(name)));
-                runStep(bge, bgeConfig);
-                
-                currentBatchNames[k] = bgeBatchName;
-                batchRegs[k].name = bgeBatchName;
+        // Pass 2: Find global reference batch (highest SNR reference frame overall)
+        std::string globalRefBatchName = "";
+        std::vector<Star> globalRefStars;
+        double globalMaxSnr = -1.0;
+
+        for (const auto& reg : batchRegs) {
+            if (reg.maxSnr > globalMaxSnr) {
+                globalMaxSnr = reg.maxSnr;
+                globalRefBatchName = reg.name;
+                globalRefStars = reg.refStars;
             }
         }
 
-        // 2. Mutual Alignment Phase (if enabled)
+        if (globalRefBatchName.empty() && !batchRegs.empty()) {
+            globalRefBatchName = batchRegs[0].name;
+            globalRefStars = batchRegs[0].refStars;
+        }
+
+        Logger::info("Preprocessing", QString("Selected global reference batch: '%1' (SNR = %2)")
+                     .arg(QString::fromStdString(globalRefBatchName)).arg(globalMaxSnr));
+
+        // Pass 3: Compute and apply final transformations for each batch
+        double matchTolerance = std::stod(config.count("match_tolerance") ? config.at("match_tolerance") : "1.5");
+        bool useAffine = (config.count("transformation_model") && config.at("transformation_model") == "affine");
+        int maxStars = std::stoi(config.count("star_max_refined_stars") ? config.at("star_max_refined_stars") : "250");
+
+        for (const auto& reg : batchRegs) {
+            if (m_cancelCallback && m_cancelCallback()) {
+                throw std::runtime_error("Preprocessing cancelled by user.");
+            }
+
+            auto batch = std::get<ImageBatchPtr>(workspace.getElement(reg.name));
+            int count = batch->count();
+
+            // Find T_mutual that maps this batch's local ref to the global ref
+            std::array<double, 6> T_mutual = {1.0, 0.0, 0.0, 0.0, 1.0, 0.0};
+            if (alignMutually && reg.name != globalRefBatchName) {
+                Logger::info("Preprocessing", QString("Matching reference frame of batch '%1' to global reference...")
+                             .arg(QString::fromStdString(reg.name)));
+                auto alignRes = ConstellationMatcher::match(globalRefStars, reg.refStars, 7, matchTolerance, useAffine, maxStars);
+                if (!alignRes.success) {
+                    throw std::runtime_error("Failed to mutually align reference frame of batch " + reg.name + 
+                                             " to the global reference frame. Verify that the frames overlap and contain matching star patterns.");
+                }
+                T_mutual = alignRes.transform;
+                Logger::success("Preprocessing", QString("Mutual alignment of batch '%1' successful: dx=%2, dy=%3, theta=%4")
+                                .arg(QString::fromStdString(reg.name)).arg(alignRes.dx).arg(alignRes.dy).arg(alignRes.theta));
+            }
+
+            // We compose the transformation: T_final = T_mutual * T_local_inv * T_original
+            FrameMetadata localRefMeta = batch->frameMetadata(reg.bestFrameIdx);
+            std::array<double, 6> T_local_inv = MathUtils::invertAffine(localRefMeta.transform);
+            std::array<double, 6> T_combined = MathUtils::multiplyAffine(T_mutual, T_local_inv);
+
+            // Apply combined transform to all approved frames in the batch
+            for (int i = 0; i < count; ++i) {
+                if (batch->isFrameSelected(i)) {
+                    FrameMetadata meta = batch->frameMetadata(i);
+                    if (meta.registered) {
+                        std::array<double, 6> T_final = MathUtils::multiplyAffine(T_combined, meta.transform);
+                        meta.transform = T_final;
+                        meta.dx = T_final[2];
+                        meta.dy = T_final[5];
+                        meta.theta = std::atan2(T_final[3] - T_final[1], T_final[0] + T_final[4]);
+                        batch->setFrameMetadata(i, meta);
+                    }
+                }
+            }
+        }
+
+        // Calculate global average center offsets if needed
         bool hasCustomRef = false;
         double globalRefDx = 0.0;
         double globalRefDy = 0.0;
         double globalRefTheta = 0.0;
         std::string alignRefMode = config.count("align_ref_mode") ? config.at("align_ref_mode") : "average_center";
 
-        if (alignMutually && batchRegs.size() > 0) {
-            // Find global reference batch (highest SNR reference frame)
-            std::string globalRefBatchName = "";
-            std::vector<Star> globalRefStars;
-            double globalMaxSnr = -1.0;
-
-            for (const auto& reg : batchRegs) {
-                if (reg.maxSnr > globalMaxSnr) {
-                    globalMaxSnr = reg.maxSnr;
-                    globalRefBatchName = reg.name;
-                    globalRefStars = reg.refStars;
-                }
-            }
-
-            if (globalRefBatchName.empty() && !batchRegs.empty()) {
-                globalRefBatchName = batchRegs[0].name;
-                globalRefStars = batchRegs[0].refStars;
-            }
-
-            Logger::info("Preprocessing", QString("Selected global reference batch: '%1' (SNR = %2)")
-                         .arg(QString::fromStdString(globalRefBatchName)).arg(globalMaxSnr));
-
-            // Align all other batches to the global reference batch
-            double matchTolerance = std::stod(config.count("match_tolerance") ? config.at("match_tolerance") : "1.5");
-
-            for (const auto& reg : batchRegs) {
-                if (reg.name == globalRefBatchName) {
-                    continue;
-                }
-
-                Logger::info("Preprocessing", QString("Mutually aligning reference frame of batch '%1' to global reference...")
-                             .arg(QString::fromStdString(reg.name)));
-
-                bool useAffine = (config.count("transformation_model") && config.at("transformation_model") == "affine");
-                auto alignRes = ConstellationMatcher::match(globalRefStars, reg.refStars, 7, matchTolerance, useAffine);
-                if (!alignRes.success) {
-                    throw std::runtime_error("Failed to mutually align reference frame of batch " + reg.name + 
-                                             " to the global reference frame. Verify that the frames overlap and contain matching star patterns.");
-                }
-
-                Logger::success("Preprocessing", QString("Mutual alignment of batch '%1' successful: dx=%2, dy=%3, theta=%4")
-                                .arg(QString::fromStdString(reg.name)).arg(alignRes.dx).arg(alignRes.dy).arg(alignRes.theta));
-
-                // Compose offsets for all frames in this batch using affine matrix multiplication
-                auto batch = std::get<ImageBatchPtr>(workspace.getElement(reg.name));
-                int count = batch->count();
-                std::array<double, 6> T_batch = alignRes.transform;
-
-                for (int i = 0; i < count; ++i) {
-                    if (batch->isFrameSelected(i)) {
-                        FrameMetadata meta = batch->frameMetadata(i);
-                        if (meta.registered) {
-                            std::array<double, 6> T_final = MathUtils::multiplyAffine(T_batch, meta.transform);
-                            meta.transform = T_final;
-                            meta.dx = T_final[2];
-                            meta.dy = T_final[5];
-                            meta.theta = std::atan2(T_final[3] - T_final[1], T_final[0] + T_final[4]);
-                            batch->setFrameMetadata(i, meta);
-                        }
-                    }
-                }
-
-            }
-
-            // Calculate global average center offsets if needed
-            if (alignRefMode == "average_center" && !globalRefBatchName.empty()) {
+        if (alignMutually && !globalRefBatchName.empty()) {
+            if (alignRefMode == "average_center") {
                 auto globalBatch = std::get<ImageBatchPtr>(workspace.getElement(globalRefBatchName));
                 int globalCount = globalBatch->count();
                 double sumDx = 0.0;
@@ -996,6 +968,48 @@ void PreprocessingPipeline::execute(WorkspaceRegistry& workspace,
                 globalRefDy = 0.0;
                 globalRefTheta = 0.0;
                 hasCustomRef = true;
+            }
+        }
+
+        if (m_stepCallback) {
+            m_stepCallback(currentStepIndex, 100, stepTimer.elapsed() / 1000.0, true, true);
+        }
+        if (progress) {
+            progress((currentStepIndex + 1) * 100 / totalSteps);
+        }
+        currentStepIndex++;
+
+        // 1.5 Background Normalization Phase (BGE)
+        if (runBGE) {
+            for (size_t k = 0; k < batchNames.size(); ++k) {
+                std::string name = batchNames[k];
+                std::string bgeBatchName = name + "_bge";
+                int bestFrameIdx = batchRegs[k].bestFrameIdx;
+                
+                int cols = config.count("bge_grid_cols") ? std::stoi(config.at("bge_grid_cols")) : 10;
+                int rows = config.count("bge_grid_rows") ? std::stoi(config.at("bge_grid_rows")) : 10;
+                int gridSize = std::max(cols, rows);
+
+                BackgroundExtractionAlgorithm bge;
+                std::map<std::string, std::string> bgeConfig = {
+                    {"input_name", name},
+                    {"output_name", bgeBatchName},
+                    {"order", config.count("bge_poly_order") ? config.at("bge_poly_order") : "3"},
+                    {"grid_size", std::to_string(gridSize)},
+                    {"method", config.count("bge_model_method") ? config.at("bge_model_method") : "Polynomial"},
+                    {"rbf_smoothing", config.count("bge_rbf_smoothing") ? config.at("bge_rbf_smoothing") : "0.01"},
+                    {"auto_exclude", config.count("bge_auto_exclude") ? config.at("bge_auto_exclude") : "false"},
+                    {"max_deviation", config.count("bge_max_deviation") ? config.at("bge_max_deviation") : "3.0"},
+                    {"max_structure", config.count("bge_max_structure") ? config.at("bge_max_structure") : "1.5"},
+                    {"normalize", "true"},
+                    {"ref_frame_index", std::to_string(bestFrameIdx)}
+                };
+                
+                Logger::info("Preprocessing", QString("Running Background Normalization on batch '%1'...").arg(QString::fromStdString(name)));
+                runStep(bge, bgeConfig);
+                
+                currentBatchNames[k] = bgeBatchName;
+                batchRegs[k].name = bgeBatchName;
             }
         }
 
@@ -1205,18 +1219,36 @@ std::vector<std::string> PreprocessingPipeline::getPlannedSteps(const std::map<s
         }
     } else if (stage == "align_stack") {
         std::vector<std::string> batchNames = splitString(config.count("registered_light_batch_name") ? config.at("registered_light_batch_name") : "", ';');
+        bool runBGE = config.count("run_bge") ? (config.at("run_bge") == "true") : true;
+        bool alignMutually = config.count("align_mutually") ? (config.at("align_mutually") == "true") : true;
+
+        std::vector<std::string> filters;
         for (const auto& name : batchNames) {
             std::string filter = name;
             size_t pos = filter.find("preprocessed_lights_");
             if (pos != std::string::npos) {
                 filter = filter.substr(pos + 20);
             }
-            steps.push_back("Register " + filter + " to Reference");
-            bool runBGE = config.count("run_bge") ? (config.at("run_bge") == "true") : true;
-            if (runBGE) {
+            filters.push_back(filter);
+        }
+
+        // 1. Finalize Registration
+        steps.push_back("Finalize Registration");
+        
+        // 1.5 Background Normalization
+        if (runBGE) {
+            for (const auto& filter : filters) {
                 steps.push_back("Background Normalization " + filter);
             }
+        }
+
+        // 3. Align
+        for (const auto& filter : filters) {
             steps.push_back("Align " + filter + " Frames");
+        }
+        
+        // 4. Stack
+        for (const auto& filter : filters) {
             steps.push_back("Stack " + filter + " Frames");
         }
     }

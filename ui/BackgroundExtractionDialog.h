@@ -64,19 +64,16 @@ private:
     QSlider* m_rbfSmoothingSlider;
     QDoubleSpinBox* m_rbfSmoothingSpin;
 
-    QSlider* m_sigmaSlider;
-    QDoubleSpinBox* m_sigmaSpin;
-
-    QCheckBox* m_equalizeChk;
+    QCheckBox* m_normalizeChk;
 
     // Grid Generation controls
     QSpinBox* m_gridColsSpin;
     QSpinBox* m_gridRowsSpin;
     QCheckBox* m_autoExcludeChk;
-    QDoubleSpinBox* m_excludeThresholdSpin;
+    QDoubleSpinBox* m_maxDeviationSpin;
+    QDoubleSpinBox* m_maxStructureSpin;
 
     // Advanced Preferences
-    double m_sampleFrac = 0.01;
     double m_huberDelta = 5.0;
     int m_threads = -1;
 };

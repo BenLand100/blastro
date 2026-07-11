@@ -19,6 +19,7 @@
 #include "BackgroundExtractionDialog.h"
 #include <QJsonObject>
 #include "algorithms/BackgroundExtractor.h"
+#include "core/MathUtils.h"
 #include "core/GrayscaleImage.h"
 #include "core/RGBImage.h"
 #include "core/Preferences.h"
@@ -51,7 +52,7 @@ static float getPixelValue(const ImageVariant& imgVar, int x, int y, int channel
     return 0.0f;
 }
 
-static void getLocalPatchStats(const ImageVariant& imgVar, int cx, int cy, int size, double& median, double& stddev) {
+static void getLocalPatchStats(const ImageVariant& imgVar, int cx, int cy, int size, double& median, double& sn) {
     std::vector<float> vals;
     vals.reserve(size * size);
     int w = 0, h = 0;
@@ -64,7 +65,6 @@ static void getLocalPatchStats(const ImageVariant& imgVar, int cx, int cy, int s
     }
 
     int half = size / 2;
-    double sum = 0.0;
     for (int dy = -half; dy <= half; ++dy) {
         for (int dx = -half; dx <= half; ++dx) {
             int px = cx + dx;
@@ -77,30 +77,21 @@ static void getLocalPatchStats(const ImageVariant& imgVar, int cx, int cy, int s
                     val = (getPixelValue(imgVar, px, py, 0) + getPixelValue(imgVar, px, py, 1) + getPixelValue(imgVar, px, py, 2)) / 3.0f;
                 }
                 vals.push_back(val);
-                sum += val;
             }
         }
     }
 
     if (vals.empty()) {
         median = 0.0;
-        stddev = 0.0;
+        sn = 0.0;
         return;
     }
 
-    std::sort(vals.begin(), vals.end());
-    median = vals[vals.size() / 2];
-
-    double mean = sum / vals.size();
-    double sumSqDiff = 0.0;
-    for (float val : vals) {
-        double diff = val - mean;
-        sumSqDiff += diff * diff;
-    }
-    stddev = std::sqrt(sumSqDiff / vals.size());
+    median = MathUtils::computeMedian(vals);
+    sn = MathUtils::computeRousseeuwSn(vals);
 }
 
-static void getGlobalStats(const ImageVariant& imgVar, double& median, double& stddev) {
+static void getGlobalStats(const ImageVariant& imgVar, double& median, double& sn) {
     int w = 0, h = 0;
     if (std::holds_alternative<GrayscaleImagePtr>(imgVar)) {
         auto img = std::get<GrayscaleImagePtr>(imgVar);
@@ -111,7 +102,6 @@ static void getGlobalStats(const ImageVariant& imgVar, double& median, double& s
     }
 
     std::vector<float> vals;
-    double sum = 0.0;
     for (int y = 0; y < h; y += 4) {
         for (int x = 0; x < w; x += 4) {
             float val = 0.0f;
@@ -121,26 +111,17 @@ static void getGlobalStats(const ImageVariant& imgVar, double& median, double& s
                 val = (getPixelValue(imgVar, x, y, 0) + getPixelValue(imgVar, x, y, 1) + getPixelValue(imgVar, x, y, 2)) / 3.0f;
             }
             vals.push_back(val);
-            sum += val;
         }
     }
 
     if (vals.empty()) {
         median = 0.0;
-        stddev = 0.0;
+        sn = 0.0;
         return;
     }
 
-    std::sort(vals.begin(), vals.end());
-    median = vals[vals.size() / 2];
-
-    double mean = sum / vals.size();
-    double sumSqDiff = 0.0;
-    for (float val : vals) {
-        double diff = val - mean;
-        sumSqDiff += diff * diff;
-    }
-    stddev = std::sqrt(sumSqDiff / vals.size());
+    median = MathUtils::computeMedian(vals);
+    sn = MathUtils::computeRousseeuwSn(vals);
 }
 
 BackgroundExtractionDialog::BackgroundExtractionDialog(WorkspaceRegistry& workspace, QWidget* parent)
@@ -210,35 +191,11 @@ BackgroundExtractionDialog::BackgroundExtractionDialog(WorkspaceRegistry& worksp
         m_rbfSmoothingSlider->blockSignals(false);
     });
 
-    // Sigma Cut
-    QHBoxLayout* sigmaLayout = new QHBoxLayout();
-    m_sigmaSlider = new QSlider(Qt::Horizontal, this);
-    m_sigmaSlider->setRange(10, 100); // 1.0 to 10.0 in tenths
-    m_sigmaSlider->setValue(30);
-    m_sigmaSpin = new QDoubleSpinBox(this);
-    m_sigmaSpin->setRange(1.0, 10.0);
-    m_sigmaSpin->setSingleStep(0.1);
-    m_sigmaSpin->setValue(3.0);
-    sigmaLayout->addWidget(m_sigmaSlider, 1);
-    sigmaLayout->addWidget(m_sigmaSpin);
-    settingsForm->addRow("Sigma Rejection Cut:", sigmaLayout);
-
-    connect(m_sigmaSlider, &QSlider::valueChanged, this, [this](int val) {
-        m_sigmaSpin->blockSignals(true);
-        m_sigmaSpin->setValue(val / 10.0);
-        m_sigmaSpin->blockSignals(false);
-    });
-    connect(m_sigmaSpin, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double val) {
-        m_sigmaSlider->blockSignals(true);
-        m_sigmaSlider->setValue(static_cast<int>(val * 10.0));
-        m_sigmaSlider->blockSignals(false);
-    });
-
-    // Equalize Channels Checkbox
+    // Normalize Checkbox
     QHBoxLayout* togglesLayout = new QHBoxLayout();
-    m_equalizeChk = new QCheckBox("Equalize Channels", this);
-    m_equalizeChk->setChecked(true);
-    togglesLayout->addWidget(m_equalizeChk);
+    m_normalizeChk = new QCheckBox("Normalize (Preserve Median)", this);
+    m_normalizeChk->setChecked(true);
+    togglesLayout->addWidget(m_normalizeChk);
     settingsForm->addRow("", togglesLayout);
 
     mainLayout->addWidget(settingsGroup);
@@ -279,20 +236,31 @@ BackgroundExtractionDialog::BackgroundExtractionDialog(WorkspaceRegistry& worksp
 
     // Bad point rejection controls
     QHBoxLayout* rejectLayout = new QHBoxLayout();
-    m_autoExcludeChk = new QCheckBox("Auto-Exclude Stars", this);
+    m_autoExcludeChk = new QCheckBox("Enable Rejection", this);
     m_autoExcludeChk->setChecked(true);
     rejectLayout->addWidget(m_autoExcludeChk);
 
-    rejectLayout->addWidget(new QLabel("Thresh:", this));
-    m_excludeThresholdSpin = new QDoubleSpinBox(this);
-    m_excludeThresholdSpin->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-    m_excludeThresholdSpin->setRange(0.5, 10.0);
-    m_excludeThresholdSpin->setSingleStep(0.1);
-    m_excludeThresholdSpin->setValue(1.5);
-    rejectLayout->addWidget(m_excludeThresholdSpin);
+    rejectLayout->addWidget(new QLabel("Max Dev:", this));
+    m_maxDeviationSpin = new QDoubleSpinBox(this);
+    m_maxDeviationSpin->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    m_maxDeviationSpin->setRange(0.5, 10.0);
+    m_maxDeviationSpin->setSingleStep(0.5);
+    m_maxDeviationSpin->setValue(3.0);
+    rejectLayout->addWidget(m_maxDeviationSpin);
+
+    rejectLayout->addWidget(new QLabel("Max Struct:", this));
+    m_maxStructureSpin = new QDoubleSpinBox(this);
+    m_maxStructureSpin->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    m_maxStructureSpin->setRange(0.1, 10.0);
+    m_maxStructureSpin->setSingleStep(0.1);
+    m_maxStructureSpin->setValue(1.5);
+    rejectLayout->addWidget(m_maxStructureSpin);
     gridForm->addRow("Bad Point Rejection:", rejectLayout);
 
-    connect(m_autoExcludeChk, &QCheckBox::toggled, m_excludeThresholdSpin, &QDoubleSpinBox::setEnabled);
+    connect(m_autoExcludeChk, &QCheckBox::toggled, this, [this](bool checked) {
+        m_maxDeviationSpin->setEnabled(checked);
+        m_maxStructureSpin->setEnabled(checked);
+    });
 
     mainLayout->addWidget(gridGroup);
 
@@ -369,13 +337,6 @@ void BackgroundExtractionDialog::onPrefsClicked() {
     form->setContentsMargins(15, 15, 15, 15);
     form->setSpacing(10);
 
-    QDoubleSpinBox* fracSpin = new QDoubleSpinBox(&dlg);
-    fracSpin->setRange(0.0001, 0.5);
-    fracSpin->setSingleStep(0.005);
-    fracSpin->setDecimals(4);
-    fracSpin->setValue(m_sampleFrac);
-    form->addRow("Sample Fraction (0.01 = 1%):", fracSpin);
-
     QDoubleSpinBox* deltaSpin = new QDoubleSpinBox(&dlg);
     deltaSpin->setRange(0.1, 100.0);
     deltaSpin->setSingleStep(0.5);
@@ -399,7 +360,6 @@ void BackgroundExtractionDialog::onPrefsClicked() {
     form->addRow(btns);
 
     if (dlg.exec() == QDialog::Accepted) {
-        m_sampleFrac = fracSpin->value();
         m_huberDelta = deltaSpin->value();
         m_threads = threadSpin->value();
     }
@@ -410,9 +370,11 @@ std::map<std::string, std::string> BackgroundExtractionDialog::getConfig() const
     config["method"] = m_methodCombo->currentIndex() == 1 ? "RBF" : "Polynomial";
     config["order"] = std::to_string(m_orderSpin->value());
     config["rbf_smoothing"] = std::to_string(m_rbfSmoothingSpin->value());
-    config["sigma_cut"] = std::to_string(m_sigmaSpin->value());
-    config["equalize"] = m_equalizeChk->isChecked() ? "true" : "false";
-    config["sample_frac"] = std::to_string(m_sampleFrac);
+    config["normalize"] = m_normalizeChk->isChecked() ? "true" : "false";
+    config["grid_size"] = std::to_string(std::max(m_gridColsSpin->value(), m_gridRowsSpin->value()));
+    config["auto_exclude"] = m_autoExcludeChk->isChecked() ? "true" : "false";
+    config["max_deviation"] = std::to_string(m_maxDeviationSpin->value());
+    config["max_structure"] = std::to_string(m_maxStructureSpin->value());
     config["huber_delta"] = std::to_string(m_huberDelta);
     config["threads"] = std::to_string(m_threads);
 
@@ -451,44 +413,23 @@ void BackgroundExtractionDialog::onGenerateGridClicked() {
     int cols = m_gridColsSpin->value();
     int rows = m_gridRowsSpin->value();
     
-    double marginX = imgSz.width() * 0.08;
-    double marginY = imgSz.height() * 0.08;
-    
-    double stepX = (imgSz.width() - 2 * marginX) / std::max(1, cols - 1);
-    double stepY = (imgSz.height() - 2 * marginY) / std::max(1, rows - 1);
-    
-    // Compute global stats if bad point auto-exclusion is enabled
-    bool runExclude = m_autoExcludeChk->isChecked();
-    double globalMedian = 0.0, globalStddev = 0.0;
-    if (runExclude) {
-        getGlobalStats(win->currentImage(), globalMedian, globalStddev);
+    double maxDeviation = 9999.0;
+    double maxStructure = 9999.0;
+    if (m_autoExcludeChk->isChecked()) {
+        maxDeviation = m_maxDeviationSpin->value();
+        maxStructure = m_maxStructureSpin->value();
     }
     
-    std::vector<std::pair<double, double>> pts;
-    for (int r = 0; r < rows; ++r) {
-        for (int c = 0; c < cols; ++c) {
-            double x = marginX + c * stepX;
-            double y = marginY + r * stepY;
-            
-            // Check for bad point exclusion
-            if (runExclude) {
-                double localMedian = 0.0, localStddev = 0.0;
-                getLocalPatchStats(win->currentImage(), static_cast<int>(std::round(x)), static_cast<int>(std::round(y)), 15, localMedian, localStddev);
-                
-                // Exclude if local median exceeds threshold of global noise floor,
-                // or if local standard deviation is too high
-                double thresholdVal = globalMedian + m_excludeThresholdSpin->value() * globalStddev;
-                if (localMedian > thresholdVal) {
-                    continue; // Exclude
-                }
-                if (localStddev > 1.5 * globalStddev) {
-                    continue; // Exclude
-                }
-            }
-            
-            pts.push_back({x, y});
-        }
+    ImageVariant currentImg = win->currentImage();
+    GrayscaleImagePtr grayImg;
+    if (std::holds_alternative<GrayscaleImagePtr>(currentImg)) {
+        grayImg = std::get<GrayscaleImagePtr>(currentImg);
+    } else if (std::holds_alternative<RGBImagePtr>(currentImg)) {
+        grayImg = std::get<RGBImagePtr>(currentImg)->g();
     }
+    
+    std::vector<std::pair<double, double>> pts = BackgroundExtractor::generateGridPoints(grayImg, cols, rows, maxDeviation, maxStructure);
+
     win->imageView()->setBgeControlPoints(pts);
     win->imageView()->setShowBgeControlPoints(true, true);
 }
@@ -547,9 +488,9 @@ QJsonObject BackgroundExtractionDialog::serializeState() const {
     obj["method_index"] = m_methodCombo->currentIndex();
     obj["order"] = m_orderSpin->value();
     obj["rbf_smoothing"] = m_rbfSmoothingSpin->value();
-    obj["sigma_cut"] = m_sigmaSpin->value();
-    obj["equalize"] = m_equalizeChk->isChecked();
-    obj["sample_frac"] = m_sampleFrac;
+    obj["normalize"] = m_normalizeChk->isChecked();
+    obj["max_deviation"] = m_maxDeviationSpin->value();
+    obj["max_structure"] = m_maxStructureSpin->value();
     obj["huber_delta"] = m_huberDelta;
     obj["threads"] = m_threads;
     return obj;
@@ -562,12 +503,12 @@ void BackgroundExtractionDialog::restoreState(const QJsonObject& obj) {
         m_orderSpin->setValue(obj["order"].toInt());
     if (obj.contains("rbf_smoothing"))
         m_rbfSmoothingSpin->setValue(obj["rbf_smoothing"].toDouble());
-    if (obj.contains("sigma_cut"))
-        m_sigmaSpin->setValue(obj["sigma_cut"].toDouble());
-    if (obj.contains("equalize"))
-        m_equalizeChk->setChecked(obj["equalize"].toBool());
-    if (obj.contains("sample_frac"))
-        m_sampleFrac = obj["sample_frac"].toDouble();
+    if (obj.contains("normalize"))
+        m_normalizeChk->setChecked(obj["normalize"].toBool());
+    if (obj.contains("max_deviation"))
+        m_maxDeviationSpin->setValue(obj["max_deviation"].toDouble());
+    if (obj.contains("max_structure"))
+        m_maxStructureSpin->setValue(obj["max_structure"].toDouble());
     if (obj.contains("huber_delta"))
         m_huberDelta = obj["huber_delta"].toDouble();
     if (obj.contains("threads"))

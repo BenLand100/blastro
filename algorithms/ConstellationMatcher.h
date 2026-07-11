@@ -45,7 +45,8 @@ public:
                                  const std::vector<Star>& targetStars,
                                  int kNearest = 7,
                                  double matchTolerance = 1.5,
-                                 bool useAffine = false);
+                                 bool useAffine = false,
+                                 int maxStars = 250);
 
 private:
     static std::vector<Triangle> buildTriangles(const std::vector<Star>& stars, int kNearest);

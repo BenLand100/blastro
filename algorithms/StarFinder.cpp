@@ -113,7 +113,8 @@ std::vector<Star> StarFinder::findStars(GrayscaleImagePtr img,
                                        const std::string& method,
                                        int patchRadius,
                                        double minFwhm,
-                                       double maxEccentricity) {
+                                       double maxEccentricity,
+                                       int maxRefinedStars) {
     if (!img) {
         throw std::runtime_error("StarFinder input image is null");
     }
@@ -192,54 +193,56 @@ std::vector<Star> StarFinder::findStars(GrayscaleImagePtr img,
             }
         }
 
+        // Pre-calculate X and Y interpolation weights
+        std::vector<int> bx0_arr(w), bx1_arr(w), by0_arr(h), by1_arr(h);
+        std::vector<double> tx_arr(w), ty_arr(h);
+        for (int x = 0; x < w; ++x) {
+            double gx = (static_cast<double>(x) / blockSize) - 0.5;
+            if (gx < 0.0) {
+                bx0_arr[x] = 0; bx1_arr[x] = 0; tx_arr[x] = 0.0;
+            } else {
+                bx0_arr[x] = static_cast<int>(gx);
+                bx1_arr[x] = std::min(bx0_arr[x] + 1, blocksX - 1);
+                tx_arr[x] = gx - bx0_arr[x];
+            }
+        }
+        for (int y = 0; y < h; ++y) {
+            double gy = (static_cast<double>(y) / blockSize) - 0.5;
+            if (gy < 0.0) {
+                by0_arr[y] = 0; by1_arr[y] = 0; ty_arr[y] = 0.0;
+            } else {
+                by0_arr[y] = static_cast<int>(gy);
+                by1_arr[y] = std::min(by0_arr[y] + 1, blocksY - 1);
+                ty_arr[y] = gy - by0_arr[y];
+            }
+        }
+
         // Scan for local maxima in 5x5 window above local threshold
         #pragma omp parallel
         {
             std::vector<int> localCandidates;
+            std::vector<double> bg_row(blocksX);
+            std::vector<double> noise_row(blocksX);
+
             #pragma omp for nowait
             for (int y = 2; y < h - 2; ++y) {
-                double gy = (static_cast<double>(y) / blockSize) - 0.5;
-                int by0 = 0, by1 = 0;
-                double ty = 0.0;
-                if (gy < 0.0) {
-                    by0 = 0; by1 = 0; ty = 0.0;
-                } else {
-                    by0 = static_cast<int>(gy);
-                    by1 = std::min(by0 + 1, blocksY - 1);
-                    ty = gy - by0;
+                int by0 = by0_arr[y];
+                int by1 = by1_arr[y];
+                double ty = ty_arr[y];
+                double inv_ty = 1.0 - ty;
+
+                for (int bx = 0; bx < blocksX; ++bx) {
+                    bg_row[bx] = inv_ty * blockMedians[by0 * blocksX + bx] + ty * blockMedians[by1 * blocksX + bx];
+                    noise_row[bx] = inv_ty * blockSigmas[by0 * blocksX + bx] + ty * blockSigmas[by1 * blocksX + bx];
                 }
 
                 for (int x = 2; x < w - 2; ++x) {
-                    double gx = (static_cast<double>(x) / blockSize) - 0.5;
-                    int bx0 = 0, bx1 = 0;
-                    double tx = 0.0;
-                    if (gx < 0.0) {
-                        bx0 = 0; bx1 = 0; tx = 0.0;
-                    } else {
-                        bx0 = static_cast<int>(gx);
-                        bx1 = std::min(bx0 + 1, blocksX - 1);
-                        tx = gx - bx0;
-                    }
+                    int bx0 = bx0_arr[x];
+                    int bx1 = bx1_arr[x];
+                    double tx = tx_arr[x];
 
-                    // Bilinearly interpolate local background
-                    double bg00 = blockMedians[by0 * blocksX + bx0];
-                    double bg10 = blockMedians[by0 * blocksX + bx1];
-                    double bg01 = blockMedians[by1 * blocksX + bx0];
-                    double bg11 = blockMedians[by1 * blocksX + bx1];
-                    float localBg = (1.0 - tx) * (1.0 - ty) * bg00 +
-                                    tx * (1.0 - ty) * bg10 +
-                                    (1.0 - tx) * ty * bg01 +
-                                    tx * ty * bg11;
-
-                    // Bilinearly interpolate local noise
-                    double n00 = blockSigmas[by0 * blocksX + bx0];
-                    double n10 = blockSigmas[by0 * blocksX + bx1];
-                    double n01 = blockSigmas[by1 * blocksX + bx0];
-                    double n11 = blockSigmas[by1 * blocksX + bx1];
-                    float localNoise = (1.0 - tx) * (1.0 - ty) * n00 +
-                                       tx * (1.0 - ty) * n10 +
-                                       (1.0 - tx) * ty * n01 +
-                                       tx * ty * n11;
+                    float localBg = (1.0 - tx) * bg_row[bx0] + tx * bg_row[bx1];
+                    float localNoise = (1.0 - tx) * noise_row[bx0] + tx * noise_row[bx1];
 
                     int idx = y * w + x;
                     float val = data[idx];
@@ -340,7 +343,7 @@ std::vector<Star> StarFinder::findStars(GrayscaleImagePtr img,
     std::vector<Star> detectedStars;
     int attempts = 0;
     int maxAttempts = isAdaptive ? 50000 : 2000;
-    int limit = isAdaptive ? 10000 : maxStars;
+    int limit = maxStars;
 
     // Occupancy grid to prevent overlapping fits in adaptive mode (O(1) checks)
     std::vector<uint8_t> occupied(numPixels, 0);
@@ -499,10 +502,38 @@ std::vector<Star> StarFinder::findStars(GrayscaleImagePtr img,
                 };
 
                 auto residualFn = [&](const std::vector<double>& p) -> double {
+                    double mean_x = p[0];
+                    double mean_y = p[1];
+                    double sig_x = std::max(1e-5, std::abs(p[2]));
+                    double sig_y = std::max(1e-5, std::abs(p[3]));
+                    double theta = p[4];
+                    double A = p[5];
+                    double B = p[6];
+
+                    double cost = std::cos(theta);
+                    double sint = std::sin(theta);
+                    double inv_sig_x2 = 1.0 / (2.0 * sig_x * sig_x);
+                    double inv_sig_y2 = 1.0 / (2.0 * sig_y * sig_y);
+
+                    const double* px = pxGrid.data();
+                    const double* py = pyGrid.data();
+                    const double* pval = patchValues.data();
+                    int numPixels = patchDim * patchDim;
+
                     double residualSumSq = 0.0;
-                    for (int i = 0; i < patchDim * patchDim; ++i) {
-                        double fitVal = evaluateGaussian(pxGrid[i], pyGrid[i], p[0], p[1], p[2], p[3], p[4], p[5], p[6]);
-                        double diff = patchValues[i] - fitVal;
+                    for (int i = 0; i < numPixels; ++i) {
+                        double dx = px[i] - mean_x;
+                        double dy = py[i] - mean_y;
+                        double rot_x = dx * cost - dy * sint;
+                        double rot_y = dy * cost + dx * sint;
+                        double exponent = -(rot_x * rot_x) * inv_sig_x2 - (rot_y * rot_y) * inv_sig_y2;
+                        
+                        double fitVal = B;
+                        if (exponent > -10.0) {
+                            fitVal += A * std::exp(exponent);
+                        }
+                        
+                        double diff = pval[i] - fitVal;
                         residualSumSq += diff * diff;
                     }
                     return residualSumSq;
@@ -577,10 +608,13 @@ std::vector<Star> StarFinder::findStars(GrayscaleImagePtr img,
             return a.peak > b.peak;
         });
 
-        int numRefine = std::min(static_cast<int>(detectedStars.size()), maxStars);
+        int numRefine = std::min(static_cast<int>(detectedStars.size()), maxRefinedStars);
 
         #pragma omp parallel
         {
+            std::vector<double> patchValues(patchDim * patchDim);
+            std::vector<double> x0(7);
+            
             #pragma omp for schedule(dynamic)
             for (int i = 0; i < numRefine; ++i) {
                 Star& star = detectedStars[i];
@@ -594,7 +628,6 @@ std::vector<Star> StarFinder::findStars(GrayscaleImagePtr img,
                 }
 
                 // Extract patch pixel values
-                std::vector<double> patchValues(patchDim * patchDim);
                 double patchMax = -1e30;
                 double patchMin = 1e30;
                 for (int py = -patchRadius; py <= patchRadius; ++py) {
@@ -607,21 +640,47 @@ std::vector<Star> StarFinder::findStars(GrayscaleImagePtr img,
                     }
                 }
 
-                std::vector<double> x0 = {
-                    0.0,                              // mean_x relative to patch center
-                    0.0,                              // mean_y relative to patch center
-                    2.0,                              // sig_x
-                    2.0,                              // sig_y
-                    0.0,                              // theta
-                    patchMax - patchMin,              // A (amplitude)
-                    patchMin                          // B (background)
-                };
+                x0[0] = 0.0;                              // mean_x relative to patch center
+                x0[1] = 0.0;                              // mean_y relative to patch center
+                x0[2] = 2.0;                              // sig_x
+                x0[3] = 2.0;                              // sig_y
+                x0[4] = 0.0;                              // theta
+                x0[5] = patchMax - patchMin;              // A (amplitude)
+                x0[6] = patchMin;                         // B (background)
 
                 auto residualFn = [&](const std::vector<double>& p) -> double {
+                    double mean_x = p[0];
+                    double mean_y = p[1];
+                    double sig_x = std::max(1e-5, std::abs(p[2]));
+                    double sig_y = std::max(1e-5, std::abs(p[3]));
+                    double theta = p[4];
+                    double A = p[5];
+                    double B = p[6];
+
+                    double cost = std::cos(theta);
+                    double sint = std::sin(theta);
+                    double inv_sig_x2 = 1.0 / (2.0 * sig_x * sig_x);
+                    double inv_sig_y2 = 1.0 / (2.0 * sig_y * sig_y);
+
+                    const double* px = pxGrid.data();
+                    const double* py = pyGrid.data();
+                    const double* pval = patchValues.data();
+                    int numPixels = patchDim * patchDim;
+
                     double residualSumSq = 0.0;
-                    for (int j = 0; j < patchDim * patchDim; ++j) {
-                        double fitVal = evaluateGaussian(pxGrid[j], pyGrid[j], p[0], p[1], p[2], p[3], p[4], p[5], p[6]);
-                        double diff = patchValues[j] - fitVal;
+                    for (int j = 0; j < numPixels; ++j) {
+                        double dx = px[j] - mean_x;
+                        double dy = py[j] - mean_y;
+                        double rot_x = dx * cost - dy * sint;
+                        double rot_y = dy * cost + dx * sint;
+                        double exponent = -(rot_x * rot_x) * inv_sig_x2 - (rot_y * rot_y) * inv_sig_y2;
+                        
+                        double fitVal = B;
+                        if (exponent > -10.0) {
+                            fitVal += A * std::exp(exponent);
+                        }
+                        
+                        double diff = pval[j] - fitVal;
                         residualSumSq += diff * diff;
                     }
                     return residualSumSq;

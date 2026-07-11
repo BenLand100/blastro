@@ -39,54 +39,81 @@ static std::vector<double> getPolynomialTerms(double x, double y, int order) {
     return terms;
 }
 
-std::vector<std::pair<double, double>> BackgroundExtractor::generateSamplePoints(
+static bool getGlobalStats(GrayscaleImagePtr img, double& median, double& sn) {
+    if (!img) return false;
+    int w = img->width();
+    int h = img->height();
+    int numPixels = w * h;
+    const float* data = img->buffer()->data();
+    MathUtils::estimateImageStats(data, numPixels, median, sn, 2000);
+    return true;
+}
+
+static bool getLocalPatchStats(GrayscaleImagePtr img, int cx, int cy, int patchRadius, double& median, double& sn) {
+    int w = img->width();
+    int h = img->height();
+    const float* data = img->buffer()->data();
+    std::vector<float> patchValues;
+    patchValues.reserve((2 * patchRadius + 1) * (2 * patchRadius + 1));
+    for (int dy = -patchRadius; dy <= patchRadius; ++dy) {
+        for (int dx = -patchRadius; dx <= patchRadius; ++dx) {
+            int px = cx + dx;
+            int py = cy + dy;
+            if (px >= 0 && px < w && py >= 0 && py < h) {
+                float val = data[py * w + px];
+                if (!std::isnan(val)) {
+                    patchValues.push_back(val);
+                }
+            }
+        }
+    }
+    if (patchValues.empty()) return false;
+    median = MathUtils::computeMedian(patchValues);
+    sn = MathUtils::computeRousseeuwSn(patchValues);
+    return true;
+}
+
+std::vector<std::pair<double, double>> BackgroundExtractor::generateGridPoints(
     GrayscaleImagePtr img,
-    double sigmaCut,
-    double sampleFrac
+    int cols,
+    int rows,
+    double maxDeviation,
+    double maxStructure
 ) {
     std::vector<std::pair<double, double>> pts;
     if (!img) return pts;
     int w = img->width();
     int h = img->height();
-    int numPixels = w * h;
-    const float* data = img->buffer()->data();
 
-    std::vector<float> sortedData;
-    sortedData.reserve(numPixels);
-    for (int i = 0; i < numPixels; ++i) {
-        if (!std::isnan(data[i])) {
-            sortedData.push_back(data[i]);
-        }
+    double globalMedian = 0.0, globalSn = 0.0;
+    if (!getGlobalStats(img, globalMedian, globalSn)) {
+        return pts;
     }
-    if (sortedData.empty()) return pts;
-    std::sort(sortedData.begin(), sortedData.end());
-    double median = sortedData[sortedData.size() / 2];
 
-    double sumSqDiff = 0.0;
-    int validPixels = 0;
-    for (int i = 0; i < numPixels; ++i) {
-        float val = data[i];
-        if (!std::isnan(val)) {
-            double diff = val - median;
-            sumSqDiff += diff * diff;
-            validPixels++;
-        }
-    }
-    double stddev = std::sqrt(sumSqDiff / (validPixels > 1 ? validPixels : 1));
-    double lowBound = median - sigmaCut * stddev;
-    double highBound = median + sigmaCut * stddev;
+    double marginX = w * 0.08;
+    double marginY = h * 0.08;
+    double stepX = (w - 2 * marginX) / std::max(1, cols - 1);
+    double stepY = (h - 2 * marginY) / std::max(1, rows - 1);
 
-    std::minstd_rand rng(1337);
-    std::uniform_real_distribution<double> dist(0.0, 1.0);
+    for (int r = 0; r < rows; ++r) {
+        for (int c = 0; c < cols; ++c) {
+            double x = marginX + c * stepX;
+            double y = marginY + r * stepY;
 
-    for (int y = 0; y < h; ++y) {
-        for (int x = 0; x < w; ++x) {
-            float val = data[y * w + x];
-            if (val >= lowBound && val <= highBound) {
-                if (dist(rng) < sampleFrac) {
-                    pts.push_back({static_cast<double>(x), static_cast<double>(y)});
+            double localMedian = 0.0, localSn = 0.0;
+            if (getLocalPatchStats(img, static_cast<int>(std::round(x)), static_cast<int>(std::round(y)), 15, localMedian, localSn)) {
+                double thresholdVal = globalMedian + maxDeviation * globalSn;
+                if (localMedian > thresholdVal) {
+                    continue; // Exclude
                 }
+                if (localSn > maxStructure * globalSn) {
+                    continue; // Exclude
+                }
+            } else {
+                continue; // Exclude if patch has no valid data
             }
+
+            pts.push_back({x, y});
         }
     }
     return pts;
@@ -94,17 +121,17 @@ std::vector<std::pair<double, double>> BackgroundExtractor::generateSamplePoints
 
 GrayscaleImagePtr BackgroundExtractor::extractGrayscale(GrayscaleImagePtr src,
                                                        int order,
-                                                       double sigmaCut,
-                                                       double sampleFrac,
+                                                       int gridSize,
                                                        double huberDelta,
-                                                       bool equalize,
+                                                       bool normalize,
                                                        ProgressCallback progress,
                                                        int progressStart,
                                                        int progressEnd,
                                                        const std::string& method,
                                                        double rbfSmoothing,
-                                                       bool restoreMedian,
-                                                       const std::vector<std::pair<double, double>>& customControlPoints) {
+                                                       const std::vector<std::pair<double, double>>& customControlPoints,
+                                                       double maxDeviation,
+                                                       double maxStructure) {
     if (!src) return nullptr;
 
     int w = src->width();
@@ -155,56 +182,44 @@ GrayscaleImagePtr BackgroundExtractor::extractGrayscale(GrayscaleImagePtr src,
         }
     } else {
         if (progress) progress(progressStart + (progressEnd - progressStart) * 5 / 100);
-        Logger::info("BackgroundExtraction", QString("Analyzing image data statistics (%1x%2 pixels)...").arg(w).arg(h));
-        
-        std::vector<float> sortedData;
-        sortedData.reserve(numPixels);
-        for (int i = 0; i < numPixels; ++i) {
-            if (!std::isnan(data[i])) {
-                sortedData.push_back(data[i]);
-            }
-        }
-        if (sortedData.empty()) {
-            throw std::runtime_error("No valid pixels in the image channel for background extraction");
-        }
-        std::sort(sortedData.begin(), sortedData.end());
-        int validCount = sortedData.size();
-        double median = sortedData[validCount / 2];
+        Logger::info("BackgroundExtraction", QString("Auto-generating sample grid of size %1x%1...").arg(gridSize));
 
-        double sumSqDiff = 0.0;
-        int validPixels = 0;
-        for (int i = 0; i < numPixels; ++i) {
-            float val = data[i];
-            if (!std::isnan(val)) {
-                double diff = val - median;
-                sumSqDiff += diff * diff;
-                validPixels++;
-            }
-        }
-        double stddev = std::sqrt(sumSqDiff / (validPixels > 1 ? validPixels : 1));
-        Logger::info("BackgroundExtraction", QString("  Channel Stats: Median = %1, StdDev = %2").arg(median).arg(stddev));
+        std::vector<std::pair<double, double>> pts = generateGridPoints(src, gridSize, gridSize, maxDeviation, maxStructure);
 
-        if (progress) progress(progressStart + (progressEnd - progressStart) * 15 / 100);
-        double lowBound = median - sigmaCut * stddev;
-        double highBound = median + sigmaCut * stddev;
-        Logger::info("BackgroundExtraction", QString("  Selecting background sample points in range [%1, %2] (sigma_cut = %3)...")
-                     .arg(lowBound).arg(highBound).arg(sigmaCut));
-
-        std::minstd_rand rng(1337);
-        std::uniform_real_distribution<double> dist(0.0, 1.0);
-
-        for (int y = 0; y < h; ++y) {
-            for (int x = 0; x < w; ++x) {
-                float val = data[y * w + x];
-                if (val >= lowBound && val <= highBound) {
-                    if (dist(rng) < sampleFrac) {
-                        FitPoint pt;
-                        pt.x_norm = (2.0 * x - w) / w;
-                        pt.y_norm = (2.0 * y - h) / h;
-                        pt.z = val;
-                        samples.push_back(pt);
+        for (const auto& pt : pts) {
+            int cx = static_cast<int>(std::round(pt.first));
+            int cy = static_cast<int>(std::round(pt.second));
+            double sumVal = 0.0;
+            int count = 0;
+            for (int dy = -2; dy <= 2; ++dy) {
+                for (int dx = -2; dx <= 2; ++dx) {
+                    int px = cx + dx;
+                    int py = cy + dy;
+                    if (px >= 0 && px < w && py >= 0 && py < h) {
+                        float val = data[py * w + px];
+                        if (!std::isnan(val)) {
+                            sumVal += val;
+                            count++;
+                        }
                     }
                 }
+            }
+            double zVal = std::numeric_limits<double>::quiet_NaN();
+            if (count > 0) {
+                zVal = sumVal / count;
+            } else {
+                float centerVal = data[cy * w + cx];
+                if (!std::isnan(centerVal)) {
+                    zVal = centerVal;
+                }
+            }
+
+            if (!std::isnan(zVal)) {
+                FitPoint fpt;
+                fpt.x_norm = (2.0 * pt.first - w) / w;
+                fpt.y_norm = (2.0 * pt.second - h) / h;
+                fpt.z = zVal;
+                samples.push_back(fpt);
             }
         }
     }
@@ -212,7 +227,7 @@ GrayscaleImagePtr BackgroundExtractor::extractGrayscale(GrayscaleImagePtr src,
     if (samples.empty()) {
         throw std::runtime_error("No valid background sample points found");
     }
-    Logger::info("BackgroundExtraction", QString("  Selected %1 sample points for robust fitting (sample_frac = %2).").arg(samples.size()).arg(sampleFrac));
+    Logger::info("BackgroundExtraction", QString("  Selected %1 sample points for robust fitting (grid_size = %2).").arg(samples.size()).arg(gridSize));
 
     auto outBuffer = std::make_shared<ImageBuffer>(w, h);
     float* outData = outBuffer->data();
@@ -443,74 +458,35 @@ GrayscaleImagePtr BackgroundExtractor::extractGrayscale(GrayscaleImagePtr src,
         }
     }
 
-    if (restoreMedian) {
+    if (normalize) {
         if (progress) progress(progressStart + (progressEnd - progressStart) * 85 / 100);
         
-        double sumIn = 0.0;
-        long countIn = 0;
-        for (int i = 0; i < numPixels; ++i) {
-            if (!std::isnan(data[i])) {
-                sumIn += data[i];
-                countIn++;
-            }
-        }
-        double meanIn = countIn > 0 ? (sumIn / countIn) : 0.0;
-
-        double sumOut = 0.0;
-        long countOut = 0;
-        for (int i = 0; i < numPixels; ++i) {
-            if (!std::isnan(outData[i])) {
-                sumOut += outData[i];
-                countOut++;
-            }
-        }
-        double meanOut = countOut > 0 ? (sumOut / countOut) : 0.0;
-
-        float restoreOffset = static_cast<float>(meanIn - meanOut);
-        Logger::info("BackgroundExtraction", QString("  Restored Mean: mean_in=%1, mean_out=%2, offset=%3")
-                     .arg(meanIn).arg(meanOut).arg(restoreOffset));
-
-        #pragma omp parallel for
-        for (int i = 0; i < numPixels; ++i) {
-            outData[i] += restoreOffset;
-        }
-    } else if (equalize) {
-        if (progress) progress(progressStart + (progressEnd - progressStart) * 85 / 100);
-        Logger::info("BackgroundExtraction", QString("  Performing background channel equalization..."));
-
+        std::vector<float> inSorted;
         std::vector<float> outSorted;
+        inSorted.reserve(numPixels);
         outSorted.reserve(numPixels);
         for (int i = 0; i < numPixels; ++i) {
+            if (!std::isnan(data[i])) {
+                inSorted.push_back(data[i]);
+            }
             if (!std::isnan(outData[i])) {
                 outSorted.push_back(outData[i]);
             }
         }
-        if (outSorted.empty()) {
-            throw std::runtime_error("No valid pixels in the background-subtracted channel for equalization");
-        }
-        std::sort(outSorted.begin(), outSorted.end());
-        int validCount = outSorted.size();
-        double outMedian = outSorted[validCount / 2];
+        if (!inSorted.empty() && !outSorted.empty()) {
+            std::sort(inSorted.begin(), inSorted.end());
+            std::sort(outSorted.begin(), outSorted.end());
+            double medianIn = inSorted[inSorted.size() / 2];
+            double medianOut = outSorted[outSorted.size() / 2];
+            float restoreOffset = static_cast<float>(medianIn - medianOut);
+            
+            Logger::info("BackgroundExtraction", QString("  Normalized: median_in=%1, median_out=%2, offset=%3")
+                         .arg(medianIn).arg(medianOut).arg(restoreOffset));
 
-        double outSumSq = 0.0;
-        int validPixels = 0;
-        for (int i = 0; i < numPixels; ++i) {
-            float val = outData[i];
-            if (!std::isnan(val)) {
-                double diff = val - outMedian;
-                outSumSq += diff * diff;
-                validPixels++;
+            #pragma omp parallel for
+            for (int i = 0; i < numPixels; ++i) {
+                outData[i] += restoreOffset;
             }
-        }
-        double outStd = std::sqrt(outSumSq / (validPixels > 1 ? validPixels : 1));
-
-        float offset = -outMedian + sigmaCut * outStd;
-        Logger::info("BackgroundExtraction", QString("    Equalization complete: Shifted by offset = %1 to pedestal %2")
-                     .arg(offset).arg(sigmaCut * outStd));
-
-        #pragma omp parallel for
-        for (int i = 0; i < numPixels; ++i) {
-            outData[i] += offset;
         }
     }
 
@@ -520,96 +496,25 @@ GrayscaleImagePtr BackgroundExtractor::extractGrayscale(GrayscaleImagePtr src,
 
 RGBImagePtr BackgroundExtractor::extractRGB(RGBImagePtr src,
                                             int order,
-                                            double sigmaCut,
-                                            double sampleFrac,
+                                            int gridSize,
                                             double huberDelta,
-                                            bool equalize,
+                                            bool normalize,
                                             ProgressCallback progress,
                                             const std::string& method,
                                             double rbfSmoothing,
-                                            bool restoreMedian,
-                                            const std::vector<std::pair<double, double>>& customControlPoints) {
+                                            const std::vector<std::pair<double, double>>& customControlPoints,
+                                            double maxDeviation,
+                                            double maxStructure) {
     if (!src) return nullptr;
 
     Logger::info("BackgroundExtraction", "Processing Red channel background extraction...");
-    auto extR = extractGrayscale(src->r(), order, sigmaCut, sampleFrac, huberDelta, equalize && !restoreMedian, progress, 5, 33, method, rbfSmoothing, restoreMedian, customControlPoints);
+    auto extR = extractGrayscale(src->r(), order, gridSize, huberDelta, normalize, progress, 5, 33, method, rbfSmoothing, customControlPoints, maxDeviation, maxStructure);
     
     Logger::info("BackgroundExtraction", "Processing Green channel background extraction...");
-    auto extG = extractGrayscale(src->g(), order, sigmaCut, sampleFrac, huberDelta, equalize && !restoreMedian, progress, 33, 66, method, rbfSmoothing, restoreMedian, customControlPoints);
+    auto extG = extractGrayscale(src->g(), order, gridSize, huberDelta, normalize, progress, 33, 66, method, rbfSmoothing, customControlPoints, maxDeviation, maxStructure);
     
     Logger::info("BackgroundExtraction", "Processing Blue channel background extraction...");
-    auto extB = extractGrayscale(src->b(), order, sigmaCut, sampleFrac, huberDelta, equalize && !restoreMedian, progress, 66, 90, method, rbfSmoothing, restoreMedian, customControlPoints);
-
-    if (equalize && !restoreMedian) {
-        if (progress) progress(93);
-        Logger::info("BackgroundExtraction", "Performing coordinated RGB background equalization...");
-        
-        int w = src->width();
-        int h = src->height();
-        int numPixels = w * h;
-
-        auto getStats = [numPixels](GrayscaleImagePtr img, double& median, double& stddev) {
-            const float* data = img->buffer()->data();
-            std::vector<float> sorted;
-            sorted.reserve(numPixels);
-            for (int i = 0; i < numPixels; ++i) {
-                if (!std::isnan(data[i])) {
-                    sorted.push_back(data[i]);
-                }
-            }
-            if (sorted.empty()) {
-                median = 0.0;
-                stddev = 0.0;
-                return;
-            }
-            std::sort(sorted.begin(), sorted.end());
-            int validCount = sorted.size();
-            median = sorted[validCount / 2];
-
-            double sumSq = 0.0;
-            int validPixels = 0;
-            for (int i = 0; i < numPixels; ++i) {
-                float val = data[i];
-                if (!std::isnan(val)) {
-                    double diff = val - median;
-                    sumSq += diff * diff;
-                    validPixels++;
-                }
-            }
-            stddev = std::sqrt(sumSq / (validPixels > 1 ? validPixels : 1));
-        };
-
-        double medR, stdR;
-        double medG, stdG;
-        double medB, stdB;
-
-        getStats(extR, medR, stdR);
-        getStats(extG, medG, stdG);
-        getStats(extB, medB, stdB);
-
-        double maxStd = std::max({stdR, stdG, stdB});
-        float commonPedestal = static_cast<float>(sigmaCut * maxStd);
-
-        float offsetR = static_cast<float>(-medR + commonPedestal);
-        float offsetG = static_cast<float>(-medG + commonPedestal);
-        float offsetB = static_cast<float>(-medB + commonPedestal);
-
-        Logger::info("BackgroundExtraction", QString("  Coordinated Equalization stats: R_med=%1, G_med=%2, B_med=%3, common_pedestal=%4")
-                     .arg(medR).arg(medG).arg(medB).arg(commonPedestal));
-        Logger::info("BackgroundExtraction", QString("  Applying offsets: R_offset=%1, G_offset=%2, B_offset=%3")
-                     .arg(offsetR).arg(offsetG).arg(offsetB));
-
-        float* dataR = extR->buffer()->data();
-        float* dataG = extG->buffer()->data();
-        float* dataB = extB->buffer()->data();
-
-        #pragma omp parallel for
-        for (int i = 0; i < numPixels; ++i) {
-            dataR[i] += offsetR;
-            dataG[i] += offsetG;
-            dataB[i] += offsetB;
-        }
-    }
+    auto extB = extractGrayscale(src->b(), order, gridSize, huberDelta, normalize, progress, 66, 90, method, rbfSmoothing, customControlPoints, maxDeviation, maxStructure);
 
     if (progress) progress(100);
     return std::make_shared<RGBImage>(extR, extG, extB);

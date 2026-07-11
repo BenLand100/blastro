@@ -49,7 +49,7 @@ private:
     QComboBox* m_modelCombo;
 
     // Advanced Preferences
-    int m_maxStars = 500;
+    int m_maxStars = 250;
     double m_matchTol = 1.5;
     int m_threads = -1;
 };

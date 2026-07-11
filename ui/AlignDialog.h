@@ -49,7 +49,6 @@ private:
     QComboBox* m_interpolationCombo;
 
     // Advanced Preferences
-    int m_stripHeight = 256;
     int m_threads = -1;
     bool m_evictCache = true;
 };

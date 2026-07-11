@@ -139,12 +139,6 @@ void AlignDialog::onPrefsClicked() {
     form->setContentsMargins(15, 15, 15, 15);
     form->setSpacing(10);
 
-    QSpinBox* chunkSpin = new QSpinBox(&dlg);
-    chunkSpin->setRange(16, 4096);
-    chunkSpin->setSingleStep(16);
-    chunkSpin->setValue(m_stripHeight);
-    form->addRow("Warp Chunk Height (Rows):", chunkSpin);
-
     QSpinBox* threadSpin = new QSpinBox(&dlg);
     threadSpin->setRange(1, 64);
     threadSpin->setValue(m_threads > 0 ? m_threads : Preferences::instance().getThreadCount());
@@ -166,7 +160,6 @@ void AlignDialog::onPrefsClicked() {
     form->addRow(btns);
 
     if (dlg.exec() == QDialog::Accepted) {
-        m_stripHeight = chunkSpin->value();
         m_threads = threadSpin->value();
         m_evictCache = evictChk->isChecked();
     }
@@ -194,7 +187,6 @@ std::map<std::string, std::string> AlignDialog::getConfig() const {
     config["reference_mode"] = m_refModeCombo->currentData().toString().toStdString();
     config["interpolation_method"] = m_interpolationCombo->currentData().toString().toStdString();
 
-    config["strip_height"] = std::to_string(m_stripHeight);
     config["threads"] = std::to_string(m_threads);
     config["evict_cache"] = m_evictCache ? "true" : "false";
     return config;
@@ -222,7 +214,6 @@ QJsonObject AlignDialog::serializeState() const {
     obj["reference_mode"] = m_refModeCombo->currentData().toString();
     obj["interpolation_method"] = m_interpolationCombo->currentData().toString();
 
-    obj["strip_height"] = m_stripHeight;
     obj["threads"] = m_threads;
     obj["evict_cache"] = m_evictCache;
     return obj;
@@ -247,8 +238,6 @@ void AlignDialog::restoreState(const QJsonObject& obj) {
         if (idx >= 0) m_interpolationCombo->setCurrentIndex(idx);
     }
 
-    if (obj.contains("strip_height"))
-        m_stripHeight = obj["strip_height"].toInt();
     if (obj.contains("threads"))
         m_threads = obj["threads"].toInt();
     if (obj.contains("evict_cache"))

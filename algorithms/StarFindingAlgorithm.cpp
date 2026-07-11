@@ -43,7 +43,8 @@ void StarFindingAlgorithm::execute(WorkspaceRegistry& workspace,
     }
     double snrMin = config.count("snr_min") ? std::stod(config.at("snr_min")) : 4.0;
     double minFwhm = config.count("min_fwhm") ? std::stod(config.at("min_fwhm")) : 1.5;
-    int maxStars = config.count("max_stars") ? std::stoi(config.at("max_stars")) : 500;
+    int maxStars = config.count("max_stars") ? std::stoi(config.at("max_stars")) : 10000;
+    int maxRefinedStars = config.count("max_refined_stars") ? std::stoi(config.at("max_refined_stars")) : 250;
     double maxEccentricity = config.count("max_eccentricity") ? std::stod(config.at("max_eccentricity")) : 0.9;
 
     WorkspaceElement inputElem = workspace.getElement(inputName);
@@ -62,11 +63,13 @@ void StarFindingAlgorithm::execute(WorkspaceRegistry& workspace,
         omp_set_num_threads(threads);
     }
 
-    Logger::header("StarFinding", QString("Starting execution. Target batch: %1, detection method: %2, min SNR: %3, min FWHM: %4, threads: %5")
+    Logger::header("StarFinding", QString("Starting execution. Target batch: %1, detection method: %2, min SNR: %3, min FWHM: %4, max stars: %5, max refined: %6, threads: %7")
                    .arg(QString::fromStdString(inputName))
                    .arg(QString::fromStdString(detectionMethod))
                    .arg(snrMin)
                    .arg(minFwhm)
+                   .arg(maxStars)
+                   .arg(maxRefinedStars)
                    .arg(threads));
 
     QElapsedTimer totalTimer;
@@ -107,8 +110,7 @@ void StarFindingAlgorithm::execute(WorkspaceRegistry& workspace,
                 continue;
             }
 
-            int maxStarsDetect = (detectionMethod == "adaptive") ? 10000 : maxStars;
-            std::vector<Star> detectedStars = StarFinder::findStars(channel, maxStarsDetect, snrMin, detectionMethod, 10, minFwhm, maxEccentricity);
+            std::vector<Star> detectedStars = StarFinder::findStars(channel, maxStars, snrMin, detectionMethod, 10, minFwhm, maxEccentricity, maxRefinedStars);
 
             // Compute statistics
             double sumFwhm = 0.0;

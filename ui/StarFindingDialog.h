@@ -40,7 +40,8 @@ private:
     QDoubleSpinBox* m_minFwhmSpin;
 
     // Advanced parameters
-    int m_maxStars = 500;
+    int m_maxStars = 10000;
+    int m_maxRefinedStars = 250;
     double m_maxEccentricity = 0.9;
     int m_threads = -1;
 };

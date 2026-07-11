@@ -201,14 +201,6 @@ void StackingDialog::onPrefsClicked() {
     form->setContentsMargins(15, 15, 15, 15);
     form->setSpacing(10);
 
-    QComboBox* weightCombo = new QComboBox(&dlg);
-    weightCombo->addItem("None (Equal weights)", "none");
-    weightCombo->addItem("SNR-based Weighting", "snr");
-    weightCombo->addItem("FWHM-based Weighting", "fwhm");
-    if (m_weightMethod == "snr") weightCombo->setCurrentIndex(1);
-    else if (m_weightMethod == "fwhm") weightCombo->setCurrentIndex(2);
-    form->addRow("Frame Weighting:", weightCombo);
-
     QComboBox* modeCombo = new QComboBox(&dlg);
     modeCombo->addItem("Full RAM Stacking", "ram");
     modeCombo->addItem("2D Chunked Stacking (Disk-Backed)", "chunked");
@@ -249,7 +241,6 @@ void StackingDialog::onPrefsClicked() {
     form->addRow(btns);
 
     if (dlg.exec() == QDialog::Accepted) {
-        m_weightMethod = weightCombo->currentData().toString().toStdString();
         m_patchSize = patchSpin->value();
         m_threads = threadSpin->value();
         Preferences::instance().setStackingMode(modeCombo->currentData().toString().toStdString());
@@ -291,7 +282,6 @@ std::map<std::string, std::string> StackingDialog::getConfig() const {
         config["quantile_high"] = "0.03";
     }
 
-    config["weight_method"] = m_weightMethod;
     config["stacking_mode"] = Preferences::instance().getStackingMode();
     config["patch_size"] = std::to_string(m_patchSize);
     config["threads"] = std::to_string(m_threads);
@@ -322,7 +312,6 @@ QJsonObject StackingDialog::serializeState() const {
     obj["rejection"] = m_rejectionCombo->currentData().toString();
     obj["sigma_low"] = m_lowClipSpin->value();
     obj["sigma_high"] = m_highClipSpin->value();
-    obj["weight_method"] = QString::fromStdString(m_weightMethod);
     obj["patch_size"] = m_patchSize;
     obj["threads"] = m_threads;
     obj["scale_additive"] = m_scaleAdditiveChk->isChecked();
@@ -343,8 +332,6 @@ void StackingDialog::restoreState(const QJsonObject& obj) {
         m_lowClipSpin->setValue(obj["sigma_low"].toDouble());
     if (obj.contains("sigma_high"))
         m_highClipSpin->setValue(obj["sigma_high"].toDouble());
-    if (obj.contains("weight_method"))
-        m_weightMethod = obj["weight_method"].toString().toStdString();
     if (obj.contains("patch_size"))
         m_patchSize = obj["patch_size"].toInt();
     if (obj.contains("threads"))

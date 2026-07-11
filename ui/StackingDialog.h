@@ -58,7 +58,6 @@ private:
     QLabel* m_slashLabel = nullptr;
 
     // Advanced Preferences
-    std::string m_weightMethod = "none";
     int m_patchSize = 1024;
     int m_threads = -1;
 };
