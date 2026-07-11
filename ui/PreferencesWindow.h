@@ -21,6 +21,7 @@
 #include <QLineEdit>
 #include <QCheckBox>
 #include <QSpinBox>
+#include <QDoubleSpinBox>
 #include <QComboBox>
 #include <QListWidget>
 
@@ -55,6 +56,7 @@ private:
     QLineEdit* m_solveFieldPathEdit;
     QSpinBox* m_threadSpin;
     QSpinBox* m_ramSpin;
+    QDoubleSpinBox* m_histLineWidthSpin;
     QListWidget* m_reposListWidget;
     QLineEdit* m_newRepoEdit;
 };

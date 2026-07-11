@@ -333,7 +333,12 @@ WorkspaceImageWindow* BackgroundExtractionDialog::getActiveImageWindow() const {
             if (auto wa = mw->findChild<WorkspaceArea*>()) {
                 QString activeName = wa->getActiveImageName();
                 if (!activeName.isEmpty()) {
-                    return wa->getImageWindow(activeName);
+                    auto win = wa->getImageWindow(activeName);
+                    // Preview windows cannot become a target
+                    if (win && win->hasPreviewActive() && (!m_previewChk || !m_previewChk->isChecked())) {
+                        return nullptr;
+                    }
+                    return win;
                 }
             }
         }
@@ -494,13 +499,14 @@ void BackgroundExtractionDialog::updateBgeModes() {
     if (!mdi) return;
     
     auto* activeWin = getActiveImageWindow();
+    bool wasPreviewActive = m_previewChk && m_previewChk->isChecked();
     
     for (auto* sub : mdi->subWindowList()) {
         if (auto* win = qobject_cast<WorkspaceImageWindow*>(sub->widget())) {
             if (win->imageView()) {
                 win->imageView()->setBgeMode(win == activeWin);
             }
-            if (win != activeWin) {
+            if (wasPreviewActive && win != activeWin) {
                 win->restoreOriginalImage();
             }
         }
@@ -516,13 +522,24 @@ void BackgroundExtractionDialog::disableAllBgeModes() {
     auto* mdi = findMdiArea();
     if (!mdi) return;
     
+    bool wasPreviewActive = m_previewChk && m_previewChk->isChecked();
+    
     for (auto* sub : mdi->subWindowList()) {
         if (auto* win = qobject_cast<WorkspaceImageWindow*>(sub->widget())) {
             if (win->imageView()) {
                 win->imageView()->setBgeMode(false);
             }
-            win->restoreOriginalImage();
+            if (wasPreviewActive) {
+                win->restoreOriginalImage();
+            }
         }
+    }
+    
+    if (m_previewChk) {
+        m_previewChk->blockSignals(true);
+        m_previewChk->setChecked(false);
+        m_previewChk->blockSignals(false);
+        m_updatePreviewBtn->setEnabled(false);
     }
 }
 
@@ -581,12 +598,12 @@ void BackgroundExtractionDialog::updatePreview() {
             auto gray = std::get<GrayscaleImagePtr>(baseImg);
             previewResult = BackgroundExtractor::extractGrayscale(
                 gray, order, gridSize, m_huberDelta, normalize,
-                nullptr, 0, 100, method, rbfSmoothing, ctrlPts, maxDeviation, maxStructure);
+                nullptr, 0, 100, method, rbfSmoothing, ctrlPts, maxDeviation, maxStructure, "Preview");
         } else if (std::holds_alternative<RGBImagePtr>(baseImg)) {
             auto rgb = std::get<RGBImagePtr>(baseImg);
             previewResult = BackgroundExtractor::extractRGB(
                 rgb, order, gridSize, m_huberDelta, normalize,
-                nullptr, method, rbfSmoothing, ctrlPts, maxDeviation, maxStructure);
+                nullptr, method, rbfSmoothing, ctrlPts, maxDeviation, maxStructure, "Preview");
         }
         win->setPreviewImage(previewResult);
     } catch (const std::exception& e) {

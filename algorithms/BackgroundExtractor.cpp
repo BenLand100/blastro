@@ -131,8 +131,11 @@ GrayscaleImagePtr BackgroundExtractor::extractGrayscale(GrayscaleImagePtr src,
                                                        double rbfSmoothing,
                                                        const std::vector<std::pair<double, double>>& customControlPoints,
                                                        double maxDeviation,
-                                                       double maxStructure) {
+                                                       double maxStructure,
+                                                       const std::string& imageName) {
     if (!src) return nullptr;
+
+    std::string prefix = imageName.empty() ? "" : "[" + imageName + "] ";
 
     int w = src->width();
     int h = src->height();
@@ -143,7 +146,7 @@ GrayscaleImagePtr BackgroundExtractor::extractGrayscale(GrayscaleImagePtr src,
     const auto& ctrlPts = !customControlPoints.empty() ? customControlPoints : src->buffer()->bgeControlPoints();
     if (!ctrlPts.empty()) {
         if (progress) progress(progressStart + (progressEnd - progressStart) * 10 / 100);
-        Logger::info("BackgroundExtraction", QString("  Using %1 control points for background fitting...").arg(ctrlPts.size()));
+        Logger::info("BackgroundExtraction", QString("%1Using %2 control points for background fitting...").arg(QString::fromStdString(prefix)).arg(ctrlPts.size()));
         for (const auto& pt : ctrlPts) {
             int cx = static_cast<int>(std::round(pt.first));
             int cy = static_cast<int>(std::round(pt.second));
@@ -182,7 +185,7 @@ GrayscaleImagePtr BackgroundExtractor::extractGrayscale(GrayscaleImagePtr src,
         }
     } else {
         if (progress) progress(progressStart + (progressEnd - progressStart) * 5 / 100);
-        Logger::info("BackgroundExtraction", QString("Auto-generating sample grid of size %1x%1...").arg(gridSize));
+        Logger::info("BackgroundExtraction", QString("%1Auto-generating sample grid of size %2x%2...").arg(QString::fromStdString(prefix)).arg(gridSize));
 
         std::vector<std::pair<double, double>> pts = generateGridPoints(src, gridSize, gridSize, maxDeviation, maxStructure);
 
@@ -227,14 +230,14 @@ GrayscaleImagePtr BackgroundExtractor::extractGrayscale(GrayscaleImagePtr src,
     if (samples.empty()) {
         throw std::runtime_error("No valid background sample points found");
     }
-    Logger::info("BackgroundExtraction", QString("  Selected %1 sample points for robust fitting (grid_size = %2).").arg(samples.size()).arg(gridSize));
+    Logger::info("BackgroundExtraction", QString("%1Selected %2 sample points for robust fitting (grid_size = %3).").arg(QString::fromStdString(prefix)).arg(samples.size()).arg(gridSize));
 
     auto outBuffer = std::make_shared<ImageBuffer>(w, h);
     float* outData = outBuffer->data();
 
     if (method == "RBF") {
-        Logger::info("BackgroundExtraction", QString("  Solving robust Thin Plate Spline RBF fit (%1 centers, smoothing = %2, max IRLS iterations = 8)...")
-                     .arg(samples.size()).arg(rbfSmoothing));
+        Logger::info("BackgroundExtraction", QString("%1Solving robust Thin Plate Spline RBF fit (%2 centers, smoothing = %3)...")
+                     .arg(QString::fromStdString(prefix)).arg(samples.size()).arg(rbfSmoothing));
 
         int n = samples.size();
         int m = n + 3;
@@ -291,12 +294,11 @@ GrayscaleImagePtr BackgroundExtractor::extractGrayscale(GrayscaleImagePtr src,
 
             auto nextCoeffs = MathUtils::solveGaussianElimination(A, B, m);
             if (nextCoeffs.empty()) {
-                Logger::warning("BackgroundExtraction", QString("    RBF IRLS Iteration %1: Linear system solve failed, stopping early.").arg(iter + 1));
+                Logger::warning("BackgroundExtraction", QString("%1RBF IRLS Iteration %2: Linear system solve failed, stopping early.").arg(QString::fromStdString(prefix)).arg(iter + 1));
                 break;
             }
             rbfCoeffs = nextCoeffs;
 
-            double sumAbsRes = 0.0;
             for (int i = 0; i < n; ++i) {
                 double xi = samples[i].x_norm;
                 double yi = samples[i].y_norm;
@@ -313,7 +315,6 @@ GrayscaleImagePtr BackgroundExtractor::extractGrayscale(GrayscaleImagePtr src,
 
                 double residual = samples[i].z - fitVal;
                 double absRes = std::abs(residual);
-                sumAbsRes += absRes;
 
                 if (absRes <= huberDelta) {
                     weights[i] = 1.0;
@@ -321,15 +322,10 @@ GrayscaleImagePtr BackgroundExtractor::extractGrayscale(GrayscaleImagePtr src,
                     weights[i] = huberDelta / absRes;
                 }
             }
-
-            if (iter == 0 || iter == maxIRLSIterations - 1) {
-                Logger::info("BackgroundExtraction", QString("    RBF IRLS Iteration %1/8: Mean Absolute Residual = %2")
-                             .arg(iter + 1).arg(sumAbsRes / n));
-            }
         }
 
         if (progress) progress(progressStart + (progressEnd - progressStart) * 65 / 100);
-        Logger::info("BackgroundExtraction", QString("  Evaluating RBF background model and performing subtraction..."));
+        Logger::info("BackgroundExtraction", QString("%1Evaluating RBF background model and performing subtraction...").arg(QString::fromStdString(prefix)));
 
         std::vector<double> x_norms(w);
         for (int x = 0; x < w; ++x) x_norms[x] = (2.0 * x - w) / w;
@@ -389,7 +385,7 @@ GrayscaleImagePtr BackgroundExtractor::extractGrayscale(GrayscaleImagePtr src,
             }
         }
 
-        Logger::info("BackgroundExtraction", QString("  Solving robust 2D polynomial surface fit (order = %1, %2 terms, max IRLS iterations = 8)...").arg(order).arg(numTerms));
+        Logger::info("BackgroundExtraction", QString("%1Solving robust 2D polynomial surface fit (order = %2, %3 terms)...").arg(QString::fromStdString(prefix)).arg(order).arg(numTerms));
         std::vector<double> coeffs(numTerms, 0.0);
         std::vector<double> weights(samples.size(), 1.0);
 
@@ -422,12 +418,11 @@ GrayscaleImagePtr BackgroundExtractor::extractGrayscale(GrayscaleImagePtr src,
 
             auto nextCoeffs = MathUtils::solveCholesky(A, B, numTerms);
             if (nextCoeffs.empty()) {
-                Logger::warning("BackgroundExtraction", QString("    IRLS Iteration %1: Cholesky decomposition failed or became unstable, stopping early.").arg(iter + 1));
+                Logger::warning("BackgroundExtraction", QString("%1IRLS Iteration %2: Cholesky decomposition failed or became unstable, stopping early.").arg(QString::fromStdString(prefix)).arg(iter + 1));
                 break; 
             }
             coeffs = nextCoeffs;
 
-            double sumAbsRes = 0.0;
             for (size_t p = 0; p < samples.size(); ++p) {
                 const auto& pt = samples[p];
                 std::vector<double> terms = getPolynomialTerms(pt.x_norm, pt.y_norm, order);
@@ -438,7 +433,6 @@ GrayscaleImagePtr BackgroundExtractor::extractGrayscale(GrayscaleImagePtr src,
 
                 double residual = pt.z - fitVal;
                 double absRes = std::abs(residual);
-                sumAbsRes += absRes;
 
                 if (absRes <= huberDelta) {
                     weights[p] = 1.0;
@@ -446,15 +440,10 @@ GrayscaleImagePtr BackgroundExtractor::extractGrayscale(GrayscaleImagePtr src,
                     weights[p] = huberDelta / absRes;
                 }
             }
-
-            if (iter == 0 || iter == maxIRLSIterations - 1) {
-                Logger::info("BackgroundExtraction", QString("    IRLS Iteration %1/8: Mean Absolute Residual = %2")
-                             .arg(iter + 1).arg(sumAbsRes / samples.size()));
-            }
         }
 
         if (progress) progress(progressStart + (progressEnd - progressStart) * 65 / 100);
-        Logger::info("BackgroundExtraction", QString("  Evaluating background model and performing subtraction..."));
+        Logger::info("BackgroundExtraction", QString("%1Evaluating background model and performing subtraction...").arg(QString::fromStdString(prefix)));
 
         std::vector<std::vector<double>> x_pows(w, std::vector<double>(order + 1, 1.0));
         for (int x = 0; x < w; ++x) {
@@ -492,27 +481,26 @@ GrayscaleImagePtr BackgroundExtractor::extractGrayscale(GrayscaleImagePtr src,
     if (normalize) {
         if (progress) progress(progressStart + (progressEnd - progressStart) * 85 / 100);
         
-        std::vector<float> inSorted;
-        std::vector<float> outSorted;
-        inSorted.reserve(numPixels);
-        outSorted.reserve(numPixels);
-        for (int i = 0; i < numPixels; ++i) {
+        std::vector<float> inSample;
+        std::vector<float> outSample;
+        inSample.reserve(100000);
+        outSample.reserve(100000);
+        int stride = std::max(1, numPixels / 100000);
+        for (int i = 0; i < numPixels; i += stride) {
             if (!std::isnan(data[i])) {
-                inSorted.push_back(data[i]);
+                inSample.push_back(data[i]);
             }
             if (!std::isnan(outData[i])) {
-                outSorted.push_back(outData[i]);
+                outSample.push_back(outData[i]);
             }
         }
-        if (!inSorted.empty() && !outSorted.empty()) {
-            std::sort(inSorted.begin(), inSorted.end());
-            std::sort(outSorted.begin(), outSorted.end());
-            double medianIn = inSorted[inSorted.size() / 2];
-            double medianOut = outSorted[outSorted.size() / 2];
+        if (!inSample.empty() && !outSample.empty()) {
+            double medianIn = MathUtils::computeMedian(inSample);
+            double medianOut = MathUtils::computeMedian(outSample);
             float restoreOffset = static_cast<float>(medianIn - medianOut);
             
-            Logger::info("BackgroundExtraction", QString("  Normalized: median_in=%1, median_out=%2, offset=%3")
-                         .arg(medianIn).arg(medianOut).arg(restoreOffset));
+            Logger::info("BackgroundExtraction", QString("%1Normalized: median_in=%2, median_out=%3, offset=%4")
+                         .arg(QString::fromStdString(prefix)).arg(medianIn).arg(medianOut).arg(restoreOffset));
 
             #pragma omp parallel for
             for (int i = 0; i < numPixels; ++i) {
@@ -535,17 +523,27 @@ RGBImagePtr BackgroundExtractor::extractRGB(RGBImagePtr src,
                                             double rbfSmoothing,
                                             const std::vector<std::pair<double, double>>& customControlPoints,
                                             double maxDeviation,
-                                            double maxStructure) {
+                                            double maxStructure,
+                                            const std::string& imageName) {
     if (!src) return nullptr;
 
-    Logger::info("BackgroundExtraction", "Processing Red channel background extraction...");
-    auto extR = extractGrayscale(src->r(), order, gridSize, huberDelta, normalize, progress, 5, 33, method, rbfSmoothing, customControlPoints, maxDeviation, maxStructure);
-    
-    Logger::info("BackgroundExtraction", "Processing Green channel background extraction...");
-    auto extG = extractGrayscale(src->g(), order, gridSize, huberDelta, normalize, progress, 33, 66, method, rbfSmoothing, customControlPoints, maxDeviation, maxStructure);
-    
-    Logger::info("BackgroundExtraction", "Processing Blue channel background extraction...");
-    auto extB = extractGrayscale(src->b(), order, gridSize, huberDelta, normalize, progress, 66, 90, method, rbfSmoothing, customControlPoints, maxDeviation, maxStructure);
+    GrayscaleImagePtr extR, extG, extB;
+
+    #pragma omp parallel sections
+    {
+        #pragma omp section
+        {
+            extR = extractGrayscale(src->r(), order, gridSize, huberDelta, normalize, nullptr, 0, 100, method, rbfSmoothing, customControlPoints, maxDeviation, maxStructure, imageName.empty() ? "Red" : imageName + " [Red]");
+        }
+        #pragma omp section
+        {
+            extG = extractGrayscale(src->g(), order, gridSize, huberDelta, normalize, nullptr, 0, 100, method, rbfSmoothing, customControlPoints, maxDeviation, maxStructure, imageName.empty() ? "Green" : imageName + " [Green]");
+        }
+        #pragma omp section
+        {
+            extB = extractGrayscale(src->b(), order, gridSize, huberDelta, normalize, nullptr, 0, 100, method, rbfSmoothing, customControlPoints, maxDeviation, maxStructure, imageName.empty() ? "Blue" : imageName + " [Blue]");
+        }
+    }
 
     if (progress) progress(100);
     return std::make_shared<RGBImage>(extR, extG, extB);

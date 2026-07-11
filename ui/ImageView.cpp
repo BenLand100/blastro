@@ -21,6 +21,7 @@
 #include <QMouseEvent>
 #include <QKeyEvent>
 #include <QJsonObject>
+#include <QJsonArray>
 #include <QTimer>
 #include <cmath>
 #include <algorithm>
@@ -33,9 +34,9 @@ ImageView::ImageView(QWidget* parent)
       m_scene(new QGraphicsScene(this)),
       m_zoomFactor(1.0),
       m_displayMode(Normal),
-      m_blackpoint(0.0),
-      m_whitepoint(1.0),
-      m_midpoint(0.5),
+      m_blackpoint({0.0, 0.0, 0.0}),
+      m_whitepoint({1.0, 1.0, 1.0}),
+      m_midpoint({0.5, 0.5, 0.5}),
       m_isPanning(false),
       m_isFrameSelected(true) {
       
@@ -271,10 +272,17 @@ static void runFastCLAHE(const float* src, float* dst, int width, int height, in
     }
 }
 
-void ImageView::setStretchParams(double b, double w, double m) {
-    m_blackpoint = b;
-    m_whitepoint = w;
-    m_midpoint = m;
+void ImageView::setStretchParams(double b, double w, double m, int channel) {
+    if (m_channelsLinked) {
+        m_blackpoint.fill(b);
+        m_whitepoint.fill(w);
+        m_midpoint.fill(m);
+    } else {
+        int ch = std::clamp(channel, 0, 2);
+        m_blackpoint[ch] = b;
+        m_whitepoint[ch] = w;
+        m_midpoint[ch] = m;
+    }
     
     if (m_displayMode == Normal) {
         m_displayMode = Stretch;
@@ -282,24 +290,62 @@ void ImageView::setStretchParams(double b, double w, double m) {
     
     updateLUT(); // Precompute LUT with new parameters
     updateView();
-    emit stretchParamsChanged(b, w, m);
+    emit stretchParamsChanged(m_blackpoint, m_whitepoint, m_midpoint);
+}
+
+void ImageView::setStretchParams(const std::array<double, 3>& b, const std::array<double, 3>& w, const std::array<double, 3>& m) {
+    if (m_channelsLinked) {
+        m_blackpoint.fill(b[0]);
+        m_whitepoint.fill(w[0]);
+        m_midpoint.fill(m[0]);
+    } else {
+        m_blackpoint = b;
+        m_whitepoint = w;
+        m_midpoint = m;
+    }
+    
+    if (m_displayMode == Normal) {
+        m_displayMode = Stretch;
+    }
+    
+    updateLUT(); // Precompute LUT with new parameters
+    updateView();
+    emit stretchParamsChanged(m_blackpoint, m_whitepoint, m_midpoint);
+}
+
+void ImageView::setChannelsLinked(bool linked) {
+    if (m_channelsLinked != linked) {
+        m_channelsLinked = linked;
+        if (linked) {
+            // Re-sync all to channel 0
+            m_blackpoint.fill(m_blackpoint[0]);
+            m_whitepoint.fill(m_whitepoint[0]);
+            m_midpoint.fill(m_midpoint[0]);
+            emit stretchParamsChanged(m_blackpoint, m_whitepoint, m_midpoint);
+            updateLUT();
+            updateView();
+        }
+        emit channelsLinkedChanged(m_channelsLinked);
+    }
 }
 
 void ImageView::updateLUT() {
-    m_lut.resize(65536);
-    float B = static_cast<float>(m_blackpoint);
-    float W = static_cast<float>(m_whitepoint);
-    float M = static_cast<float>(m_midpoint);
+    m_lut.assign(3, std::vector<unsigned char>(65536));
     
-    for (int i = 0; i < 65536; ++i) {
-        float v = static_cast<float>(i) / 65535.0f;
-        float stretched = applyMTF(v, B, W, M);
-        m_lut[i] = static_cast<unsigned char>(qBound(0.0f, stretched * 255.0f, 255.0f));
+    for (int c = 0; c < 3; ++c) {
+        float B = static_cast<float>(m_blackpoint[c]);
+        float W = static_cast<float>(m_whitepoint[c]);
+        float M = static_cast<float>(m_midpoint[c]);
+        
+        for (int i = 0; i < 65536; ++i) {
+            float v = static_cast<float>(i) / 65535.0f;
+            float stretched = applyMTF(v, B, W, M);
+            m_lut[c][i] = static_cast<unsigned char>(qBound(0.0f, stretched * 255.0f, 255.0f));
+        }
     }
 }
 
 void ImageView::runAutostretch() {
-    std::vector<float> samples;
     int width = 0;
     int height = 0;
 
@@ -317,78 +363,99 @@ void ImageView::runAutostretch() {
         return;
     }
 
-    // Sample pixels uniformly (up to 20,000 samples for fast statistics)
     int totalPixels = width * height;
     int sampleStep = std::max(1, totalPixels / 20000);
-    samples.reserve(totalPixels / sampleStep);
 
-    auto getPixelLuminance = [&](int x, int y) {
-        if (std::holds_alternative<GrayscaleImagePtr>(m_currentImage)) {
-            return std::get<GrayscaleImagePtr>(m_currentImage)->buffer()->pixel(x, y);
-        } else {
-            auto rgb = std::get<RGBImagePtr>(m_currentImage);
-            float r = rgb->r()->buffer()->pixel(x, y);
-            float g = rgb->g()->buffer()->pixel(x, y);
-            float b = rgb->b()->buffer()->pixel(x, y);
-            return (r + g + b) / 3.0f;
-        }
-    };
-
-    for (int y = 0; y < height; ++y) {
-        for (int x = 0; x < width; ++x) {
-            int linearIdx = y * width + x;
-            if (linearIdx % sampleStep == 0) {
-                float val = getPixelLuminance(x, y);
-                if (!std::isnan(val)) {
-                    samples.push_back(val);
-                }
-            }
-        }
-    }
-
-    if (samples.empty()) return;
-
-    // Sort to find quantiles
-    std::sort(samples.begin(), samples.end());
-
-    // Guess Blackpoint (0.01% quantile)
-    int bpIdx = static_cast<int>(samples.size() * 0.0001);
-    double bp = samples[bpIdx];
-
-    // Whitepoint is kept at 1.0 to ensure starless and star-heavy images have comparable stretches
-    double wp = 1.0;
-
-    // Ensure bp < wp
-    if (bp >= wp) {
-        bp = 0.0;
-        wp = 1.0;
-    }
-
-    // Find Median
-    int medIdx = static_cast<int>(samples.size() * 0.5);
-    double originalMedian = samples[medIdx];
-
-    // Normalize median to the clipped [bp, wp] range
-    double med = (originalMedian - bp) / (wp - bp);
-    med = std::max(0.001, std::min(0.999, med));
-
-    // Target background median based on intensity level (0 = lowest, 1 = medium, 2 = highest)
     double T = 0.25;
     if (m_autoStretchLevel == 0) {
         T = 0.0625;
     } else if (m_autoStretchLevel == 1) {
         T = 0.125;
     }
-    
-    // Solve for midpoint: M = (med * (T - 1)) / (2 * med * T - T - med)
-    double mp = (med * (T - 1.0)) / (2.0 * med * T - T - med);
-    
-    // Clamp midpoint to a reasonable range
-    mp = std::max(0.001, std::min(0.999, mp));
 
-    m_blackpoint = bp;
-    m_whitepoint = wp;
-    m_midpoint = mp;
+    auto computeStretch = [&](const std::vector<float>& samples, double& outBp, double& outWp, double& outMp, double& outMedian) {
+        if (samples.empty()) return;
+        std::vector<float> sortedSamples = samples;
+        std::sort(sortedSamples.begin(), sortedSamples.end());
+
+        int bpIdx = static_cast<int>(sortedSamples.size() * 0.0001);
+        double bp = sortedSamples[bpIdx];
+        double wp = 1.0;
+
+        if (bp >= wp) {
+            bp = 0.0;
+            wp = 1.0;
+        }
+
+        int medIdx = static_cast<int>(sortedSamples.size() * 0.5);
+        double originalMedian = sortedSamples[medIdx];
+        double med = (originalMedian - bp) / (wp - bp);
+        med = std::max(0.001, std::min(0.999, med));
+
+        double mp = (med * (T - 1.0)) / (2.0 * med * T - T - med);
+        mp = std::max(0.001, std::min(0.999, mp));
+
+        outBp = bp;
+        outWp = wp;
+        outMp = mp;
+        outMedian = med;
+    };
+
+    if (m_channelsLinked || std::holds_alternative<GrayscaleImagePtr>(m_currentImage)) {
+        std::vector<float> samples;
+        samples.reserve(totalPixels / sampleStep);
+
+        for (int y = 0; y < height; ++y) {
+            for (int x = 0; x < width; ++x) {
+                int linearIdx = y * width + x;
+                if (linearIdx % sampleStep == 0) {
+                    float val = 0.0f;
+                    if (std::holds_alternative<GrayscaleImagePtr>(m_currentImage)) {
+                        val = std::get<GrayscaleImagePtr>(m_currentImage)->buffer()->pixel(x, y);
+                    } else {
+                        auto rgb = std::get<RGBImagePtr>(m_currentImage);
+                        float r = rgb->r()->buffer()->pixel(x, y);
+                        float g = rgb->g()->buffer()->pixel(x, y);
+                        float b = rgb->b()->buffer()->pixel(x, y);
+                        val = (r + g + b) / 3.0f;
+                    }
+                    if (!std::isnan(val)) samples.push_back(val);
+                }
+            }
+        }
+        
+        double bp, wp, mp, med;
+        computeStretch(samples, bp, wp, mp, med);
+        m_blackpoint.fill(bp);
+        m_whitepoint.fill(wp);
+        m_midpoint.fill(mp);
+    } else {
+        std::vector<float> rSamples, gSamples, bSamples;
+        rSamples.reserve(totalPixels / sampleStep);
+        gSamples.reserve(totalPixels / sampleStep);
+        bSamples.reserve(totalPixels / sampleStep);
+
+        auto rgb = std::get<RGBImagePtr>(m_currentImage);
+        for (int y = 0; y < height; ++y) {
+            for (int x = 0; x < width; ++x) {
+                int linearIdx = y * width + x;
+                if (linearIdx % sampleStep == 0) {
+                    float r = rgb->r()->buffer()->pixel(x, y);
+                    float g = rgb->g()->buffer()->pixel(x, y);
+                    float b = rgb->b()->buffer()->pixel(x, y);
+                    if (!std::isnan(r)) rSamples.push_back(r);
+                    if (!std::isnan(g)) gSamples.push_back(g);
+                    if (!std::isnan(b)) bSamples.push_back(b);
+                }
+            }
+        }
+        
+        double medR, medG, medB;
+        computeStretch(rSamples, m_blackpoint[0], m_whitepoint[0], m_midpoint[0], medR);
+        computeStretch(gSamples, m_blackpoint[1], m_whitepoint[1], m_midpoint[1], medG);
+        computeStretch(bSamples, m_blackpoint[2], m_whitepoint[2], m_midpoint[2], medB);
+    }
+
     m_displayMode = Autostretch;
 
     updateLUT(); // Precompute LUT for autostretch parameters
@@ -396,57 +463,62 @@ void ImageView::runAutostretch() {
     emit stretchParamsChanged(m_blackpoint, m_whitepoint, m_midpoint);
 }
 
-std::vector<int> ImageView::getHistogram(int bins) const {
-    std::vector<int> hist(bins, 0);
-    if (m_updatesSuspended) {
-        return hist;
-    }
-    int width = 0;
-    int height = 0;
-
+std::vector<std::vector<int>> ImageView::getHistogram(int bins) const {
+    std::vector<std::vector<int>> hists;
+    if (m_updatesSuspended) return hists;
+    
+    int width = 0, height = 0;
     if (std::holds_alternative<GrayscaleImagePtr>(m_currentImage)) {
         auto img = std::get<GrayscaleImagePtr>(m_currentImage);
-        if (!img) return hist;
+        if (!img) return hists;
         width = img->width();
         height = img->height();
+        hists.push_back(std::vector<int>(bins, 0));
     } else if (std::holds_alternative<RGBImagePtr>(m_currentImage)) {
         auto img = std::get<RGBImagePtr>(m_currentImage);
-        if (!img) return hist;
+        if (!img) return hists;
         width = img->width();
         height = img->height();
+        hists.assign(4, std::vector<int>(bins, 0)); // L, R, G, B
     } else {
-        return hist;
+        return hists;
     }
 
     int totalPixels = width * height;
     int sampleStep = std::max(1, totalPixels / 50000);
 
-    auto getPixelLuminance = [&](int x, int y) {
-        if (std::holds_alternative<GrayscaleImagePtr>(m_currentImage)) {
-            return std::get<GrayscaleImagePtr>(m_currentImage)->buffer()->pixel(x, y);
-        } else {
-            auto rgb = std::get<RGBImagePtr>(m_currentImage);
-            float r = rgb->r()->buffer()->pixel(x, y);
-            float g = rgb->g()->buffer()->pixel(x, y);
-            float b = rgb->b()->buffer()->pixel(x, y);
-            return (r + g + b) / 3.0f;
-        }
-    };
-
     for (int y = 0; y < height; ++y) {
         for (int x = 0; x < width; ++x) {
             int linearIdx = y * width + x;
             if (linearIdx % sampleStep == 0) {
-                float val = getPixelLuminance(x, y);
-                if (!std::isnan(val)) {
-                    int bin = std::max(0, std::min(bins - 1, static_cast<int>(val * (bins - 1))));
-                    hist[bin]++;
+                if (std::holds_alternative<GrayscaleImagePtr>(m_currentImage)) {
+                    float val = std::get<GrayscaleImagePtr>(m_currentImage)->buffer()->pixel(x, y);
+                    if (!std::isnan(val)) {
+                        int bin = std::max(0, std::min(bins - 1, static_cast<int>(val * (bins - 1))));
+                        hists[0][bin]++;
+                    }
+                } else {
+                    auto rgb = std::get<RGBImagePtr>(m_currentImage);
+                    float r = rgb->r()->buffer()->pixel(x, y);
+                    float g = rgb->g()->buffer()->pixel(x, y);
+                    float b = rgb->b()->buffer()->pixel(x, y);
+                    
+                    if (!std::isnan(r) && !std::isnan(g) && !std::isnan(b)) {
+                        int binR = std::max(0, std::min(bins - 1, static_cast<int>(r * (bins - 1))));
+                        int binG = std::max(0, std::min(bins - 1, static_cast<int>(g * (bins - 1))));
+                        int binB = std::max(0, std::min(bins - 1, static_cast<int>(b * (bins - 1))));
+                        int binL = std::max(0, std::min(bins - 1, static_cast<int>(((r+g+b)/3.0f) * (bins - 1))));
+                        hists[0][binL]++;
+                        hists[1][binR]++;
+                        hists[2][binG]++;
+                        hists[3][binB]++;
+                    }
                 }
             }
         }
     }
 
-    return hist;
+    return hists;
 }
 
 void ImageView::zoomIn() {
@@ -495,9 +567,16 @@ QJsonObject ImageView::serializeViewState() const {
     // Display mode
     obj["display_mode"] = static_cast<int>(m_displayMode);
     obj["channel_mode"] = static_cast<int>(m_channelMode);
-    obj["blackpoint"] = m_blackpoint;
-    obj["whitepoint"] = m_whitepoint;
-    obj["midpoint"] = m_midpoint;
+    QJsonArray bpArr, wpArr, mpArr;
+    for(int i = 0; i < 3; ++i) {
+        bpArr.append(m_blackpoint[i]);
+        wpArr.append(m_whitepoint[i]);
+        mpArr.append(m_midpoint[i]);
+    }
+    obj["blackpoint"] = bpArr;
+    obj["whitepoint"] = wpArr;
+    obj["midpoint"] = mpArr;
+    obj["channels_linked"] = m_channelsLinked;
     obj["auto_stretch_level"] = m_autoStretchLevel;
     obj["local_hist_level"] = m_localHistLevel;
     // Zoom transform (QTransform 6 components)
@@ -519,8 +598,28 @@ void ImageView::restoreViewState(const QJsonObject& obj) {
         setDisplayMode(static_cast<DisplayMode>(obj["display_mode"].toInt()));
     if (obj.contains("channel_mode"))
         setChannelMode(static_cast<ChannelMode>(obj["channel_mode"].toInt()));
-    if (obj.contains("blackpoint") && obj.contains("whitepoint") && obj.contains("midpoint"))
-        setStretchParams(obj["blackpoint"].toDouble(), obj["whitepoint"].toDouble(), obj["midpoint"].toDouble());
+    if (obj.contains("channels_linked"))
+        setChannelsLinked(obj["channels_linked"].toBool(true));
+    if (obj.contains("blackpoint") && obj.contains("whitepoint") && obj.contains("midpoint")) {
+        if (obj["blackpoint"].isArray()) {
+            QJsonArray bpArr = obj["blackpoint"].toArray();
+            QJsonArray wpArr = obj["whitepoint"].toArray();
+            QJsonArray mpArr = obj["midpoint"].toArray();
+            for(int i=0; i<3 && i<bpArr.size(); ++i) {
+                m_blackpoint[i] = bpArr[i].toDouble();
+                m_whitepoint[i] = wpArr[i].toDouble();
+                m_midpoint[i] = mpArr[i].toDouble();
+            }
+        } else {
+            double b = obj["blackpoint"].toDouble();
+            double w = obj["whitepoint"].toDouble();
+            double m = obj["midpoint"].toDouble();
+            m_blackpoint.fill(b);
+            m_whitepoint.fill(w);
+            m_midpoint.fill(m);
+        }
+        setStretchParams(m_blackpoint[0], m_whitepoint[0], m_midpoint[0], 0);
+    }
     if (obj.contains("auto_stretch_level"))
         setAutoStretchLevel(obj["auto_stretch_level"].toInt());
     if (obj.contains("local_hist_level"))
@@ -935,28 +1034,60 @@ void ImageView::drawBackground(QPainter* painter, const QRectF& rect) {
                     std::vector<float> stretched(imgW * imgH);
                     int totalPixels = imgW * imgH;
                     int sampleStep = std::max(1, totalPixels / 20000);
-                    std::vector<float> samples;
-                    samples.reserve(totalPixels / sampleStep);
-                    for (int i = 0; i < totalPixels; i += sampleStep) {
-                        float val = (origR[i] + origG[i] + origB[i]) / 3.0f;
-                        if (!std::isnan(val)) {
-                            samples.push_back(val);
+                    
+                    auto computeParams = [&](const float* data, float& B, float& W, float& M) {
+                        std::vector<float> samples;
+                        samples.reserve(totalPixels / sampleStep);
+                        for (int i = 0; i < totalPixels; i += sampleStep) {
+                            if (!std::isnan(data[i])) samples.push_back(data[i]);
                         }
-                    }
-                    float B = 0.0f, W = 1.0f, M = 0.5f;
-                    if (!samples.empty()) {
-                        std::sort(samples.begin(), samples.end());
-                        int bpIdx = static_cast<int>(samples.size() * 0.0001);
-                        B = samples[bpIdx];
-                        W = 1.0f;
-                        if (B >= W) { B = 0.0f; W = 1.0f; }
-                        int medIdx = static_cast<int>(samples.size() * 0.5);
-                        float originalMedian = samples[medIdx];
-                        float med = (originalMedian - B) / (W - B);
-                        med = std::max(0.001f, std::min(0.999f, med));
-                        float T = 0.25f;
-                        M = (med * (T - 1.0f)) / (2.0f * med * T - T - med);
-                        M = std::max(0.001f, std::min(0.999f, M));
+                        B = 0.0f; W = 1.0f; M = 0.5f;
+                        if (!samples.empty()) {
+                            std::sort(samples.begin(), samples.end());
+                            int bpIdx = static_cast<int>(samples.size() * 0.0001);
+                            B = samples[bpIdx];
+                            W = 1.0f;
+                            if (B >= W) { B = 0.0f; W = 1.0f; }
+                            int medIdx = static_cast<int>(samples.size() * 0.5);
+                            float originalMedian = samples[medIdx];
+                            float med = (originalMedian - B) / (W - B);
+                            med = std::max(0.001f, std::min(0.999f, med));
+                            float T = 0.25f;
+                            M = (med * (T - 1.0f)) / (2.0f * med * T - T - med);
+                            M = std::max(0.001f, std::min(0.999f, M));
+                        }
+                    };
+
+                    float bR, wR, mR, bG, wG, mG, bB, wB, mB;
+                    if (m_channelsLinked) {
+                        std::vector<float> samples;
+                        samples.reserve(totalPixels / sampleStep);
+                        for (int i = 0; i < totalPixels; i += sampleStep) {
+                            float val = (origR[i] + origG[i] + origB[i]) / 3.0f;
+                            if (!std::isnan(val)) samples.push_back(val);
+                        }
+                        float B = 0.0f, W = 1.0f, M = 0.5f;
+                        if (!samples.empty()) {
+                            std::sort(samples.begin(), samples.end());
+                            int bpIdx = static_cast<int>(samples.size() * 0.0001);
+                            B = samples[bpIdx];
+                            W = 1.0f;
+                            if (B >= W) { B = 0.0f; W = 1.0f; }
+                            int medIdx = static_cast<int>(samples.size() * 0.5);
+                            float originalMedian = samples[medIdx];
+                            float med = (originalMedian - B) / (W - B);
+                            med = std::max(0.001f, std::min(0.999f, med));
+                            float T = 0.25f;
+                            M = (med * (T - 1.0f)) / (2.0f * med * T - T - med);
+                            M = std::max(0.001f, std::min(0.999f, M));
+                        }
+                        bR = bG = bB = B;
+                        wR = wG = wB = W;
+                        mR = mG = mB = M;
+                    } else {
+                        computeParams(origR, bR, wR, mR);
+                        computeParams(origG, bG, wG, mG);
+                        computeParams(origB, bB, wB, mB);
                     }
                     
                     float clip = 1.5f;
@@ -965,19 +1096,19 @@ void ImageView::drawBackground(QPainter* painter, const QRectF& rect) {
                     
                     #pragma omp parallel for
                     for (int i = 0; i < totalPixels; ++i) {
-                        stretched[i] = applyMTF(origR[i], B, W, M);
+                        stretched[i] = applyMTF(origR[i], bR, wR, mR);
                     }
                     runFastCLAHE(stretched.data(), m_claheR.data(), imgW, imgH, 8, 8, clip);
                     
                     #pragma omp parallel for
                     for (int i = 0; i < totalPixels; ++i) {
-                        stretched[i] = applyMTF(origG[i], B, W, M);
+                        stretched[i] = applyMTF(origG[i], bG, wG, mG);
                     }
                     runFastCLAHE(stretched.data(), m_claheG.data(), imgW, imgH, 8, 8, clip);
                     
                     #pragma omp parallel for
                     for (int i = 0; i < totalPixels; ++i) {
-                        stretched[i] = applyMTF(origB[i], B, W, M);
+                        stretched[i] = applyMTF(origB[i], bB, wB, mB);
                     }
                     runFastCLAHE(stretched.data(), m_claheB.data(), imgW, imgH, 8, 8, clip);
                 }
@@ -1050,7 +1181,7 @@ void ImageView::drawBackground(QPainter* painter, const QRectF& rect) {
                         int idxR = qBound(0, static_cast<int>(r * 65535.0f), 65535);
                         int idxG = qBound(0, static_cast<int>(g * 65535.0f), 65535);
                         int idxB = qBound(0, static_cast<int>(b * 65535.0f), 65535);
-                        line[vx] = qRgb(m_lut[idxR], m_lut[idxG], m_lut[idxB]);
+                        line[vx] = qRgb(m_lut[0][idxR], m_lut[1][idxG], m_lut[2][idxB]);
                     } else {
                         int rVal = qBound(0, static_cast<int>(r * 255.0f), 255);
                         int gVal = qBound(0, static_cast<int>(g * 255.0f), 255);
@@ -1065,7 +1196,7 @@ void ImageView::drawBackground(QPainter* painter, const QRectF& rect) {
                         line[vx] = qRgb(grayVal, grayVal, grayVal);
                     } else if (m_displayMode != Normal) {
                         int idxLut = qBound(0, static_cast<int>(val * 65535.0f), 65535);
-                        line[vx] = qRgb(m_lut[idxLut], m_lut[idxLut], m_lut[idxLut]);
+                        line[vx] = qRgb(m_lut[0][idxLut], m_lut[0][idxLut], m_lut[0][idxLut]);
                     } else {
                         int grayVal = qBound(0, static_cast<int>(val * 255.0f), 255);
                         line[vx] = qRgb(grayVal, grayVal, grayVal);

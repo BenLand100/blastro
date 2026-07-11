@@ -19,11 +19,14 @@
 #pragma once
 #include "AlgorithmDialog.h"
 #include "WorkspaceImageWindow.h"
+#include <QMdiSubWindow>
 #include <QSlider>
 #include <QSpinBox>
 #include <QDoubleSpinBox>
 #include <QCheckBox>
+#include <QPointer>
 #include <QPushButton>
+#include <QButtonGroup>
 #include <QTimer>
 #include <QTabWidget>
 
@@ -49,12 +52,17 @@ private slots:
     void onApplyClicked();
     void onPrefsClicked();
     void onTabChanged(int index);
-    void onHtParamsChanged(double b, double w, double m);
-    void onGhsParamsChanged(double sp, double d);
-    void onGhsProtectionsChanged(double shadowProtect, double highlightProtect);
+    void onHtParamsChanged(const std::array<double, 3>& b, const std::array<double, 3>& w, const std::array<double, 3>& m);
+    void onGhsParamsChanged(const std::array<double, 3>& sp, const std::array<double, 3>& d);
+    void onGhsProtectionsChanged(const std::array<double, 3>& shadowProtect, const std::array<double, 3>& highlightProtect);
     void onCopyLiveStretch();
     void onParameterChanged();
+    void onChannelChanged(int id);
+    void onResetStretchClicked();
     void updatePreview();
+    void refreshHistogramAndCache();
+    void onTargetImageChanged(QMdiSubWindow* sub);
+    void onTargetImageUpdated();
 
 private:
     WorkspaceImageWindow* getActiveImageWindow() const;
@@ -90,23 +98,52 @@ private:
     QDoubleSpinBox* m_highlightSpin;
 
     // General controls
+    QButtonGroup* m_channelGroup;
     QCheckBox* m_previewChk;
     QPushButton* m_copyStretchesBtn;
     QTimer* m_previewTimer;
 
     // Internal values
     bool m_isGhsMode = false;
-    double m_blackpoint = 0.0;
-    double m_whitepoint = 1.0;
-    double m_midpoint = 0.5;
+    
+    enum class ActiveChannel {
+        K = 0,
+        R = 1,
+        G = 2,
+        B = 3,
+        L = 4,
+        S = 5
+    };
+    ActiveChannel m_activeChannel = ActiveChannel::K;
+    
+    QPointer<QMdiSubWindow> m_currentTrackedSub;
 
-    double m_spPoint = 0.5;
-    double m_stretchFactor = 0.0;
-    double m_shadowProtect = 0.0;
-    double m_highlightProtect = 1.0;
+    // HT Parameters (RGB, L, S)
+    std::array<double, 3> m_blackpoint = {0.0, 0.0, 0.0};
+    std::array<double, 3> m_whitepoint = {1.0, 1.0, 1.0};
+    std::array<double, 3> m_midpoint = {0.5, 0.5, 0.5};
+    double m_lBlackpoint = 0.0;
+    double m_lWhitepoint = 1.0;
+    double m_lMidpoint = 0.5;
+    double m_sBlackpoint = 0.0;
+    double m_sWhitepoint = 1.0;
+    double m_sMidpoint = 0.5;
 
-    bool m_colorPreserving = true;
+    // GHS Parameters (RGB, L, S)
+    std::array<double, 3> m_spPoint = {0.5, 0.5, 0.5};
+    std::array<double, 3> m_stretchFactor = {0.0, 0.0, 0.0};
+    std::array<double, 3> m_shadowProtect = {0.0, 0.0, 0.0};
+    std::array<double, 3> m_highlightProtect = {1.0, 1.0, 1.0};
+    double m_lSpPoint = 0.5, m_lStretchFactor = 0.0, m_lShadowProtect = 0.0, m_lHighlightProtect = 1.0;
+    double m_sSpPoint = 0.5, m_sStretchFactor = 0.0, m_sShadowProtect = 0.0, m_sHighlightProtect = 1.0;
+
     int m_threads = -1;
+
+    // Caching
+    std::shared_ptr<ImageBuffer> m_cachedHBuf;
+    std::shared_ptr<ImageBuffer> m_cachedSBuf;
+    std::shared_ptr<ImageBuffer> m_cachedLBuf;
+    void* m_cachedBaseImgPtr = nullptr;
 };
 
 } // namespace blastro

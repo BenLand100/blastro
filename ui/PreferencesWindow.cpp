@@ -154,6 +154,13 @@ PreferencesWindow::PreferencesWindow(QWidget* parent)
     m_ramSpin->setRange(1, 512);
     m_ramSpin->setSuffix(" GB");
     sysForm->addRow("Maximum RAM Limit:", m_ramSpin);
+    
+    m_histLineWidthSpin = new QDoubleSpinBox(this);
+    m_histLineWidthSpin->setRange(0.1, 5.0);
+    m_histLineWidthSpin->setSingleStep(0.1);
+    m_histLineWidthSpin->setDecimals(1);
+    sysForm->addRow("Histogram Trace Thickness:", m_histLineWidthSpin);
+    
     generalLayout->addWidget(sysGroup);
 
     tabWidget->addTab(generalTab, "General Settings");
@@ -228,6 +235,7 @@ PreferencesWindow::PreferencesWindow(QWidget* parent)
     m_solveFieldPathEdit->setText(QString::fromStdString(prefs.getSolveFieldBinaryPath()));
     m_threadSpin->setValue(prefs.getThreadCount());
     m_ramSpin->setValue(prefs.getMaxRamUsage());
+    m_histLineWidthSpin->setValue(prefs.getHistogramLineWidth());
 
     m_reposListWidget->clear();
     for (const auto& repo : prefs.getUpdateRepositories()) {
@@ -292,6 +300,7 @@ void PreferencesWindow::onSaveClicked() {
     prefs.setSolveFieldBinaryPath(m_solveFieldPathEdit->text().trimmed().toStdString());
     prefs.setThreadCount(m_threadSpin->value());
     prefs.setMaxRamUsage(m_ramSpin->value());
+    prefs.setHistogramLineWidth(m_histLineWidthSpin->value());
 
     std::vector<std::string> repos;
     for (int i = 0; i < m_reposListWidget->count(); ++i) {

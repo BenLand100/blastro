@@ -82,7 +82,10 @@ void StretchingAlgorithmWrapper::execute(WorkspaceRegistry& workspace,
             outputElem = StretchingAlgorithm::stretchHistogramGrayscale(gray, blackpoint, whitepoint, midpoint);
         } else if (std::holds_alternative<RGBImagePtr>(inputElem)) {
             auto rgb = std::get<RGBImagePtr>(inputElem);
-            outputElem = StretchingAlgorithm::stretchHistogramRGB(rgb, blackpoint, whitepoint, midpoint, colorPreserving);
+            std::array<double, 3> bp = {blackpoint, blackpoint, blackpoint};
+            std::array<double, 3> wp = {whitepoint, whitepoint, whitepoint};
+            std::array<double, 3> mp = {midpoint, midpoint, midpoint};
+            outputElem = StretchingAlgorithm::stretchHistogramRGB(rgb, bp, wp, mp, colorPreserving);
         } else {
             throw std::runtime_error("Stretch is not supported on batches in this mode");
         }
@@ -107,7 +110,13 @@ void StretchingAlgorithmWrapper::execute(WorkspaceRegistry& workspace,
             outputElem = StretchingAlgorithm::stretchGhsGrayscale(gray, lowPoint, highPoint, symmetryPoint, stretchFactor, shadowProtect, highlightProtect, form);
         } else if (std::holds_alternative<RGBImagePtr>(inputElem)) {
             auto rgb = std::get<RGBImagePtr>(inputElem);
-            outputElem = StretchingAlgorithm::stretchGhsRGB(rgb, lowPoint, highPoint, symmetryPoint, stretchFactor, shadowProtect, highlightProtect, form, colorPreserving);
+            std::array<double, 3> lp = {lowPoint, lowPoint, lowPoint};
+            std::array<double, 3> hp = {highPoint, highPoint, highPoint};
+            std::array<double, 3> sp = {symmetryPoint, symmetryPoint, symmetryPoint};
+            std::array<double, 3> sf = {stretchFactor, stretchFactor, stretchFactor};
+            std::array<double, 3> shp = {shadowProtect, shadowProtect, shadowProtect};
+            std::array<double, 3> hlp = {highlightProtect, highlightProtect, highlightProtect};
+            outputElem = StretchingAlgorithm::stretchGhsRGB(rgb, lp, hp, sp, sf, shp, hlp, form, colorPreserving);
         } else {
             throw std::runtime_error("Stretch is not supported on batches in this mode");
         }

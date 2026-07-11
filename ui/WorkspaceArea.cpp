@@ -129,7 +129,7 @@ QString WorkspaceArea::getActiveImageName() const {
         if (!sub) continue;
         QWidget* widget = sub->widget();
         if (auto win = qobject_cast<WorkspaceImageWindow*>(widget)) {
-            return sub->windowTitle();
+            return win->name();
         }
     }
     return QString();

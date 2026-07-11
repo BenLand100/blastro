@@ -51,6 +51,7 @@ Preferences::Preferences() {
     m_updateRepositories = { "https://pixinsight.deepsnrastro.com/" };
     m_astapBinaryPath = "/usr/bin/astap";
     m_solveFieldBinaryPath = "/usr/bin/solve-field";
+    m_histogramLineWidth = 1.5f;
     
     load();
 }
@@ -185,6 +186,16 @@ void Preferences::setSolveFieldBinaryPath(const std::string& path) {
     m_solveFieldBinaryPath = path;
 }
 
+float Preferences::getHistogramLineWidth() const {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return m_histogramLineWidth;
+}
+
+void Preferences::setHistogramLineWidth(float width) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_histogramLineWidth = width;
+}
+
 void Preferences::load() {
     std::lock_guard<std::mutex> lock(m_mutex);
     QSettings settings("BLastro", "BLastro");
@@ -202,14 +213,18 @@ void Preferences::load() {
     m_solveFieldBinaryPath = settings.value("Preferences/SolveFieldBinaryPath", QString::fromStdString(m_solveFieldBinaryPath)).toString().toStdString();
 
     QStringList defaultRepos;
-    for (const auto& r : m_updateRepositories) {
-        defaultRepos.append(QString::fromStdString(r));
+    m_astapBinaryPath = settings.value("astrometry/astap_binary", QString::fromStdString(m_astapBinaryPath)).toString().toStdString();
+    m_solveFieldBinaryPath = settings.value("astrometry/solve_field_binary", QString::fromStdString(m_solveFieldBinaryPath)).toString().toStdString();
+
+    QVariantList list = settings.value("Preferences/UpdateRepositories").toList();
+    if (!list.isEmpty()) {
+        m_updateRepositories.clear();
+        for (const QVariant& v : list) {
+            m_updateRepositories.push_back(v.toString().toStdString());
+        }
     }
-    QStringList reposList = settings.value("Preferences/UpdateRepositories", defaultRepos).toStringList();
-    m_updateRepositories.clear();
-    for (const auto& r : reposList) {
-        m_updateRepositories.push_back(r.toStdString());
-    }
+    
+    m_histogramLineWidth = settings.value("ui/histogram_line_width", 1.5).toFloat();
 }
 
 void Preferences::save() {
@@ -225,14 +240,16 @@ void Preferences::save() {
     settings.setValue("Preferences/ThreadCount", m_threadCount);
     settings.setValue("Preferences/StackingMode", QString::fromStdString(m_stackingMode));
     settings.setValue("Preferences/MaxRamUsage", m_maxRamUsage);
-    settings.setValue("Preferences/AstapBinaryPath", QString::fromStdString(m_astapBinaryPath));
-    settings.setValue("Preferences/SolveFieldBinaryPath", QString::fromStdString(m_solveFieldBinaryPath));
+    settings.setValue("astrometry/astap_binary", QString::fromStdString(m_astapBinaryPath));
+    settings.setValue("astrometry/solve_field_binary", QString::fromStdString(m_solveFieldBinaryPath));
 
-    QStringList reposList;
+    QVariantList reposList;
     for (const auto& r : m_updateRepositories) {
         reposList.append(QString::fromStdString(r));
     }
     settings.setValue("Preferences/UpdateRepositories", reposList);
+    
+    settings.setValue("ui/histogram_line_width", static_cast<double>(m_histogramLineWidth));
 }
 
 } // namespace blastro

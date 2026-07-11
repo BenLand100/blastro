@@ -17,7 +17,9 @@
  */
 
 #include "StretchingDialog.h"
+#include <omp.h>
 #include <QJsonObject>
+#include <QJsonArray>
 #include "HistogramWidget.h"
 #include "core/Preferences.h"
 #include "algorithms/StretchingAlgorithm.h"
@@ -75,6 +77,12 @@ StretchingDialog::StretchingDialog(WorkspaceRegistry& workspace, QWidget* parent
     m_previewTimer->setSingleShot(true);
     connect(m_previewTimer, &QTimer::timeout, this, &StretchingDialog::updatePreview);
 
+    if (auto mw = qobject_cast<QMainWindow*>(parent)) {
+        if (auto wa = mw->findChild<WorkspaceArea*>()) {
+            connect(wa, &QMdiArea::subWindowActivated, this, &StretchingDialog::onTargetImageChanged);
+        }
+    }
+
     QVBoxLayout* mainLayout = new QVBoxLayout(this);
     mainLayout->setContentsMargins(12, 12, 12, 12);
     mainLayout->setSpacing(10);
@@ -113,18 +121,27 @@ StretchingDialog::StretchingDialog(WorkspaceRegistry& workspace, QWidget* parent
     bLayout->addWidget(m_bSpin);
     htForm->addRow("Black Point:", bLayout);
 
-    connect(m_bSlider, &QSlider::valueChanged, this, [this](int val) {
+    auto setParam = [this](std::array<double, 3>& rgb, double& l, double& s, double val) {
+        if (m_activeChannel == ActiveChannel::L) l = val;
+        else if (m_activeChannel == ActiveChannel::S) s = val;
+        else if (m_activeChannel == ActiveChannel::R) rgb[0] = val;
+        else if (m_activeChannel == ActiveChannel::G) rgb[1] = val;
+        else if (m_activeChannel == ActiveChannel::B) rgb[2] = val;
+        else rgb.fill(val);
+    };
+
+    connect(m_bSlider, &QSlider::valueChanged, this, [this, setParam](int val) {
         m_bSpin->blockSignals(true);
         m_bSpin->setValue(val / 1000.0);
         m_bSpin->blockSignals(false);
-        m_blackpoint = val / 1000.0;
+        setParam(m_blackpoint, m_lBlackpoint, m_sBlackpoint, val / 1000.0);
         onParameterChanged();
     });
-    connect(m_bSpin, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double val) {
+    connect(m_bSpin, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this, setParam](double val) {
         m_bSlider->blockSignals(true);
         m_bSlider->setValue(static_cast<int>(val * 1000.0));
         m_bSlider->blockSignals(false);
-        m_blackpoint = val;
+        setParam(m_blackpoint, m_lBlackpoint, m_sBlackpoint, val);
         onParameterChanged();
     });
 
@@ -143,18 +160,18 @@ StretchingDialog::StretchingDialog(WorkspaceRegistry& workspace, QWidget* parent
     mLayout->addWidget(m_mSpin);
     htForm->addRow("Mid Point (Gamma):", mLayout);
 
-    connect(m_mSlider, &QSlider::valueChanged, this, [this](int val) {
+    connect(m_mSlider, &QSlider::valueChanged, this, [this, setParam](int val) {
         m_mSpin->blockSignals(true);
         m_mSpin->setValue(val / 1000.0);
         m_mSpin->blockSignals(false);
-        m_midpoint = val / 1000.0;
+        setParam(m_midpoint, m_lMidpoint, m_sMidpoint, val / 1000.0);
         onParameterChanged();
     });
-    connect(m_mSpin, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double val) {
+    connect(m_mSpin, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this, setParam](double val) {
         m_mSlider->blockSignals(true);
         m_mSlider->setValue(static_cast<int>(val * 1000.0));
         m_mSlider->blockSignals(false);
-        m_midpoint = val;
+        setParam(m_midpoint, m_lMidpoint, m_sMidpoint, val);
         onParameterChanged();
     });
 
@@ -173,18 +190,18 @@ StretchingDialog::StretchingDialog(WorkspaceRegistry& workspace, QWidget* parent
     wLayout->addWidget(m_wSpin);
     htForm->addRow("White Point:", wLayout);
 
-    connect(m_wSlider, &QSlider::valueChanged, this, [this](int val) {
+    connect(m_wSlider, &QSlider::valueChanged, this, [this, setParam](int val) {
         m_wSpin->blockSignals(true);
         m_wSpin->setValue(val / 1000.0);
         m_wSpin->blockSignals(false);
-        m_whitepoint = val / 1000.0;
+        setParam(m_whitepoint, m_lWhitepoint, m_sWhitepoint, val / 1000.0);
         onParameterChanged();
     });
-    connect(m_wSpin, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double val) {
+    connect(m_wSpin, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this, setParam](double val) {
         m_wSlider->blockSignals(true);
         m_wSlider->setValue(static_cast<int>(val * 1000.0));
         m_wSlider->blockSignals(false);
-        m_whitepoint = val;
+        setParam(m_whitepoint, m_lWhitepoint, m_sWhitepoint, val);
         onParameterChanged();
     });
 
@@ -210,19 +227,19 @@ StretchingDialog::StretchingDialog(WorkspaceRegistry& workspace, QWidget* parent
     spLayout->addWidget(m_spSpin);
     ghsForm->addRow("Symmetry Point (SP):", spLayout);
 
-    connect(m_spSlider, &QSlider::valueChanged, this, [this](int val) {
+    connect(m_spSlider, &QSlider::valueChanged, this, [this, setParam](int val) {
         m_spSpin->blockSignals(true);
         m_spSpin->setValue(val / 1000.0);
         m_spSpin->blockSignals(false);
-        m_spPoint = val / 1000.0;
+        setParam(m_spPoint, m_lSpPoint, m_sSpPoint, val / 1000.0);
         enforceGhsConstraints(ConstraintSource::SymmetryPoint);
         onParameterChanged();
     });
-    connect(m_spSpin, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double val) {
+    connect(m_spSpin, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this, setParam](double val) {
         m_spSlider->blockSignals(true);
         m_spSlider->setValue(static_cast<int>(val * 1000.0));
         m_spSlider->blockSignals(false);
-        m_spPoint = val;
+        setParam(m_spPoint, m_lSpPoint, m_sSpPoint, val);
         enforceGhsConstraints(ConstraintSource::SymmetryPoint);
         onParameterChanged();
     });
@@ -242,18 +259,18 @@ StretchingDialog::StretchingDialog(WorkspaceRegistry& workspace, QWidget* parent
     dLayout->addWidget(m_dSpin);
     ghsForm->addRow("Stretch Factor (D):", dLayout);
 
-    connect(m_dSlider, &QSlider::valueChanged, this, [this](int val) {
+    connect(m_dSlider, &QSlider::valueChanged, this, [this, setParam](int val) {
         m_dSpin->blockSignals(true);
         m_dSpin->setValue(val / 10.0);
         m_dSpin->blockSignals(false);
-        m_stretchFactor = val / 10.0;
+        setParam(m_stretchFactor, m_lStretchFactor, m_sStretchFactor, val / 10.0);
         onParameterChanged();
     });
-    connect(m_dSpin, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double val) {
+    connect(m_dSpin, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this, setParam](double val) {
         m_dSlider->blockSignals(true);
         m_dSlider->setValue(static_cast<int>(val * 10.0));
         m_dSlider->blockSignals(false);
-        m_stretchFactor = val;
+        setParam(m_stretchFactor, m_lStretchFactor, m_sStretchFactor, val);
         onParameterChanged();
     });
 
@@ -272,19 +289,19 @@ StretchingDialog::StretchingDialog(WorkspaceRegistry& workspace, QWidget* parent
     shadowLayout->addWidget(m_shadowSpin);
     ghsForm->addRow("Shadow Protection:", shadowLayout);
 
-    connect(m_shadowSlider, &QSlider::valueChanged, this, [this](int val) {
+    connect(m_shadowSlider, &QSlider::valueChanged, this, [this, setParam](int val) {
         m_shadowSpin->blockSignals(true);
         m_shadowSpin->setValue(val / 100.0);
         m_shadowSpin->blockSignals(false);
-        m_shadowProtect = val / 100.0;
+        setParam(m_shadowProtect, m_lShadowProtect, m_sShadowProtect, val / 100.0);
         enforceGhsConstraints(ConstraintSource::ShadowProtect);
         onParameterChanged();
     });
-    connect(m_shadowSpin, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double val) {
+    connect(m_shadowSpin, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this, setParam](double val) {
         m_shadowSlider->blockSignals(true);
         m_shadowSlider->setValue(static_cast<int>(val * 100.0));
         m_shadowSlider->blockSignals(false);
-        m_shadowProtect = val;
+        setParam(m_shadowProtect, m_lShadowProtect, m_sShadowProtect, val);
         enforceGhsConstraints(ConstraintSource::ShadowProtect);
         onParameterChanged();
     });
@@ -304,19 +321,19 @@ StretchingDialog::StretchingDialog(WorkspaceRegistry& workspace, QWidget* parent
     highlightLayout->addWidget(m_highlightSpin);
     ghsForm->addRow("Highlight Protection:", highlightLayout);
 
-    connect(m_highlightSlider, &QSlider::valueChanged, this, [this](int val) {
+    connect(m_highlightSlider, &QSlider::valueChanged, this, [this, setParam](int val) {
         m_highlightSpin->blockSignals(true);
         m_highlightSpin->setValue(val / 100.0);
         m_highlightSpin->blockSignals(false);
-        m_highlightProtect = val / 100.0;
+        setParam(m_highlightProtect, m_lHighlightProtect, m_sHighlightProtect, val / 100.0);
         enforceGhsConstraints(ConstraintSource::HighlightProtect);
         onParameterChanged();
     });
-    connect(m_highlightSpin, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double val) {
+    connect(m_highlightSpin, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this, setParam](double val) {
         m_highlightSlider->blockSignals(true);
         m_highlightSlider->setValue(static_cast<int>(val * 100.0));
         m_highlightSlider->blockSignals(false);
-        m_highlightProtect = val;
+        setParam(m_highlightProtect, m_lHighlightProtect, m_sHighlightProtect, val);
         enforceGhsConstraints(ConstraintSource::HighlightProtect);
         onParameterChanged();
     });
@@ -327,9 +344,67 @@ StretchingDialog::StretchingDialog(WorkspaceRegistry& workspace, QWidget* parent
 
     // 3. General control box
     QHBoxLayout* ctrlLayout = new QHBoxLayout();
+    ctrlLayout->setSpacing(0);
     m_copyStretchesBtn = new QPushButton("Copy Live Stretch", this);
     connect(m_copyStretchesBtn, &QPushButton::clicked, this, &StretchingDialog::onCopyLiveStretch);
     ctrlLayout->addWidget(m_copyStretchesBtn);
+    
+    ctrlLayout->addStretch(1);
+    
+    m_channelGroup = new QButtonGroup(this);
+    m_channelGroup->setExclusive(true);
+    QStringList chNames = {"K", "R", "G", "B", "L", "S"};
+    for (int i = 0; i < chNames.size(); ++i) {
+        QPushButton* btn = new QPushButton(chNames[i], this);
+        btn->setCheckable(true);
+        btn->setFixedWidth(35);
+        
+        QString highlightColor = "#007acc";
+        if (i == 0) highlightColor = "#666666"; // RGB/K (Neutral Gray)
+        else if (i == 1) highlightColor = "#cc3333"; // R (Red)
+        else if (i == 2) highlightColor = "#33aa33"; // G (Green)
+        else if (i == 3) highlightColor = "#3366cc"; // B (Blue)
+        else if (i == 4) highlightColor = "#c4a000"; // L (Yellow/Gold)
+        else if (i == 5) highlightColor = "#75507b"; // S (Purple)
+
+        QString borderRadiusStr = "";
+        QString borderRightStr = "";
+        QString marginStr = "margin: 0px;";
+        
+        if (i == 0) { // RGB
+            borderRadiusStr = "border-top-left-radius: 4px; border-bottom-left-radius: 4px;";
+            borderRightStr = "border-right: none;";
+        } else if (i == 1 || i == 2) { // R, G
+            borderRadiusStr = "border-radius: 0px;";
+            borderRightStr = "border-right: none;";
+        } else if (i == 3) { // B
+            borderRadiusStr = "border-top-right-radius: 4px; border-bottom-right-radius: 4px;";
+        } else if (i == 4 || i == 5) { // L, S
+            borderRadiusStr = "border-radius: 4px;";
+            marginStr = "margin: 0px; margin-left: 6px;";
+        }
+
+        QString segmentedStyle = QString(
+            "QPushButton { background-color: #333; border: 1px solid #444; %2 %3 %4 color: #ccc; font-weight: bold; padding: 4px 0px; }"
+            "QPushButton:hover { background-color: #444; }"
+            "QPushButton:checked { background-color: %1; color: white; border-color: %1; }"
+        ).arg(highlightColor, borderRadiusStr, borderRightStr, marginStr);
+
+        btn->setStyleSheet(segmentedStyle);
+        if (i == 0) btn->setChecked(true);
+        m_channelGroup->addButton(btn, i);
+        ctrlLayout->addWidget(btn);
+    }
+    connect(m_channelGroup, &QButtonGroup::idClicked, this, &StretchingDialog::onChannelChanged);
+
+    QPushButton* resetBtn = new QPushButton("✖", this);
+    resetBtn->setToolTip("Reset Current Stretch");
+    resetBtn->setStyleSheet(
+        "QPushButton { background: transparent; border: none; color: #ff4444; font-weight: bold; font-size: 16px; margin-left: 5px; padding-bottom: 2px; }"
+        "QPushButton:hover { color: #ff0000; }"
+    );
+    connect(resetBtn, &QPushButton::clicked, this, &StretchingDialog::onResetStretchClicked);
+    ctrlLayout->addWidget(resetBtn);
 
     ctrlLayout->addStretch(1);
 
@@ -360,10 +435,7 @@ StretchingDialog::StretchingDialog(WorkspaceRegistry& workspace, QWidget* parent
     mainLayout->addLayout(btnLayout);
 
     // Load active image histogram into widget
-    auto activeWin = getActiveImageWindow();
-    if (activeWin && activeWin->imageView()) {
-        m_histogramWidget->setHistogram(activeWin->imageView()->getHistogram(65536));
-    }
+    refreshHistogramAndCache();
 
     syncUiFromValues();
 }
@@ -384,13 +456,24 @@ void StretchingDialog::closeEvent(QCloseEvent* event) {
 }
 
 WorkspaceImageWindow* StretchingDialog::getActiveImageWindow() const {
+    if (m_currentTrackedSub) {
+        if (auto win = qobject_cast<WorkspaceImageWindow*>(m_currentTrackedSub->widget())) {
+            return win;
+        }
+    }
+
     QWidget* p = parentWidget();
     while (p) {
         if (auto mw = qobject_cast<QMainWindow*>(p)) {
             if (auto wa = mw->findChild<WorkspaceArea*>()) {
                 QString activeName = wa->getActiveImageName();
                 if (!activeName.isEmpty()) {
-                    return wa->getImageWindow(activeName);
+                    auto win = wa->getImageWindow(activeName);
+                    // Preview windows cannot become a target
+                    if (win && win->hasPreviewActive() && (!m_previewChk || !m_previewChk->isChecked())) {
+                        return nullptr; 
+                    }
+                    return win;
                 }
             }
         }
@@ -405,10 +488,38 @@ void StretchingDialog::onTabChanged(int index) {
     onParameterChanged();
 }
 
-void StretchingDialog::onHtParamsChanged(double b, double w, double m) {
-    m_blackpoint = b;
-    m_whitepoint = w;
-    m_midpoint = m;
+void StretchingDialog::onChannelChanged(int id) {
+    m_activeChannel = static_cast<ActiveChannel>(id);
+    m_histogramWidget->setActiveChannel(id); // To show correct parameters and highlight trace
+    
+    QColor color = QColor("#ffffff");
+    if (m_activeChannel == ActiveChannel::L) color = QColor("#c4a000");
+    else if (m_activeChannel == ActiveChannel::S) color = QColor("#75507b");
+    m_histogramWidget->setSingleChannelColor(color);
+    
+    refreshHistogramAndCache(); // Fetch/update correct histogram for the channel
+    syncUiFromValues();
+}
+
+void StretchingDialog::onHtParamsChanged(const std::array<double, 3>& b_arr, const std::array<double, 3>& w_arr, const std::array<double, 3>& m_arr) {
+    if (m_activeChannel == ActiveChannel::L) {
+        m_lBlackpoint = b_arr[0];
+        m_lWhitepoint = w_arr[0];
+        m_lMidpoint = m_arr[0];
+    } else if (m_activeChannel == ActiveChannel::S) {
+        m_sBlackpoint = b_arr[0];
+        m_sWhitepoint = w_arr[0];
+        m_sMidpoint = m_arr[0];
+    } else {
+        m_blackpoint = b_arr;
+        m_whitepoint = w_arr;
+        m_midpoint = m_arr;
+    }
+
+    double b = b_arr[0], w = w_arr[0], m = m_arr[0];
+    if (m_activeChannel == ActiveChannel::R) { b = b_arr[0]; w = w_arr[0]; m = m_arr[0]; }
+    else if (m_activeChannel == ActiveChannel::G) { b = b_arr[1]; w = w_arr[1]; m = m_arr[1]; }
+    else if (m_activeChannel == ActiveChannel::B) { b = b_arr[2]; w = w_arr[2]; m = m_arr[2]; }
 
     if (m_bSpin) {
         m_bSpin->blockSignals(true);
@@ -446,9 +557,23 @@ void StretchingDialog::onHtParamsChanged(double b, double w, double m) {
     onParameterChanged();
 }
 
-void StretchingDialog::onGhsParamsChanged(double sp, double d) {
-    m_spPoint = sp;
-    m_stretchFactor = d;
+void StretchingDialog::onGhsParamsChanged(const std::array<double, 3>& sp_arr, const std::array<double, 3>& d_arr) {
+    if (m_activeChannel == ActiveChannel::L) {
+        m_lSpPoint = sp_arr[0];
+        m_lStretchFactor = d_arr[0];
+    } else if (m_activeChannel == ActiveChannel::S) {
+        m_sSpPoint = sp_arr[0];
+        m_sStretchFactor = d_arr[0];
+    } else {
+        m_spPoint = sp_arr;
+        m_stretchFactor = d_arr;
+    }
+
+    double sp = sp_arr[0];
+    double d = d_arr[0];
+    if (m_activeChannel == ActiveChannel::R) { sp = sp_arr[0]; d = d_arr[0]; }
+    else if (m_activeChannel == ActiveChannel::G) { sp = sp_arr[1]; d = d_arr[1]; }
+    else if (m_activeChannel == ActiveChannel::B) { sp = sp_arr[2]; d = d_arr[2]; }
 
     if (m_spSpin) {
         m_spSpin->blockSignals(true);
@@ -476,9 +601,23 @@ void StretchingDialog::onGhsParamsChanged(double sp, double d) {
     onParameterChanged();
 }
 
-void StretchingDialog::onGhsProtectionsChanged(double shadowProtect, double highlightProtect) {
-    m_shadowProtect = shadowProtect;
-    m_highlightProtect = highlightProtect;
+void StretchingDialog::onGhsProtectionsChanged(const std::array<double, 3>& shadowProtect_arr, const std::array<double, 3>& highlightProtect_arr) {
+    if (m_activeChannel == ActiveChannel::L) {
+        m_lShadowProtect = shadowProtect_arr[0];
+        m_lHighlightProtect = highlightProtect_arr[0];
+    } else if (m_activeChannel == ActiveChannel::S) {
+        m_sShadowProtect = shadowProtect_arr[0];
+        m_sHighlightProtect = highlightProtect_arr[0];
+    } else {
+        m_shadowProtect = shadowProtect_arr;
+        m_highlightProtect = highlightProtect_arr;
+    }
+
+    double shadowProtect = shadowProtect_arr[0];
+    double highlightProtect = highlightProtect_arr[0];
+    if (m_activeChannel == ActiveChannel::R) { shadowProtect = shadowProtect_arr[0]; highlightProtect = highlightProtect_arr[0]; }
+    else if (m_activeChannel == ActiveChannel::G) { shadowProtect = shadowProtect_arr[1]; highlightProtect = highlightProtect_arr[1]; }
+    else if (m_activeChannel == ActiveChannel::B) { shadowProtect = shadowProtect_arr[2]; highlightProtect = highlightProtect_arr[2]; }
 
     if (m_shadowSpin) {
         m_shadowSpin->blockSignals(true);
@@ -510,9 +649,17 @@ void StretchingDialog::onGhsProtectionsChanged(double shadowProtect, double high
 void StretchingDialog::onCopyLiveStretch() {
     auto win = getActiveImageWindow();
     if (win && win->imageView() && m_histogramWidget && m_tabWidget) {
-        m_blackpoint = win->imageView()->blackpoint();
-        m_whitepoint = win->imageView()->whitepoint();
-        m_midpoint = win->imageView()->midpoint();
+        m_blackpoint = win->imageView()->blackpoints();
+        m_whitepoint = win->imageView()->whitepoints();
+        m_midpoint = win->imageView()->midpoints();
+
+        if (win->imageView()->channelsLinked()) {
+            m_channelGroup->button(static_cast<int>(ActiveChannel::K))->setChecked(true);
+            onChannelChanged(static_cast<int>(ActiveChannel::K));
+        } else {
+            m_channelGroup->button(static_cast<int>(ActiveChannel::G))->setChecked(true);
+            onChannelChanged(static_cast<int>(ActiveChannel::G));
+        }
         
         m_tabWidget->setCurrentIndex(0); // HT Tab
         m_isGhsMode = false;
@@ -524,20 +671,74 @@ void StretchingDialog::onCopyLiveStretch() {
 }
 
 
+void StretchingDialog::onResetStretchClicked() {
+    auto resetValues = [this](std::array<double, 3>& b, std::array<double, 3>& w, std::array<double, 3>& m,
+                              std::array<double, 3>& sp, std::array<double, 3>& d,
+                              std::array<double, 3>& sh, std::array<double, 3>& hi) {
+        if (m_activeChannel == ActiveChannel::K) {
+            b.fill(0.0); w.fill(1.0); m.fill(0.5);
+            sp.fill(0.5); d.fill(0.0);
+            sh.fill(0.0); hi.fill(1.0);
+        } else {
+            int idx = static_cast<int>(m_activeChannel) - 1;
+            if (idx >= 0 && idx < 3) {
+                b[idx] = 0.0; w[idx] = 1.0; m[idx] = 0.5;
+                sp[idx] = 0.5; d[idx] = 0.0;
+                sh[idx] = 0.0; hi[idx] = 1.0;
+            }
+        }
+    };
+
+    if (m_activeChannel == ActiveChannel::L) {
+        m_lBlackpoint = 0.0; m_lWhitepoint = 1.0; m_lMidpoint = 0.5;
+        m_lSpPoint = 0.5; m_lStretchFactor = 0.0; m_lShadowProtect = 0.0; m_lHighlightProtect = 1.0;
+    } else if (m_activeChannel == ActiveChannel::S) {
+        m_sBlackpoint = 0.0; m_sWhitepoint = 1.0; m_sMidpoint = 0.5;
+        m_sSpPoint = 0.5; m_sStretchFactor = 0.0; m_sShadowProtect = 0.0; m_sHighlightProtect = 1.0;
+    } else {
+        resetValues(m_blackpoint, m_whitepoint, m_midpoint, m_spPoint, m_stretchFactor, m_shadowProtect, m_highlightProtect);
+    }
+    
+    syncUiFromValues();
+    onParameterChanged();
+}
+
 void StretchingDialog::onParameterChanged() {
     if (!m_histogramWidget) return;
 
-    // Keep histogram widget synced
-    if (m_isGhsMode) {
-        m_histogramWidget->setGhsParams(m_spPoint, m_stretchFactor);
-        m_histogramWidget->setGhsProtections(m_shadowProtect, m_highlightProtect);
-    } else {
-        m_histogramWidget->setStretchParams(m_blackpoint, m_whitepoint, m_midpoint);
+    std::array<double, 3> bp = m_blackpoint;
+    std::array<double, 3> wp = m_whitepoint;
+    std::array<double, 3> mp = m_midpoint;
+    std::array<double, 3> spp = m_spPoint;
+    std::array<double, 3> dp = m_stretchFactor;
+    std::array<double, 3> sPp = m_shadowProtect;
+    std::array<double, 3> hPp = m_highlightProtect;
+
+    if (m_activeChannel == ActiveChannel::L) {
+        bp.fill(m_lBlackpoint); wp.fill(m_lWhitepoint); mp.fill(m_lMidpoint);
+        spp.fill(m_lSpPoint); dp.fill(m_lStretchFactor);
+        sPp.fill(m_lShadowProtect); hPp.fill(m_lHighlightProtect);
+    } else if (m_activeChannel == ActiveChannel::S) {
+        bp.fill(m_sBlackpoint); wp.fill(m_sWhitepoint); mp.fill(m_sMidpoint);
+        spp.fill(m_sSpPoint); dp.fill(m_sStretchFactor);
+        sPp.fill(m_sShadowProtect); hPp.fill(m_sHighlightProtect);
     }
 
+    if (m_isGhsMode) {
+        m_histogramWidget->setGhsParams(spp, dp);
+        m_histogramWidget->setGhsProtections(sPp, hPp);
+    } else {
+        m_histogramWidget->setStretchParams(bp, wp, mp);
+    }
+    m_histogramWidget->setChannelsLinked(m_activeChannel == ActiveChannel::K || 
+                                         m_activeChannel == ActiveChannel::L || 
+                                         m_activeChannel == ActiveChannel::S);
+
     if (m_previewChk && m_previewChk->isChecked()) {
+        m_copyStretchesBtn->setEnabled(false);
         m_previewTimer->start(150); // Debounce
     } else {
+        if (m_previewChk) m_copyStretchesBtn->setEnabled(true);
         if (m_previewTimer) m_previewTimer->stop();
         if (auto win = getActiveImageWindow()) {
             win->restoreOriginalImage();
@@ -545,134 +746,297 @@ void StretchingDialog::onParameterChanged() {
     }
 }
 
+static std::vector<std::vector<int>> computeBufferHistogram(std::shared_ptr<ImageBuffer> buf, int bins = 65536) {
+    std::vector<std::vector<int>> hists(1, std::vector<int>(bins, 0));
+    if (!buf) return hists;
+    int totalPixels = buf->width() * buf->height();
+    int sampleStep = std::max(1, totalPixels / 50000);
+    const float* data = buf->data();
+    for (int i = 0; i < totalPixels; i += sampleStep) {
+        float val = data[i];
+        if (!std::isnan(val)) {
+            int bin = std::max(0, std::min(bins - 1, static_cast<int>(val * (bins - 1))));
+            hists[0][bin]++;
+        }
+    }
+    return hists;
+}
+
+static std::vector<std::vector<int>> computeVariantHistogram(const ImageVariant& baseImg, int bins = 65536) {
+    std::vector<std::vector<int>> hists;
+    int width = 0, height = 0;
+    if (std::holds_alternative<GrayscaleImagePtr>(baseImg)) {
+        auto img = std::get<GrayscaleImagePtr>(baseImg);
+        if (!img) return hists;
+        width = img->width();
+        height = img->height();
+        hists.push_back(std::vector<int>(bins, 0));
+    } else if (std::holds_alternative<RGBImagePtr>(baseImg)) {
+        auto img = std::get<RGBImagePtr>(baseImg);
+        if (!img) return hists;
+        width = img->width();
+        height = img->height();
+        hists.assign(4, std::vector<int>(bins, 0)); // L, R, G, B
+    } else {
+        return hists;
+    }
+
+    int totalPixels = width * height;
+    int sampleStep = std::max(1, totalPixels / 50000);
+
+    for (int y = 0; y < height; ++y) {
+        for (int x = 0; x < width; ++x) {
+            int linearIdx = y * width + x;
+            if (linearIdx % sampleStep == 0) {
+                if (std::holds_alternative<GrayscaleImagePtr>(baseImg)) {
+                    float val = std::get<GrayscaleImagePtr>(baseImg)->buffer()->pixel(x, y);
+                    if (!std::isnan(val)) {
+                        int bin = std::max(0, std::min(bins - 1, static_cast<int>(val * (bins - 1))));
+                        hists[0][bin]++;
+                    }
+                } else {
+                    auto rgb = std::get<RGBImagePtr>(baseImg);
+                    float r = rgb->r()->buffer()->pixel(x, y);
+                    float g = rgb->g()->buffer()->pixel(x, y);
+                    float b = rgb->b()->buffer()->pixel(x, y);
+                    
+                    if (!std::isnan(r) && !std::isnan(g) && !std::isnan(b)) {
+                        int binR = std::max(0, std::min(bins - 1, static_cast<int>(r * (bins - 1))));
+                        int binG = std::max(0, std::min(bins - 1, static_cast<int>(g * (bins - 1))));
+                        int binB = std::max(0, std::min(bins - 1, static_cast<int>(b * (bins - 1))));
+                        int binL = std::max(0, std::min(bins - 1, static_cast<int>(((r+g+b)/3.0f) * (bins - 1))));
+                        hists[0][binL]++;
+                        hists[1][binR]++;
+                        hists[2][binG]++;
+                        hists[3][binB]++;
+                    }
+                }
+            }
+        }
+    }
+
+    return hists;
+}
+
+void StretchingDialog::refreshHistogramAndCache() {
+    auto win = getActiveImageWindow();
+    if (!win || !win->imageView()) return;
+
+#ifdef _OPENMP
+    int threads = m_threads > 0 ? m_threads : Preferences::instance().getThreadCount();
+    if (threads > 0) {
+        omp_set_num_threads(threads);
+    }
+#endif
+
+    ImageVariant baseImg = win->originalImage();
+    void* currentPtr = nullptr;
+    if (std::holds_alternative<RGBImagePtr>(baseImg)) {
+        currentPtr = static_cast<void*>(std::get<RGBImagePtr>(baseImg).get());
+    } else if (std::holds_alternative<GrayscaleImagePtr>(baseImg)) {
+        currentPtr = static_cast<void*>(std::get<GrayscaleImagePtr>(baseImg).get());
+    }
+
+    if (!currentPtr) return;
+
+    bool isRGB = std::holds_alternative<RGBImagePtr>(baseImg);
+    if (m_channelGroup) {
+        if (isRGB) {
+            for (int i = 0; i <= 5; ++i) {
+                if (auto btn = m_channelGroup->button(i)) {
+                    btn->show();
+                    if (i == 0) btn->setText("RGB");
+                }
+            }
+        } else {
+            for (int i = 1; i <= 5; ++i) {
+                if (auto btn = m_channelGroup->button(i)) btn->hide();
+            }
+            if (auto btn = m_channelGroup->button(0)) {
+                btn->setText("K");
+                if (m_activeChannel != ActiveChannel::K) {
+                    m_channelGroup->button(static_cast<int>(ActiveChannel::K))->setChecked(true);
+                    m_activeChannel = ActiveChannel::K;
+                }
+            }
+        }
+    }
+
+    if (m_cachedBaseImgPtr != currentPtr) {
+        m_cachedBaseImgPtr = currentPtr;
+        m_cachedHBuf = nullptr;
+        m_cachedSBuf = nullptr;
+        m_cachedLBuf = nullptr;
+
+        if (std::holds_alternative<RGBImagePtr>(baseImg)) {
+            auto rgb = std::get<RGBImagePtr>(baseImg);
+            int w = rgb->width();
+            int h = rgb->height();
+            int numPixels = w * h;
+            m_cachedHBuf = std::make_shared<ImageBuffer>(w, h);
+            m_cachedSBuf = std::make_shared<ImageBuffer>(w, h);
+            m_cachedLBuf = std::make_shared<ImageBuffer>(w, h);
+            
+            const float* rData = rgb->r()->buffer()->data();
+            const float* gData = rgb->g()->buffer()->data();
+            const float* bData = rgb->b()->buffer()->data();
+            float* hData = m_cachedHBuf->data();
+            float* sData = m_cachedSBuf->data();
+            float* lData = m_cachedLBuf->data();
+
+            #pragma omp parallel for
+            for (int i = 0; i < numPixels; ++i) {
+                StretchingAlgorithm::rgbToHsl(rData[i], gData[i], bData[i], hData[i], sData[i], lData[i]);
+            }
+        }
+    }
+
+    if (m_activeChannel == ActiveChannel::L && m_cachedLBuf) {
+        m_histogramWidget->setSingleTraceColor(QColor("#c4a000")); // Yellow
+        m_histogramWidget->setHistograms(computeBufferHistogram(m_cachedLBuf, 65536));
+    } else if (m_activeChannel == ActiveChannel::S && m_cachedSBuf) {
+        m_histogramWidget->setSingleTraceColor(QColor("#75507b")); // Purple
+        m_histogramWidget->setHistograms(computeBufferHistogram(m_cachedSBuf, 65536));
+    } else {
+        m_histogramWidget->setSingleTraceColor(Qt::white);
+        m_histogramWidget->setHistograms(computeVariantHistogram(baseImg, 65536));
+    }
+}
+
 void StretchingDialog::syncUiFromValues() {
+    auto getParam = [this](const std::array<double, 3>& rgb, double l, double s) {
+        if (m_activeChannel == ActiveChannel::L) return l;
+        if (m_activeChannel == ActiveChannel::S) return s;
+        if (m_activeChannel == ActiveChannel::R) return rgb[0];
+        if (m_activeChannel == ActiveChannel::G) return rgb[1];
+        if (m_activeChannel == ActiveChannel::B) return rgb[2];
+        return rgb[0]; // RGB linked
+    };
+
+    double b = getParam(m_blackpoint, m_lBlackpoint, m_sBlackpoint);
+    double w = getParam(m_whitepoint, m_lWhitepoint, m_sWhitepoint);
+    double m = getParam(m_midpoint, m_lMidpoint, m_sMidpoint);
+    double sp = getParam(m_spPoint, m_lSpPoint, m_sSpPoint);
+    double d = getParam(m_stretchFactor, m_lStretchFactor, m_sStretchFactor);
+    double shadow = getParam(m_shadowProtect, m_lShadowProtect, m_sShadowProtect);
+    double high = getParam(m_highlightProtect, m_lHighlightProtect, m_sHighlightProtect);
+
     // 1. HT block signals & set
-    m_bSpin->blockSignals(true);
-    m_bSpin->setValue(m_blackpoint);
-    m_bSpin->blockSignals(false);
-    m_bSlider->blockSignals(true);
-    m_bSlider->setValue(static_cast<int>(m_blackpoint * 1000.0));
-    m_bSlider->blockSignals(false);
+    m_bSpin->blockSignals(true); m_bSpin->setValue(b); m_bSpin->blockSignals(false);
+    m_bSlider->blockSignals(true); m_bSlider->setValue(static_cast<int>(b * 1000.0)); m_bSlider->blockSignals(false);
 
-    m_wSpin->blockSignals(true);
-    m_wSpin->setValue(m_whitepoint);
-    m_wSpin->blockSignals(false);
-    m_wSlider->blockSignals(true);
-    m_wSlider->setValue(static_cast<int>(m_whitepoint * 1000.0));
-    m_wSlider->blockSignals(false);
+    m_wSpin->blockSignals(true); m_wSpin->setValue(w); m_wSpin->blockSignals(false);
+    m_wSlider->blockSignals(true); m_wSlider->setValue(static_cast<int>(w * 1000.0)); m_wSlider->blockSignals(false);
 
-    m_mSpin->blockSignals(true);
-    m_mSpin->setValue(m_midpoint);
-    m_mSpin->blockSignals(false);
-    m_mSlider->blockSignals(true);
-    m_mSlider->setValue(static_cast<int>(m_midpoint * 1000.0));
-    m_mSlider->blockSignals(false);
+    m_mSpin->blockSignals(true); m_mSpin->setValue(m); m_mSpin->blockSignals(false);
+    m_mSlider->blockSignals(true); m_mSlider->setValue(static_cast<int>(m * 1000.0)); m_mSlider->blockSignals(false);
 
     // 2. GHS block signals & set
-    m_spSpin->blockSignals(true);
-    m_spSpin->setValue(m_spPoint);
-    m_spSpin->blockSignals(false);
-    m_spSlider->blockSignals(true);
-    m_spSlider->setValue(static_cast<int>(m_spPoint * 1000.0));
-    m_spSlider->blockSignals(false);
+    m_spSpin->blockSignals(true); m_spSpin->setValue(sp); m_spSpin->blockSignals(false);
+    m_spSlider->blockSignals(true); m_spSlider->setValue(static_cast<int>(sp * 1000.0)); m_spSlider->blockSignals(false);
 
-    m_dSpin->blockSignals(true);
-    m_dSpin->setValue(m_stretchFactor);
-    m_dSpin->blockSignals(false);
-    m_dSlider->blockSignals(true);
-    m_dSlider->setValue(static_cast<int>(m_stretchFactor * 10.0));
-    m_dSlider->blockSignals(false);
+    m_dSpin->blockSignals(true); m_dSpin->setValue(d); m_dSpin->blockSignals(false);
+    m_dSlider->blockSignals(true); m_dSlider->setValue(static_cast<int>(d * 10.0)); m_dSlider->blockSignals(false);
 
-    m_shadowSpin->blockSignals(true);
-    m_shadowSpin->setValue(m_shadowProtect);
-    m_shadowSpin->blockSignals(false);
-    m_shadowSlider->blockSignals(true);
-    m_shadowSlider->setValue(static_cast<int>(m_shadowProtect * 100.0));
-    m_shadowSlider->blockSignals(false);
+    m_shadowSpin->blockSignals(true); m_shadowSpin->setValue(shadow); m_shadowSpin->blockSignals(false);
+    m_shadowSlider->blockSignals(true); m_shadowSlider->setValue(static_cast<int>(shadow * 100.0)); m_shadowSlider->blockSignals(false);
 
-    m_highlightSpin->blockSignals(true);
-    m_highlightSpin->setValue(m_highlightProtect);
-    m_highlightSpin->blockSignals(false);
-    m_highlightSlider->blockSignals(true);
-    m_highlightSlider->setValue(static_cast<int>(m_highlightProtect * 100.0));
-    m_highlightSlider->blockSignals(false);
+    m_highlightSpin->blockSignals(true); m_highlightSpin->setValue(high); m_highlightSpin->blockSignals(false);
+    m_highlightSlider->blockSignals(true); m_highlightSlider->setValue(static_cast<int>(high * 100.0)); m_highlightSlider->blockSignals(false);
 
     // Set widget params
-    if (m_histogramWidget) {
-        m_histogramWidget->setStretchParams(m_blackpoint, m_whitepoint, m_midpoint);
-        m_histogramWidget->setGhsParams(m_spPoint, m_stretchFactor);
-        m_histogramWidget->setGhsProtections(m_shadowProtect, m_highlightProtect);
+    {
+        std::array<double, 3> bp = m_blackpoint;
+        std::array<double, 3> wp = m_whitepoint;
+        std::array<double, 3> mp = m_midpoint;
+        std::array<double, 3> spp = m_spPoint;
+        std::array<double, 3> dp = m_stretchFactor;
+        std::array<double, 3> sPp = m_shadowProtect;
+        std::array<double, 3> hPp = m_highlightProtect;
+
+        if (m_activeChannel == ActiveChannel::L) {
+            bp.fill(m_lBlackpoint); wp.fill(m_lWhitepoint); mp.fill(m_lMidpoint);
+            spp.fill(m_lSpPoint); dp.fill(m_lStretchFactor);
+            sPp.fill(m_lShadowProtect); hPp.fill(m_lHighlightProtect);
+        } else if (m_activeChannel == ActiveChannel::S) {
+            bp.fill(m_sBlackpoint); wp.fill(m_sWhitepoint); mp.fill(m_sMidpoint);
+            spp.fill(m_sSpPoint); dp.fill(m_sStretchFactor);
+            sPp.fill(m_sShadowProtect); hPp.fill(m_sHighlightProtect);
+        }
+
+        m_histogramWidget->blockSignals(true);
+        m_histogramWidget->setStretchParams(bp, wp, mp);
+        m_histogramWidget->setGhsParams(spp, dp);
+        m_histogramWidget->setGhsProtections(sPp, hPp);
+        m_histogramWidget->blockSignals(false);
     }
 }
 
 void StretchingDialog::enforceGhsConstraints(ConstraintSource source) {
-    bool spChanged = false;
-    bool shadowChanged = false;
-    bool highlightChanged = false;
+    auto doEnforce = [&](double& sp_val, double& sh_val, double& hi_val) {
+        bool spChanged = false;
+        bool shadowChanged = false;
+        bool highlightChanged = false;
 
-    if (source == ConstraintSource::SymmetryPoint) {
-        if (m_shadowProtect > m_spPoint) {
-            m_shadowProtect = m_spPoint;
-            shadowChanged = true;
-        }
-        if (m_highlightProtect < m_spPoint) {
-            m_highlightProtect = m_spPoint;
-            highlightChanged = true;
-        }
-    } else if (source == ConstraintSource::ShadowProtect) {
-        if (m_shadowProtect > m_spPoint) {
-            m_spPoint = m_shadowProtect;
-            spChanged = true;
-            if (m_highlightProtect < m_spPoint) {
-                m_highlightProtect = m_spPoint;
-                highlightChanged = true;
+        if (source == ConstraintSource::SymmetryPoint) {
+            if (sh_val > sp_val) { sh_val = sp_val; shadowChanged = true; }
+            if (hi_val < sp_val) { hi_val = sp_val; highlightChanged = true; }
+        } else if (source == ConstraintSource::ShadowProtect) {
+            if (sh_val > sp_val) {
+                sp_val = sh_val; spChanged = true;
+                if (hi_val < sp_val) { hi_val = sp_val; highlightChanged = true; }
+            }
+        } else if (source == ConstraintSource::HighlightProtect) {
+            if (hi_val < sp_val) {
+                sp_val = hi_val; spChanged = true;
+                if (sh_val > sp_val) { sh_val = sp_val; shadowChanged = true; }
             }
         }
-    } else if (source == ConstraintSource::HighlightProtect) {
-        if (m_highlightProtect < m_spPoint) {
-            m_spPoint = m_highlightProtect;
-            spChanged = true;
-            if (m_shadowProtect > m_spPoint) {
-                m_shadowProtect = m_spPoint;
-                shadowChanged = true;
-            }
+        return std::make_tuple(spChanged, shadowChanged, highlightChanged);
+    };
+
+    bool spC = false, shC = false, hiC = false;
+    if (m_activeChannel == ActiveChannel::L) {
+        auto res = doEnforce(m_lSpPoint, m_lShadowProtect, m_lHighlightProtect);
+        spC = std::get<0>(res); shC = std::get<1>(res); hiC = std::get<2>(res);
+    } else if (m_activeChannel == ActiveChannel::K) {
+        for (int i=0; i<3; ++i) {
+            auto res = doEnforce(m_spPoint[i], m_shadowProtect[i], m_highlightProtect[i]);
+            spC |= std::get<0>(res); shC |= std::get<1>(res); hiC |= std::get<2>(res);
         }
+    } else if (m_activeChannel == ActiveChannel::S) {
+        auto res = doEnforce(m_sSpPoint, m_sShadowProtect, m_sHighlightProtect);
+        spC = std::get<0>(res); shC = std::get<1>(res); hiC = std::get<2>(res);
+    } else {
+        int i = static_cast<int>(m_activeChannel) - 1;
+        auto res = doEnforce(m_spPoint[i], m_shadowProtect[i], m_highlightProtect[i]);
+        spC = std::get<0>(res); shC = std::get<1>(res); hiC = std::get<2>(res);
     }
 
-    if (spChanged) {
-        if (m_spSpin) {
-            m_spSpin->blockSignals(true);
-            m_spSpin->setValue(m_spPoint);
-            m_spSpin->blockSignals(false);
+    if (spC || shC || hiC) {
+        auto getParam = [this](const std::array<double, 3>& rgb, double l, double s) {
+            if (m_activeChannel == ActiveChannel::L) return l;
+            if (m_activeChannel == ActiveChannel::S) return s;
+            if (m_activeChannel == ActiveChannel::R) return rgb[0];
+            if (m_activeChannel == ActiveChannel::G) return rgb[1];
+            if (m_activeChannel == ActiveChannel::B) return rgb[2];
+            return rgb[0];
+        };
+        double activeSp = getParam(m_spPoint, m_lSpPoint, m_sSpPoint);
+        double activeSh = getParam(m_shadowProtect, m_lShadowProtect, m_sShadowProtect);
+        double activeHi = getParam(m_highlightProtect, m_lHighlightProtect, m_sHighlightProtect);
+
+        if (spC) {
+            if (m_spSpin) { m_spSpin->blockSignals(true); m_spSpin->setValue(activeSp); m_spSpin->blockSignals(false); }
+            if (m_spSlider) { m_spSlider->blockSignals(true); m_spSlider->setValue(static_cast<int>(activeSp * 1000.0)); m_spSlider->blockSignals(false); }
         }
-        if (m_spSlider) {
-            m_spSlider->blockSignals(true);
-            m_spSlider->setValue(static_cast<int>(m_spPoint * 1000.0));
-            m_spSlider->blockSignals(false);
+        if (shC) {
+            if (m_shadowSpin) { m_shadowSpin->blockSignals(true); m_shadowSpin->setValue(activeSh); m_shadowSpin->blockSignals(false); }
+            if (m_shadowSlider) { m_shadowSlider->blockSignals(true); m_shadowSlider->setValue(static_cast<int>(activeSh * 100.0)); m_shadowSlider->blockSignals(false); }
         }
-    }
-    if (shadowChanged) {
-        if (m_shadowSpin) {
-            m_shadowSpin->blockSignals(true);
-            m_shadowSpin->setValue(m_shadowProtect);
-            m_shadowSpin->blockSignals(false);
-        }
-        if (m_shadowSlider) {
-            m_shadowSlider->blockSignals(true);
-            m_shadowSlider->setValue(static_cast<int>(m_shadowProtect * 100.0));
-            m_shadowSlider->blockSignals(false);
-        }
-    }
-    if (highlightChanged) {
-        if (m_highlightSpin) {
-            m_highlightSpin->blockSignals(true);
-            m_highlightSpin->setValue(m_highlightProtect);
-            m_highlightSpin->blockSignals(false);
-        }
-        if (m_highlightSlider) {
-            m_highlightSlider->blockSignals(true);
-            m_highlightSlider->setValue(static_cast<int>(m_highlightProtect * 100.0));
-            m_highlightSlider->blockSignals(false);
+        if (hiC) {
+            if (m_highlightSpin) { m_highlightSpin->blockSignals(true); m_highlightSpin->setValue(activeHi); m_highlightSpin->blockSignals(false); }
+            if (m_highlightSlider) { m_highlightSlider->blockSignals(true); m_highlightSlider->setValue(static_cast<int>(activeHi * 100.0)); m_highlightSlider->blockSignals(false); }
         }
     }
 }
@@ -680,6 +1044,13 @@ void StretchingDialog::enforceGhsConstraints(ConstraintSource source) {
 void StretchingDialog::updatePreview() {
     auto win = getActiveImageWindow();
     if (!win) return;
+
+#ifdef _OPENMP
+    int threads = m_threads > 0 ? m_threads : Preferences::instance().getThreadCount();
+    if (threads > 0) {
+        omp_set_num_threads(threads);
+    }
+#endif
 
     ImageVariant baseImg = win->originalImage();
     if (baseImg.index() == 0 && std::get<0>(baseImg) == nullptr) return;
@@ -690,21 +1061,80 @@ void StretchingDialog::updatePreview() {
         if (std::holds_alternative<GrayscaleImagePtr>(baseImg)) {
             auto gray = std::get<GrayscaleImagePtr>(baseImg);
             auto cloned = cloneGrayscale(gray);
-            previewResult = StretchingAlgorithm::stretchGhsGrayscale(cloned, 0.0, 1.0, m_spPoint, m_stretchFactor, m_shadowProtect, m_highlightProtect, 1);
+            previewResult = StretchingAlgorithm::stretchGhsGrayscale(cloned, 0.0, 1.0, m_spPoint[0], m_stretchFactor[0], m_shadowProtect[0], m_highlightProtect[0], 1);
         } else if (std::holds_alternative<RGBImagePtr>(baseImg)) {
             auto rgb = std::get<RGBImagePtr>(baseImg);
-            auto cloned = cloneRGB(rgb);
-            previewResult = StretchingAlgorithm::stretchGhsRGB(cloned, 0.0, 1.0, m_spPoint, m_stretchFactor, m_shadowProtect, m_highlightProtect, 1, m_colorPreserving);
+            if (m_activeChannel == ActiveChannel::L) {
+                auto cloned = cloneRGB(rgb);
+                std::array<double, 3> low = {0.0, 0.0, 0.0};
+                std::array<double, 3> high = {1.0, 1.0, 1.0};
+                std::array<double, 3> sp = {m_lSpPoint, m_lSpPoint, m_lSpPoint};
+                std::array<double, 3> sf = {m_lStretchFactor, m_lStretchFactor, m_lStretchFactor};
+                std::array<double, 3> sh = {m_lShadowProtect, m_lShadowProtect, m_lShadowProtect};
+                std::array<double, 3> hl = {m_lHighlightProtect, m_lHighlightProtect, m_lHighlightProtect};
+                previewResult = StretchingAlgorithm::stretchGhsRGB(cloned, low, high, sp, sf, sh, hl, 1, true); // true = color preserving (scale luminance)
+            } else if (m_activeChannel == ActiveChannel::S && m_cachedSBuf) {
+                auto clonedS = cloneGrayscale(std::make_shared<GrayscaleImage>(m_cachedSBuf));
+                auto stretchedS = StretchingAlgorithm::stretchGhsGrayscale(clonedS, 0.0, 1.0, m_sSpPoint, m_sStretchFactor, m_sShadowProtect, m_sHighlightProtect, 1);
+                
+                auto outR = std::make_shared<ImageBuffer>(rgb->width(), rgb->height());
+                auto outG = std::make_shared<ImageBuffer>(rgb->width(), rgb->height());
+                auto outB = std::make_shared<ImageBuffer>(rgb->width(), rgb->height());
+                const float* hData = m_cachedHBuf->data();
+                const float* sData = stretchedS->buffer()->data();
+                const float* lData = m_cachedLBuf->data();
+                float* rData = outR->data(); float* gData = outG->data(); float* bData = outB->data();
+                int numPix = rgb->width() * rgb->height();
+                #pragma omp parallel for
+                for (int i = 0; i < numPix; ++i) StretchingAlgorithm::hslToRgb(hData[i], sData[i], lData[i], rData[i], gData[i], bData[i]);
+                previewResult = std::make_shared<RGBImage>(
+                    std::make_shared<GrayscaleImage>(outR),
+                    std::make_shared<GrayscaleImage>(outG),
+                    std::make_shared<GrayscaleImage>(outB)
+                );
+            } else {
+                auto cloned = cloneRGB(rgb);
+                std::array<double, 3> low = {0.0, 0.0, 0.0};
+                std::array<double, 3> high = {1.0, 1.0, 1.0};
+                previewResult = StretchingAlgorithm::stretchGhsRGB(cloned, low, high, m_spPoint, m_stretchFactor, m_shadowProtect, m_highlightProtect, 1, false); // false = direct RGB stretch
+            }
         }
     } else {
         if (std::holds_alternative<GrayscaleImagePtr>(baseImg)) {
             auto gray = std::get<GrayscaleImagePtr>(baseImg);
             auto cloned = cloneGrayscale(gray);
-            previewResult = StretchingAlgorithm::stretchHistogramGrayscale(cloned, m_blackpoint, m_whitepoint, m_midpoint);
+            previewResult = StretchingAlgorithm::stretchHistogramGrayscale(cloned, m_blackpoint[0], m_whitepoint[0], m_midpoint[0]);
         } else if (std::holds_alternative<RGBImagePtr>(baseImg)) {
             auto rgb = std::get<RGBImagePtr>(baseImg);
-            auto cloned = cloneRGB(rgb);
-            previewResult = StretchingAlgorithm::stretchHistogramRGB(cloned, m_blackpoint, m_whitepoint, m_midpoint, m_colorPreserving);
+            if (m_activeChannel == ActiveChannel::L) {
+                auto cloned = cloneRGB(rgb);
+                std::array<double, 3> bp = {m_lBlackpoint, m_lBlackpoint, m_lBlackpoint};
+                std::array<double, 3> wp = {m_lWhitepoint, m_lWhitepoint, m_lWhitepoint};
+                std::array<double, 3> mp = {m_lMidpoint, m_lMidpoint, m_lMidpoint};
+                previewResult = StretchingAlgorithm::stretchHistogramRGB(cloned, bp, wp, mp, true); // true = color preserving
+            } else if (m_activeChannel == ActiveChannel::S && m_cachedSBuf) {
+                auto clonedS = cloneGrayscale(std::make_shared<GrayscaleImage>(m_cachedSBuf));
+                auto stretchedS = StretchingAlgorithm::stretchHistogramGrayscale(clonedS, m_sBlackpoint, m_sWhitepoint, m_sMidpoint);
+                
+                auto outR = std::make_shared<ImageBuffer>(rgb->width(), rgb->height());
+                auto outG = std::make_shared<ImageBuffer>(rgb->width(), rgb->height());
+                auto outB = std::make_shared<ImageBuffer>(rgb->width(), rgb->height());
+                const float* hData = m_cachedHBuf->data();
+                const float* sData = stretchedS->buffer()->data();
+                const float* lData = m_cachedLBuf->data();
+                float* rData = outR->data(); float* gData = outG->data(); float* bData = outB->data();
+                int numPix = rgb->width() * rgb->height();
+                #pragma omp parallel for
+                for (int i = 0; i < numPix; ++i) StretchingAlgorithm::hslToRgb(hData[i], sData[i], lData[i], rData[i], gData[i], bData[i]);
+                previewResult = std::make_shared<RGBImage>(
+                    std::make_shared<GrayscaleImage>(outR),
+                    std::make_shared<GrayscaleImage>(outG),
+                    std::make_shared<GrayscaleImage>(outB)
+                );
+            } else {
+                auto cloned = cloneRGB(rgb);
+                previewResult = StretchingAlgorithm::stretchHistogramRGB(cloned, m_blackpoint, m_whitepoint, m_midpoint, false); // false = direct RGB stretch
+            }
         }
     }
 
@@ -726,21 +1156,80 @@ void StretchingDialog::onApplyClicked() {
         if (std::holds_alternative<GrayscaleImagePtr>(baseImg)) {
             auto gray = std::get<GrayscaleImagePtr>(baseImg);
             auto cloned = cloneGrayscale(gray);
-            finalResult = StretchingAlgorithm::stretchGhsGrayscale(cloned, 0.0, 1.0, m_spPoint, m_stretchFactor, m_shadowProtect, m_highlightProtect, 1);
+            finalResult = StretchingAlgorithm::stretchGhsGrayscale(cloned, 0.0, 1.0, m_spPoint[0], m_stretchFactor[0], m_shadowProtect[0], m_highlightProtect[0], 1);
         } else if (std::holds_alternative<RGBImagePtr>(baseImg)) {
             auto rgb = std::get<RGBImagePtr>(baseImg);
-            auto cloned = cloneRGB(rgb);
-            finalResult = StretchingAlgorithm::stretchGhsRGB(cloned, 0.0, 1.0, m_spPoint, m_stretchFactor, m_shadowProtect, m_highlightProtect, 1, m_colorPreserving);
+            if (m_activeChannel == ActiveChannel::L) {
+                auto cloned = cloneRGB(rgb);
+                std::array<double, 3> low = {0.0, 0.0, 0.0};
+                std::array<double, 3> high = {1.0, 1.0, 1.0};
+                std::array<double, 3> sp = {m_lSpPoint, m_lSpPoint, m_lSpPoint};
+                std::array<double, 3> sf = {m_lStretchFactor, m_lStretchFactor, m_lStretchFactor};
+                std::array<double, 3> sh = {m_lShadowProtect, m_lShadowProtect, m_lShadowProtect};
+                std::array<double, 3> hl = {m_lHighlightProtect, m_lHighlightProtect, m_lHighlightProtect};
+                finalResult = StretchingAlgorithm::stretchGhsRGB(cloned, low, high, sp, sf, sh, hl, 1, true);
+            } else if (m_activeChannel == ActiveChannel::S && m_cachedSBuf) {
+                auto clonedS = cloneGrayscale(std::make_shared<GrayscaleImage>(m_cachedSBuf));
+                auto stretchedS = StretchingAlgorithm::stretchGhsGrayscale(clonedS, 0.0, 1.0, m_sSpPoint, m_sStretchFactor, m_sShadowProtect, m_sHighlightProtect, 1);
+                
+                auto outR = std::make_shared<ImageBuffer>(rgb->width(), rgb->height());
+                auto outG = std::make_shared<ImageBuffer>(rgb->width(), rgb->height());
+                auto outB = std::make_shared<ImageBuffer>(rgb->width(), rgb->height());
+                const float* hData = m_cachedHBuf->data();
+                const float* sData = stretchedS->buffer()->data();
+                const float* lData = m_cachedLBuf->data();
+                float* rData = outR->data(); float* gData = outG->data(); float* bData = outB->data();
+                int numPix = rgb->width() * rgb->height();
+                #pragma omp parallel for
+                for (int i = 0; i < numPix; ++i) StretchingAlgorithm::hslToRgb(hData[i], sData[i], lData[i], rData[i], gData[i], bData[i]);
+                finalResult = std::make_shared<RGBImage>(
+                    std::make_shared<GrayscaleImage>(outR),
+                    std::make_shared<GrayscaleImage>(outG),
+                    std::make_shared<GrayscaleImage>(outB)
+                );
+            } else {
+                auto cloned = cloneRGB(rgb);
+                std::array<double, 3> low = {0.0, 0.0, 0.0};
+                std::array<double, 3> high = {1.0, 1.0, 1.0};
+                finalResult = StretchingAlgorithm::stretchGhsRGB(cloned, low, high, m_spPoint, m_stretchFactor, m_shadowProtect, m_highlightProtect, 1, false);
+            }
         }
     } else {
         if (std::holds_alternative<GrayscaleImagePtr>(baseImg)) {
             auto gray = std::get<GrayscaleImagePtr>(baseImg);
             auto cloned = cloneGrayscale(gray);
-            finalResult = StretchingAlgorithm::stretchHistogramGrayscale(cloned, m_blackpoint, m_whitepoint, m_midpoint);
+            finalResult = StretchingAlgorithm::stretchHistogramGrayscale(cloned, m_blackpoint[0], m_whitepoint[0], m_midpoint[0]);
         } else if (std::holds_alternative<RGBImagePtr>(baseImg)) {
             auto rgb = std::get<RGBImagePtr>(baseImg);
-            auto cloned = cloneRGB(rgb);
-            finalResult = StretchingAlgorithm::stretchHistogramRGB(cloned, m_blackpoint, m_whitepoint, m_midpoint, m_colorPreserving);
+            if (m_activeChannel == ActiveChannel::L) {
+                auto cloned = cloneRGB(rgb);
+                std::array<double, 3> bp = {m_lBlackpoint, m_lBlackpoint, m_lBlackpoint};
+                std::array<double, 3> wp = {m_lWhitepoint, m_lWhitepoint, m_lWhitepoint};
+                std::array<double, 3> mp = {m_lMidpoint, m_lMidpoint, m_lMidpoint};
+                finalResult = StretchingAlgorithm::stretchHistogramRGB(cloned, bp, wp, mp, true);
+            } else if (m_activeChannel == ActiveChannel::S && m_cachedSBuf) {
+                auto clonedS = cloneGrayscale(std::make_shared<GrayscaleImage>(m_cachedSBuf));
+                auto stretchedS = StretchingAlgorithm::stretchHistogramGrayscale(clonedS, m_sBlackpoint, m_sWhitepoint, m_sMidpoint);
+                
+                auto outR = std::make_shared<ImageBuffer>(rgb->width(), rgb->height());
+                auto outG = std::make_shared<ImageBuffer>(rgb->width(), rgb->height());
+                auto outB = std::make_shared<ImageBuffer>(rgb->width(), rgb->height());
+                const float* hData = m_cachedHBuf->data();
+                const float* sData = stretchedS->buffer()->data();
+                const float* lData = m_cachedLBuf->data();
+                float* rData = outR->data(); float* gData = outG->data(); float* bData = outB->data();
+                int numPix = rgb->width() * rgb->height();
+                #pragma omp parallel for
+                for (int i = 0; i < numPix; ++i) StretchingAlgorithm::hslToRgb(hData[i], sData[i], lData[i], rData[i], gData[i], bData[i]);
+                finalResult = std::make_shared<RGBImage>(
+                    std::make_shared<GrayscaleImage>(outR),
+                    std::make_shared<GrayscaleImage>(outG),
+                    std::make_shared<GrayscaleImage>(outB)
+                );
+            } else {
+                auto cloned = cloneRGB(rgb);
+                finalResult = StretchingAlgorithm::stretchHistogramRGB(cloned, m_blackpoint, m_whitepoint, m_midpoint, false);
+            }
         }
     }
 
@@ -759,18 +1248,12 @@ void StretchingDialog::onApplyClicked() {
 void StretchingDialog::onPrefsClicked() {
     QDialog dlg(this);
     dlg.setWindowTitle("Stretching Preferences");
-    dlg.resize(320, 200);
+    dlg.resize(320, 150);
     dlg.setStyleSheet(styleSheet());
 
     QFormLayout* form = new QFormLayout(&dlg);
     form->setContentsMargins(15, 15, 15, 15);
     form->setSpacing(10);
-
-    QComboBox* modeCombo = new QComboBox(&dlg);
-    modeCombo->addItem("Color-Preserving (Luminance Stretch)", true);
-    modeCombo->addItem("Independent RGB Channels Stretch", false);
-    modeCombo->setCurrentIndex(m_colorPreserving ? 0 : 1);
-    form->addRow("Stretch Mode:", modeCombo);
 
     QSpinBox* threadSpin = new QSpinBox(&dlg);
     threadSpin->setRange(1, 64);
@@ -789,7 +1272,6 @@ void StretchingDialog::onPrefsClicked() {
     form->addRow(btns);
 
     if (dlg.exec() == QDialog::Accepted) {
-        m_colorPreserving = modeCombo->currentData().toBool();
         m_threads = threadSpin->value();
         onParameterChanged();
     }
@@ -798,19 +1280,18 @@ void StretchingDialog::onPrefsClicked() {
 std::map<std::string, std::string> StretchingDialog::getConfig() const {
     std::map<std::string, std::string> config;
     config["mode"] = m_isGhsMode ? "ghs" : "histogram";
-    config["color_preserving"] = m_colorPreserving ? "true" : "false";
     config["threads"] = std::to_string(m_threads);
 
     if (m_isGhsMode) {
-        config["symmetry_point"] = std::to_string(m_spPoint);
-        config["stretch_factor"] = std::to_string(m_stretchFactor);
-        config["shadow_protect"] = std::to_string(m_shadowProtect);
-        config["highlight_protect"] = std::to_string(m_highlightProtect);
+        config["symmetry_point"] = std::to_string(m_spPoint[0]);
+        config["stretch_factor"] = std::to_string(m_stretchFactor[0]);
+        config["shadow_protect"] = std::to_string(m_shadowProtect[0]);
+        config["highlight_protect"] = std::to_string(m_highlightProtect[0]);
         config["form"] = "1";
     } else {
-        config["blackpoint"] = std::to_string(m_blackpoint);
-        config["whitepoint"] = std::to_string(m_whitepoint);
-        config["midpoint"] = std::to_string(m_midpoint);
+        config["blackpoint"] = std::to_string(m_blackpoint[0]);
+        config["whitepoint"] = std::to_string(m_whitepoint[0]);
+        config["midpoint"] = std::to_string(m_midpoint[0]);
     }
     return config;
 }
@@ -818,46 +1299,52 @@ std::map<std::string, std::string> StretchingDialog::getConfig() const {
 QJsonObject StretchingDialog::serializeState() const {
     QJsonObject obj;
     obj["is_ghs_mode"] = m_isGhsMode;
+    
+    auto arrToJson = [](const std::array<double, 3>& arr) {
+        QJsonArray jArr;
+        jArr.append(arr[0]);
+        jArr.append(arr[1]);
+        jArr.append(arr[2]);
+        return jArr;
+    };
+    
     // HT params
-    obj["blackpoint"] = m_blackpoint;
-    obj["whitepoint"] = m_whitepoint;
-    obj["midpoint"] = m_midpoint;
+    obj["blackpoint"] = arrToJson(m_blackpoint);
+    obj["whitepoint"] = arrToJson(m_whitepoint);
+    obj["midpoint"] = arrToJson(m_midpoint);
     // GHS params
-    obj["sp_point"] = m_spPoint;
-    obj["stretch_factor"] = m_stretchFactor;
-    obj["shadow_protect"] = m_shadowProtect;
-    obj["highlight_protect"] = m_highlightProtect;
+    obj["sp_point"] = arrToJson(m_spPoint);
+    obj["stretch_factor"] = arrToJson(m_stretchFactor);
+    obj["shadow_protect"] = arrToJson(m_shadowProtect);
+    obj["highlight_protect"] = arrToJson(m_highlightProtect);
     // Prefs
-    obj["color_preserving"] = m_colorPreserving;
     obj["threads"] = m_threads;
     return obj;
 }
 
 void StretchingDialog::restoreState(const QJsonObject& obj) {
-    if (obj.contains("blackpoint")) {
-        m_blackpoint = obj["blackpoint"].toDouble(0.0);
-    }
-    if (obj.contains("whitepoint")) {
-        m_whitepoint = obj["whitepoint"].toDouble(1.0);
-    }
-    if (obj.contains("midpoint")) {
-        m_midpoint = obj["midpoint"].toDouble(0.5);
-    }
-    if (obj.contains("sp_point")) {
-        m_spPoint = obj["sp_point"].toDouble(0.5);
-    }
-    if (obj.contains("stretch_factor")) {
-        m_stretchFactor = obj["stretch_factor"].toDouble(0.0);
-    }
-    if (obj.contains("shadow_protect")) {
-        m_shadowProtect = obj["shadow_protect"].toDouble(0.0);
-    }
-    if (obj.contains("highlight_protect")) {
-        m_highlightProtect = obj["highlight_protect"].toDouble(1.0);
-    }
-    if (obj.contains("color_preserving")) {
-        m_colorPreserving = obj["color_preserving"].toBool(true);
-    }
+    auto jsonToArr = [](const QJsonObject& o, const QString& key, std::array<double, 3>& out, double def) {
+        if (o.contains(key)) {
+            if (o[key].isArray()) {
+                QJsonArray arr = o[key].toArray();
+                out[0] = arr[0].toDouble(def);
+                out[1] = arr[1].toDouble(def);
+                out[2] = arr[2].toDouble(def);
+            } else {
+                double val = o[key].toDouble(def);
+                out = {val, val, val};
+            }
+        }
+    };
+
+    jsonToArr(obj, "blackpoint", m_blackpoint, 0.0);
+    jsonToArr(obj, "whitepoint", m_whitepoint, 1.0);
+    jsonToArr(obj, "midpoint", m_midpoint, 0.5);
+    jsonToArr(obj, "sp_point", m_spPoint, 0.5);
+    jsonToArr(obj, "stretch_factor", m_stretchFactor, 0.0);
+    jsonToArr(obj, "shadow_protect", m_shadowProtect, 0.0);
+    jsonToArr(obj, "highlight_protect", m_highlightProtect, 1.0);
+
     if (obj.contains("threads")) {
         m_threads = obj["threads"].toInt(-1);
     }
@@ -875,6 +1362,62 @@ void StretchingDialog::restoreState(const QJsonObject& obj) {
 
     syncUiFromValues();
     onParameterChanged();
+}
+
+void StretchingDialog::onTargetImageChanged(QMdiSubWindow* sub) {
+    if (!sub) {
+        if (m_currentTrackedSub) {
+            if (auto oldWin = qobject_cast<WorkspaceImageWindow*>(m_currentTrackedSub->widget())) {
+                disconnect(oldWin, &WorkspaceImageWindow::imageUpdated, this, &StretchingDialog::onTargetImageUpdated);
+            }
+            m_currentTrackedSub = nullptr;
+            refreshHistogramAndCache();
+        }
+        return;
+    }
+
+    auto newWin = qobject_cast<WorkspaceImageWindow*>(sub->widget());
+    if (!newWin) return; // Ignore non-image subwindows like StretchingDialog itself
+
+    // Preview windows cannot become a target unless we are actively using Live Preview
+    if (newWin->hasPreviewActive() && (!m_previewChk || !m_previewChk->isChecked())) {
+        return; 
+    }
+
+    if (m_currentTrackedSub == sub) return; // Already tracking
+
+    if (m_currentTrackedSub) {
+        if (auto oldWin = qobject_cast<WorkspaceImageWindow*>(m_currentTrackedSub->widget())) {
+            disconnect(oldWin, &WorkspaceImageWindow::imageUpdated, this, &StretchingDialog::onTargetImageUpdated);
+            if (m_previewChk && m_previewChk->isChecked()) {
+                oldWin->restoreOriginalImage();
+            }
+        }
+    }
+    
+    m_currentTrackedSub = sub;
+    if (m_currentTrackedSub) {
+        if (auto win = qobject_cast<WorkspaceImageWindow*>(m_currentTrackedSub->widget())) {
+            connect(win, &WorkspaceImageWindow::imageUpdated, this, &StretchingDialog::onTargetImageUpdated);
+            
+            bool isGray = std::holds_alternative<GrayscaleImagePtr>(win->currentImage());
+            m_channelGroup->button(static_cast<int>(ActiveChannel::R))->setEnabled(!isGray);
+            m_channelGroup->button(static_cast<int>(ActiveChannel::G))->setEnabled(!isGray);
+            m_channelGroup->button(static_cast<int>(ActiveChannel::B))->setEnabled(!isGray);
+            m_channelGroup->button(static_cast<int>(ActiveChannel::L))->setEnabled(!isGray);
+            m_channelGroup->button(static_cast<int>(ActiveChannel::S))->setEnabled(!isGray);
+
+            if (isGray && m_activeChannel != ActiveChannel::K) {
+                m_channelGroup->button(static_cast<int>(ActiveChannel::K))->setChecked(true);
+                onChannelChanged(static_cast<int>(ActiveChannel::K));
+            }
+        }
+    }
+    refreshHistogramAndCache();
+}
+
+void StretchingDialog::onTargetImageUpdated() {
+    refreshHistogramAndCache();
 }
 
 } // namespace blastro

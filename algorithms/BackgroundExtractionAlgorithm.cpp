@@ -21,6 +21,7 @@
 #include <QDebug>
 #include <omp.h>
 #include <QElapsedTimer>
+#include <atomic>
 #include "core/Preferences.h"
 #include "core/Logger.h"
 
@@ -139,66 +140,96 @@ void BackgroundExtractionAlgorithm::execute(WorkspaceRegistry& workspace,
 
         std::vector<std::string> names(count);
         std::vector<std::string> filepaths(count);
-        FitsIO writer;
 
+        std::atomic<int> completedFrames{0};
+        std::string exceptionMsg;
+        std::atomic<bool> hasFailed{false};
+
+        #pragma omp parallel for schedule(dynamic)
         for (int i = 0; i < count; ++i) {
-            if (progress)
-                progress(static_cast<int>(5.0 + 90.0 * i / count));
+            if (hasFailed) continue;
 
-            if (!inputBatch->isFrameSelected(i)) {
-                names[i]     = inputBatch->frameName(i) + "_unselected";
-                filepaths[i] = inputBatch->frameFilepath(i);
-                continue;
-            }
-
-            ImageVariant frame = inputBatch->getImage(i);
-            auto meta = inputBatch->frameMetadata(i);
-
-            // Transform sample points if registered, otherwise reuse as-is
-            std::vector<std::pair<double, double>> targetPts;
-            if (meta.registered) {
-                auto invTrans = MathUtils::invertAffine(meta.transform);
-                auto tRefToTarget = MathUtils::multiplyAffine(invTrans, refMeta.transform);
-                for (const auto& pt : refPts) {
-                    auto transPt = MathUtils::transformPoint(tRefToTarget, pt.first, pt.second);
-                    targetPts.push_back(transPt);
+            try {
+                if (!inputBatch->isFrameSelected(i)) {
+                    names[i]     = inputBatch->frameName(i) + "_unselected";
+                    filepaths[i] = inputBatch->frameFilepath(i);
+                    int completed = ++completedFrames;
+                    if (progress) {
+                        #pragma omp critical
+                        progress(static_cast<int>(5.0 + 90.0 * completed / count));
+                    }
+                    continue;
                 }
-            } else {
-                targetPts = refPts;
+
+                ImageVariant frame = inputBatch->getImage(i);
+                auto meta = inputBatch->frameMetadata(i);
+
+                // Transform sample points if registered, otherwise reuse as-is
+                std::vector<std::pair<double, double>> targetPts;
+                if (meta.registered) {
+                    auto invTrans = MathUtils::invertAffine(meta.transform);
+                    auto tRefToTarget = MathUtils::multiplyAffine(invTrans, refMeta.transform);
+                    for (const auto& pt : refPts) {
+                        auto transPt = MathUtils::transformPoint(tRefToTarget, pt.first, pt.second);
+                        targetPts.push_back(transPt);
+                    }
+                } else {
+                    targetPts = refPts;
+                }
+
+                ImageVariant extracted;
+                std::string frameName = inputBatch->frameName(i);
+                if (std::holds_alternative<GrayscaleImagePtr>(frame)) {
+                    auto gray = std::get<GrayscaleImagePtr>(frame);
+                    auto res = BackgroundExtractor::extractGrayscale(
+                        gray,
+                        order, gridSize, huberDelta, normalize,
+                        nullptr, 0, 100, method, rbfSmoothing, targetPts, effectiveMaxDeviation, effectiveMaxStructure, frameName);
+                    res->setMetadata(gray->metadata());
+                    extracted = res;
+                } else if (std::holds_alternative<RGBImagePtr>(frame)) {
+                    auto rgb = std::get<RGBImagePtr>(frame);
+                    auto res = BackgroundExtractor::extractRGB(
+                        rgb,
+                        order, gridSize, huberDelta, normalize,
+                        nullptr, method, rbfSmoothing, targetPts, effectiveMaxDeviation, effectiveMaxStructure, frameName);
+                    res->setMetadata(rgb->metadata());
+                    extracted = res;
+                } else {
+                    throw std::runtime_error("Unsupported frame type in batch background extraction");
+                }
+
+                std::string origPath    = inputBatch->frameFilepath(i);
+                std::string outFilename = TempDirectory::getIntermediateFileName(origPath, "_bge", i);
+                std::string fullOutPath = tempDir + "/" + outFilename;
+
+                FitsIO writer;
+                if (!writer.writeImage(fullOutPath, extracted))
+                    throw std::runtime_error("Failed to write background-extracted frame to " + fullOutPath);
+
+                names[i]     = inputBatch->frameName(i) + "_bge";
+                filepaths[i] = fullOutPath;
+
+                inputBatch->clearCache(i);
+
+                int completed = ++completedFrames;
+                if (progress) {
+                    #pragma omp critical
+                    progress(static_cast<int>(5.0 + 90.0 * completed / count));
+                }
+            } catch (const std::exception& e) {
+                hasFailed = true;
+                #pragma omp critical
+                exceptionMsg = e.what();
+            } catch (...) {
+                hasFailed = true;
+                #pragma omp critical
+                exceptionMsg = "Unknown error occurred during parallel background extraction";
             }
+        }
 
-            ImageVariant extracted;
-            if (std::holds_alternative<GrayscaleImagePtr>(frame)) {
-                auto gray = std::get<GrayscaleImagePtr>(frame);
-                auto res = BackgroundExtractor::extractGrayscale(
-                    gray,
-                    order, gridSize, huberDelta, normalize,
-                    nullptr, 0, 100, method, rbfSmoothing, targetPts, effectiveMaxDeviation, effectiveMaxStructure);
-                res->setMetadata(gray->metadata());
-                extracted = res;
-            } else if (std::holds_alternative<RGBImagePtr>(frame)) {
-                auto rgb = std::get<RGBImagePtr>(frame);
-                auto res = BackgroundExtractor::extractRGB(
-                    rgb,
-                    order, gridSize, huberDelta, normalize,
-                    nullptr, method, rbfSmoothing, targetPts, effectiveMaxDeviation, effectiveMaxStructure);
-                res->setMetadata(rgb->metadata());
-                extracted = res;
-            } else {
-                throw std::runtime_error("Unsupported frame type in batch background extraction");
-            }
-
-            std::string origPath    = inputBatch->frameFilepath(i);
-            std::string outFilename = TempDirectory::getIntermediateFileName(origPath, "_bge", i);
-            std::string fullOutPath = tempDir + "/" + outFilename;
-
-            if (!writer.writeImage(fullOutPath, extracted))
-                throw std::runtime_error("Failed to write background-extracted frame to " + fullOutPath);
-
-            names[i]     = inputBatch->frameName(i) + "_bge";
-            filepaths[i] = fullOutPath;
-
-            inputBatch->clearCache(i);
+        if (hasFailed) {
+            throw std::runtime_error(exceptionMsg);
         }
 
         auto outBatch = std::make_shared<ImageBatch>(
@@ -231,7 +262,7 @@ void BackgroundExtractionAlgorithm::execute(WorkspaceRegistry& workspace,
         auto res = BackgroundExtractor::extractGrayscale(
             gray,
             order, gridSize, huberDelta, normalize,
-            progress, 5, 95, method, rbfSmoothing, {}, effectiveMaxDeviation, effectiveMaxStructure);
+            progress, 5, 95, method, rbfSmoothing, {}, effectiveMaxDeviation, effectiveMaxStructure, inputName);
         res->setMetadata(gray->metadata());
         outputElem = res;
     } else if (std::holds_alternative<RGBImagePtr>(inputElem)) {
@@ -239,7 +270,7 @@ void BackgroundExtractionAlgorithm::execute(WorkspaceRegistry& workspace,
         auto res = BackgroundExtractor::extractRGB(
             rgb,
             order, gridSize, huberDelta, normalize,
-            progress, method, rbfSmoothing, {}, effectiveMaxDeviation, effectiveMaxStructure);
+            progress, method, rbfSmoothing, {}, effectiveMaxDeviation, effectiveMaxStructure, inputName);
         res->setMetadata(rgb->metadata());
         outputElem = res;
     } else {

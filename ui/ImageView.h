@@ -26,6 +26,8 @@
 #include <QGraphicsPixmapItem>
 #include <QJsonObject>
 #include <QWheelEvent>
+#include <array>
+
 
 namespace blastro {
 
@@ -67,13 +69,21 @@ public:
     void setAutoStretchLevel(int level);
     void setLocalHistLevel(int level);
     
-    double blackpoint() const { return m_blackpoint; }
-    double whitepoint() const { return m_whitepoint; }
-    double midpoint() const { return m_midpoint; }
-    void setStretchParams(double b, double w, double m);
+    double blackpoint(int channel = 0) const { return m_blackpoint[std::clamp(channel, 0, 2)]; }
+    double whitepoint(int channel = 0) const { return m_whitepoint[std::clamp(channel, 0, 2)]; }
+    double midpoint(int channel = 0) const { return m_midpoint[std::clamp(channel, 0, 2)]; }
+    const std::array<double, 3>& blackpoints() const { return m_blackpoint; }
+    const std::array<double, 3>& whitepoints() const { return m_whitepoint; }
+    const std::array<double, 3>& midpoints() const { return m_midpoint; }
+    void setStretchParams(double b, double w, double m, int channel = 0);
+    void setStretchParams(const std::array<double, 3>& b, const std::array<double, 3>& w, const std::array<double, 3>& m);
+    
+    bool channelsLinked() const { return m_channelsLinked; }
+    void setChannelsLinked(bool linked);
+    
     void runAutostretch();
     
-    std::vector<int> getHistogram(int bins = 256) const;
+    std::vector<std::vector<int>> getHistogram(int bins = 256) const;
 
     void zoomIn();
     void zoomOut();
@@ -105,7 +115,8 @@ public:
     void setShowBgeControlPoints(bool show, bool manual = false);
 
 signals:
-    void stretchParamsChanged(double b, double w, double m);
+    void stretchParamsChanged(const std::array<double, 3>& b, const std::array<double, 3>& w, const std::array<double, 3>& m);
+    void channelsLinkedChanged(bool linked);
     void mousePosChanged(int x, int y, bool isRGB, const std::vector<float>& values);
     void selectionChanged();
     void bgeControlPointsVisibilityChanged();
@@ -157,10 +168,11 @@ private:
     ChannelMode m_channelMode = RGB_ALL;
     int m_autoStretchLevel = 0;
     int m_localHistLevel = 0;
-    double m_blackpoint;
-    double m_whitepoint;
-    double m_midpoint;
-    std::vector<unsigned char> m_lut;
+    std::array<double, 3> m_blackpoint = {0.0, 0.0, 0.0};
+    std::array<double, 3> m_whitepoint = {1.0, 1.0, 1.0};
+    std::array<double, 3> m_midpoint = {0.5, 0.5, 0.5};
+    bool m_channelsLinked = true;
+    std::vector<std::vector<unsigned char>> m_lut;
 
     // CLAHE cache
     mutable std::vector<float> m_claheGray;

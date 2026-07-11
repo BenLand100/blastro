@@ -60,6 +60,7 @@ public:
     void restoreWindowState(const QJsonObject& obj);
 
     // Live Preview Support
+    bool hasPreviewActive() const { return m_hasPreviewActive; }
     void setPreviewImage(const ImageVariant& previewImage);
     void restoreOriginalImage();
     void commitPreviewImage(const ImageVariant& finalImage);
@@ -67,11 +68,12 @@ public:
 signals:
     void renameRequested(const QString& oldName, const QString& newName);
     void undoRedoStateChanged();
+    void imageUpdated();
 
 private slots:
     void onModeButtonClicked(int id);
-    void onStretchParamsChangedInWidget(double b, double w, double m);
-    void onStretchParamsChangedInView(double b, double w, double m);
+    void onStretchParamsChangedInWidget(const std::array<double, 3>& b, const std::array<double, 3>& w, const std::array<double, 3>& m);
+    void onStretchParamsChangedInView(const std::array<double, 3>& b, const std::array<double, 3>& w, const std::array<double, 3>& m);
     void onFrameChanged(int index);
     void onRenameClicked();
 
@@ -94,6 +96,7 @@ private:
     QPushButton* m_stretchBtn;
     QPushButton* m_autoBtn;
     QPushButton* m_localHistBtn;
+    QPushButton* m_linkedBtn;
     QPushButton* m_expandHistBtn;
     QPushButton* m_nameBtn;
 

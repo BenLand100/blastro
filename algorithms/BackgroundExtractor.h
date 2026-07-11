@@ -35,7 +35,8 @@ public:
                                              double rbfSmoothing = 0.0,
                                              const std::vector<std::pair<double, double>>& customControlPoints = {},
                                              double maxDeviation = 3.0,
-                                             double maxStructure = 1.5);
+                                             double maxStructure = 1.5,
+                                             const std::string& imageName = "");
 
     static RGBImagePtr extractRGB(RGBImagePtr src,
                                   int order = 3,
@@ -47,7 +48,8 @@ public:
                                   double rbfSmoothing = 0.0,
                                   const std::vector<std::pair<double, double>>& customControlPoints = {},
                                   double maxDeviation = 3.0,
-                                  double maxStructure = 1.5);
+                                  double maxStructure = 1.5,
+                                  const std::string& imageName = "");
 
     // Automatically generates sample points based on statistics (grid-based)
     static std::vector<std::pair<double, double>> generateGridPoints(GrayscaleImagePtr img,

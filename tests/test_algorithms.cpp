@@ -1166,7 +1166,14 @@ void testGhsStretching() {
     rgbImg->g()->buffer()->setPixel(50, 50, 0.02f);
     rgbImg->b()->buffer()->setPixel(50, 50, 0.03f);
 
-    auto stretchedRGB = StretchingAlgorithm::stretchGhsRGB(rgbImg, 0.0, 1.0, SP, D, 0.0, 1.0, 1, true);
+    std::array<double, 3> lp = {0.0, 0.0, 0.0};
+    std::array<double, 3> hp = {1.0, 1.0, 1.0};
+    std::array<double, 3> sp = {SP, SP, SP};
+    std::array<double, 3> dFactor = {D, D, D};
+    std::array<double, 3> shadow = {0.0, 0.0, 0.0};
+    std::array<double, 3> highlight = {1.0, 1.0, 1.0};
+    
+    auto stretchedRGB = StretchingAlgorithm::stretchGhsRGB(rgbImg, lp, hp, sp, dFactor, shadow, highlight, 1, true);
     assert(stretchedRGB != nullptr);
 
     float rOut = stretchedRGB->r()->buffer()->pixel(50, 50);
@@ -1178,7 +1185,7 @@ void testGhsStretching() {
     assert(approxEqual(bOut / rOut, 3.0, 1e-4) && "Color-preserving GHS stretch failed to preserve R:B ratio");
 
     // 5. Test RGB Independent Channel Stretch
-    auto stretchedRGBIndep = StretchingAlgorithm::stretchGhsRGB(rgbImg, 0.0, 1.0, SP, D, 0.0, 1.0, 1, false);
+    auto stretchedRGBIndep = StretchingAlgorithm::stretchGhsRGB(rgbImg, lp, hp, sp, dFactor, shadow, highlight, 1, false);
     assert(stretchedRGBIndep != nullptr);
 
     float rOutIndep = stretchedRGBIndep->r()->buffer()->pixel(50, 50);

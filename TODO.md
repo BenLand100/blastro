@@ -1,14 +1,13 @@
 # TODO
 
+* PixelMath is doing something wrong - 15-30s on simple operations (needs to be fixed)
 * Test platesolving
 * Test OSC workflow
 
 ## Core
 
-* Speed up Background Extraction -- multithreading / openmp probably not used
 * Implement color calibration -- Something manual and something star based (needs platesolve + data!)
 * Proper drizzle implementation instead of the current interpolation hack
-* "Other" stretches (luminance / rbg already selectable, but need saturation, maybe hue, etc.)
 * Implement a "Curves" tool to compliment the GHS / Stretching
 
  ## UI

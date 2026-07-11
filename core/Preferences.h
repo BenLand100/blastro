@@ -67,6 +67,9 @@ public:
     std::string getSolveFieldBinaryPath() const;
     void setSolveFieldBinaryPath(const std::string& path);
 
+    float getHistogramLineWidth() const;
+    void setHistogramLineWidth(float width);
+
     // Save and load
     void load();
     void save();
@@ -88,6 +91,7 @@ private:
     std::vector<std::string> m_updateRepositories;
     std::string m_astapBinaryPath;
     std::string m_solveFieldBinaryPath;
+    float m_histogramLineWidth;
 
     mutable std::mutex m_mutex;
 };

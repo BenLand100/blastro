@@ -45,6 +45,7 @@ WorkspaceImageWindow::WorkspaceImageWindow(const QString& name, const WorkspaceE
       m_gChanBtn(new QPushButton("G", this)),
       m_bChanBtn(new QPushButton("B", this)),
       m_rgbChanBtn(new QPushButton("RGB", this)),
+      m_linkedBtn(new QPushButton(QString::fromUtf8("\xF0\x9F\x94\x97"), this)), // 🔗
       m_histogramWidget(new HistogramWidget(this)) {
 
     // 1. Create viewport based on element type
@@ -103,7 +104,10 @@ WorkspaceImageWindow::WorkspaceImageWindow(const QString& name, const WorkspaceE
         "QPushButton#normal { border-top-left-radius: 4px; border-bottom-left-radius: 4px; border-right: none; }"
         "QPushButton#auto { border-radius: 0px; border-right: none; }"
         "QPushButton#stretch { border-radius: 0px; border-right: none; }"
-        "QPushButton#localHist { border-top-right-radius: 4px; border-bottom-right-radius: 4px; }";
+        "QPushButton#localHist { border-top-right-radius: 4px; border-bottom-right-radius: 4px; }"
+        "QPushButton#linkedBtn { background-color: transparent; border: none; color: #888; font-size: 14px; padding: 0px 4px; }"
+        "QPushButton#linkedBtn:hover { color: #fff; }"
+        "QPushButton#linkedBtn:checked { color: #007acc; }";
 
     m_normalBtn->setObjectName("normal");
     m_normalBtn->setCheckable(true);
@@ -114,11 +118,17 @@ WorkspaceImageWindow::WorkspaceImageWindow(const QString& name, const WorkspaceE
     m_stretchBtn->setCheckable(true);
     m_localHistBtn->setObjectName("localHist");
     m_localHistBtn->setCheckable(true);
+    
+    m_linkedBtn->setObjectName("linkedBtn");
+    m_linkedBtn->setCheckable(true);
+    m_linkedBtn->setChecked(true);
+    m_linkedBtn->setToolTip("Toggle RGB Channel Linking");
 
     m_normalBtn->setStyleSheet(segmentedStyle);
     m_autoBtn->setStyleSheet(segmentedStyle);
     m_stretchBtn->setStyleSheet(segmentedStyle);
     m_localHistBtn->setStyleSheet(segmentedStyle);
+    m_linkedBtn->setStyleSheet(segmentedStyle);
 
     // Ensure buttons have fixed minimum widths to contain "Auto H" and "Hist H" without shifting layout
     QFontMetrics autoFm(m_autoBtn->font());
@@ -140,6 +150,23 @@ WorkspaceImageWindow::WorkspaceImageWindow(const QString& name, const WorkspaceE
     headerLayout->addWidget(m_autoBtn);
     headerLayout->addWidget(m_stretchBtn);
     headerLayout->addWidget(m_localHistBtn);
+    headerLayout->addWidget(m_linkedBtn);
+    
+    // Setup Link Button toggle
+    connect(m_linkedBtn, &QPushButton::toggled, this, [this](bool checked) {
+        if (checked) {
+            m_linkedBtn->setText(QString::fromUtf8("\xF0\x9F\x94\x97")); // 🔗
+        } else {
+            m_linkedBtn->setText(QString::fromUtf8("\xE2\x9B\x93")); // ⛓ (maybe broken chain is better, but this works) or just use text
+        }
+        if (m_imageView) {
+            m_imageView->setChannelsLinked(checked);
+            if (m_imageView->displayMode() == ImageView::Autostretch) {
+                m_imageView->runAutostretch();
+            }
+            updateHistogram();
+        }
+    });
 
     // Setup Summon/Expand Button
     m_expandHistBtn->setObjectName("expandHist");
@@ -235,6 +262,12 @@ WorkspaceImageWindow::WorkspaceImageWindow(const QString& name, const WorkspaceE
         m_gChanBtn->hide();
         m_bChanBtn->hide();
     }
+    
+    if (isRGBElement) {
+        headerLayout->insertWidget(headerLayout->indexOf(m_localHistBtn) + 1, m_linkedBtn);
+    } else {
+        m_linkedBtn->hide();
+    }
 
     connect(m_channelGroup, qOverload<int>(&QButtonGroup::idClicked), this, [this](int id) {
         if (!m_imageView) return;
@@ -326,17 +359,21 @@ void WorkspaceImageWindow::onModeButtonClicked(int id) {
     }
 }
 
-void WorkspaceImageWindow::onStretchParamsChangedInWidget(double b, double w, double m) {
+void WorkspaceImageWindow::onStretchParamsChangedInWidget(const std::array<double, 3>& b, const std::array<double, 3>& w, const std::array<double, 3>& m) {
     m_imageView->blockSignals(true);
     m_imageView->setStretchParams(b, w, m);
     m_imageView->blockSignals(false);
 
     if (m_modeGroup->checkedId() == 0 || m_modeGroup->checkedId() == 2 || m_modeGroup->checkedId() == 3) {
         m_modeGroup->button(1)->setChecked(true); // Switch checked button to Stretch
+        m_imageView->setDisplayMode(ImageView::Stretch); // Ensure image view actually uses it
+        m_histogramWidget->setActive(true);
+        m_autoBtn->setText("Auto");
+        m_localHistBtn->setText("Hist");
     }
 }
 
-void WorkspaceImageWindow::onStretchParamsChangedInView(double b, double w, double m) {
+void WorkspaceImageWindow::onStretchParamsChangedInView(const std::array<double, 3>& b, const std::array<double, 3>& w, const std::array<double, 3>& m) {
     m_histogramWidget->blockSignals(true);
     m_histogramWidget->setStretchParams(b, w, m);
     m_histogramWidget->blockSignals(false);
@@ -388,11 +425,12 @@ void WorkspaceImageWindow::updateHistogram() {
         return;
     }
     // Query histogram with 16-bit (65536 bins) resolution for high-detail zooming
-    m_histogramWidget->setHistogram(m_imageView->getHistogram(65536));
+    m_histogramWidget->setHistograms(m_imageView->getHistogram(65536));
     if (m_histogramWidget->isActive()) {
-        m_histogramWidget->setStretchParams(m_imageView->blackpoint(), 
-                                            m_imageView->whitepoint(), 
-                                            m_imageView->midpoint());
+        m_histogramWidget->setChannelsLinked(m_imageView->channelsLinked());
+        m_histogramWidget->setStretchParams(m_imageView->blackpoints(), 
+                                            m_imageView->whitepoints(), 
+                                            m_imageView->midpoints());
     }
 }
 
@@ -467,9 +505,17 @@ void WorkspaceImageWindow::updateNameLabelText() {
     maxAllowedWidth = std::max(20, maxAllowedWidth - 10);
     
     QFontMetrics fm(m_nameBtn->font());
-    QString elided = fm.elidedText(m_name, Qt::ElideMiddle, maxAllowedWidth);
+    QString displayName = m_name;
+    if (m_hasPreviewActive) {
+        displayName += " (Preview)";
+    }
+    QString elided = fm.elidedText(displayName, Qt::ElideMiddle, maxAllowedWidth);
     m_nameBtn->setText(elided);
-    m_nameBtn->setToolTip(m_name);
+    m_nameBtn->setToolTip(displayName);
+    setWindowTitle(displayName);
+    if (parentWidget()) {
+        parentWidget()->setWindowTitle(displayName);
+    }
 }
 
 void WorkspaceImageWindow::onRenameClicked() {
@@ -502,6 +548,7 @@ void WorkspaceImageWindow::notifyImageUpdated() {
         }
     }
     updateHistogram();
+    emit imageUpdated();
 }
 
 void WorkspaceImageWindow::setUpdatesSuspended(bool suspended) {
@@ -517,6 +564,7 @@ void WorkspaceImageWindow::setPreviewImage(const ImageVariant& previewImage) {
     }
     m_imageView->setImage(previewImage, true, true);
     notifyImageUpdated();
+    updateNameLabelText();
 }
 
 void WorkspaceImageWindow::restoreOriginalImage() {
@@ -525,6 +573,7 @@ void WorkspaceImageWindow::restoreOriginalImage() {
         m_hasPreviewActive = false;
         m_originalImageForPreview = ImageVariant();
         notifyImageUpdated();
+        updateNameLabelText();
     }
 }
 
@@ -564,6 +613,7 @@ void WorkspaceImageWindow::commitPreviewImage(const ImageVariant& finalImage) {
         m_hasPreviewActive = false;
         m_originalImageForPreview = ImageVariant();
         notifyImageUpdated();
+        updateNameLabelText();
     }
 }
 

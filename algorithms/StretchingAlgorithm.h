@@ -36,9 +36,9 @@ public:
 
     // Performs HT on an RGB image.
     static RGBImagePtr stretchHistogramRGB(RGBImagePtr src,
-                                           double blackpoint = 0.0,
-                                           double whitepoint = 1.0,
-                                           double midpoint = 0.5,
+                                           const std::array<double, 3>& blackpoint,
+                                           const std::array<double, 3>& whitepoint,
+                                           const std::array<double, 3>& midpoint,
                                            bool colorPreserving = true);
 
     // Performs Generalized Hyperbolic Stretch (GHS) on a single channel.
@@ -53,14 +53,34 @@ public:
 
     // Performs GHS on an RGB image.
     static RGBImagePtr stretchGhsRGB(RGBImagePtr src,
-                                     double lowPoint = 0.0,
-                                     double highPoint = 1.0,
-                                     double symmetryPoint = 0.5,
-                                     double stretchFactor = 3.0,
-                                     double shadowProtect = 0.0,
-                                     double highlightProtect = 0.0,
+                                     const std::array<double, 3>& lowPoint,
+                                     const std::array<double, 3>& highPoint,
+                                     const std::array<double, 3>& symmetryPoint,
+                                     const std::array<double, 3>& stretchFactor,
+                                     const std::array<double, 3>& shadowProtect,
+                                     const std::array<double, 3>& highlightProtect,
                                      int form = 1,
                                      bool colorPreserving = true);
+
+    // HSL Space Transformations
+    static void rgbToHsl(float r, float g, float b, float& h, float& s, float& l);
+    static void hslToRgb(float h, float s, float l, float& r, float& g, float& b);
+
+    static RGBImagePtr stretchHistogramHSL(RGBImagePtr src,
+                                           double blackpoint,
+                                           double whitepoint,
+                                           double midpoint,
+                                           bool stretchSaturation);
+
+    static RGBImagePtr stretchGhsHSL(RGBImagePtr src,
+                                     double lowPoint,
+                                     double highPoint,
+                                     double symmetryPoint,
+                                     double stretchFactor,
+                                     double shadowProtect,
+                                     double highlightProtect,
+                                     int form,
+                                     bool stretchSaturation);
 };
 
 } // namespace blastro
