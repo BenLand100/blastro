@@ -1958,9 +1958,9 @@ void PreprocessingWorker::run() {
             return m_cancelRequested.load();
         });
 
-        pipeline.setStepCallback([this](int stepIndex, int percent, double elapsed, bool finished, bool success) {
+        pipeline.setStepCallback([this](int stepIndex, int percent, double elapsed, bool finished, bool success, bool cached) {
             if (finished) {
-                emit stepFinished(stepIndex, success, elapsed);
+                emit stepFinished(stepIndex, success, elapsed, cached);
             } else if (percent == 0 && elapsed == 0.0) {
                 emit stepStarted(stepIndex);
             } else {
@@ -2121,22 +2121,33 @@ void PreprocessingWizardDialog::onStepProgressUpdated(int stepIndex, int percent
     m_stepsTable->item(row, 4)->setForeground(QColor("#a9b7c6"));
 }
 
-void PreprocessingWizardDialog::onStepFinished(int stepIndex, bool success, double elapsed) {
+void PreprocessingWizardDialog::onStepFinished(int stepIndex, bool success, double elapsed, bool cached) {
     int row = (m_runningStage == "align_stack") ? m_stage1StepCount + 1 + stepIndex : stepIndex;
     if (row < 0 || row >= m_stepsTable->rowCount()) return;
     if (success) {
-        m_stepsTable->setItem(row, 2, new QTableWidgetItem("Completed"));
-        m_stepsTable->item(row, 2)->setForeground(QColor("#4EC9B0"));
-        m_stepsTable->setItem(row, 3, new QTableWidgetItem("100%"));
-        m_stepsTable->item(row, 3)->setForeground(QColor("#4EC9B0"));
+        if (cached) {
+            m_stepsTable->setItem(row, 2, new QTableWidgetItem("Cached"));
+            m_stepsTable->item(row, 2)->setForeground(QColor("#9CDCFE"));
+            m_stepsTable->setItem(row, 3, new QTableWidgetItem("100%"));
+            m_stepsTable->item(row, 3)->setForeground(QColor("#9CDCFE"));
+            m_stepsTable->setItem(row, 4, new QTableWidgetItem("0.0s (Cached)"));
+            m_stepsTable->item(row, 4)->setForeground(QColor("#808080"));
+        } else {
+            m_stepsTable->setItem(row, 2, new QTableWidgetItem("Completed"));
+            m_stepsTable->item(row, 2)->setForeground(QColor("#4EC9B0"));
+            m_stepsTable->setItem(row, 3, new QTableWidgetItem("100%"));
+            m_stepsTable->item(row, 3)->setForeground(QColor("#4EC9B0"));
+            m_stepsTable->setItem(row, 4, new QTableWidgetItem(QString("%1s").arg(elapsed, 0, 'f', 1)));
+            m_stepsTable->item(row, 4)->setForeground(QColor("#a9b7c6"));
+        }
     } else {
         m_stepsTable->setItem(row, 2, new QTableWidgetItem("Error"));
         m_stepsTable->item(row, 2)->setForeground(QColor("#F44336"));
         m_stepsTable->setItem(row, 3, new QTableWidgetItem("-"));
         m_stepsTable->item(row, 3)->setForeground(QColor("#F44336"));
+        m_stepsTable->setItem(row, 4, new QTableWidgetItem(QString("%1s").arg(elapsed, 0, 'f', 1)));
+        m_stepsTable->item(row, 4)->setForeground(QColor("#a9b7c6"));
     }
-    m_stepsTable->setItem(row, 4, new QTableWidgetItem(QString("%1s").arg(elapsed, 0, 'f', 1)));
-    m_stepsTable->item(row, 4)->setForeground(QColor("#a9b7c6"));
 }
 
 void PreprocessingWizardDialog::onFileDoubleClicked(QTableWidgetItem* item) {

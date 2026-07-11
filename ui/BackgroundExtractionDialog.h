@@ -51,6 +51,7 @@ private slots:
     void onGenerateGridClicked();
     void onClearPointsClicked();
     void onSubWindowActivated(QMdiSubWindow* subWindow);
+    void updatePreview();
 
 private:
     WorkspaceImageWindow* getActiveImageWindow() const;
@@ -72,6 +73,9 @@ private:
     QCheckBox* m_autoExcludeChk;
     QDoubleSpinBox* m_maxDeviationSpin;
     QDoubleSpinBox* m_maxStructureSpin;
+
+    QCheckBox* m_previewChk;
+    QPushButton* m_updatePreviewBtn;
 
     // Advanced Preferences
     double m_huberDelta = 5.0;

@@ -23,6 +23,7 @@
 #include <QPushButton>
 #include <QDoubleSpinBox>
 #include <QSpinBox>
+#include <QCheckBox>
 
 namespace blastro {
 
@@ -48,6 +49,7 @@ private:
     QDoubleSpinBox* m_decHintSpin;
     QDoubleSpinBox* m_focalLengthSpin;
     QDoubleSpinBox* m_pixelSizeSpin;
+    QCheckBox* m_blindSolveChk;
 };
 
 } // namespace blastro

@@ -19,7 +19,6 @@ add_library(blastro_algorithms
     PixelMathAlgorithm.cpp
     StackingAlgorithm.cpp
     CalibrationAlgorithm.cpp
-    Solver.cpp
     StarFinder.cpp
     ConstellationMatcher.cpp
     Warping.cpp

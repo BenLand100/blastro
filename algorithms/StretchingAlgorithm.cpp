@@ -20,6 +20,7 @@
 #include <cmath>
 #include <algorithm>
 #include <limits>
+#include "core/MathUtils.h"
 
 namespace blastro {
 
@@ -58,17 +59,7 @@ static float evaluateGhsPixel(float val, double lowPoint, double highPoint, doub
 
     if (stretchFactor < 1e-5) {
         double stretched = std::clamp((static_cast<double>(val) - lowPoint) / spread, 0.0, 1.0);
-        // Apply shadow protection
-        if (shadowProtect > 0.0 && val < symmetryPoint) {
-            double w_s = shadowProtect * std::exp(-static_cast<double>(val) / (symmetryPoint + 1e-5));
-            stretched = (1.0 - w_s) * stretched + w_s * val;
-        }
-        // Apply highlight protection
-        double effectiveHighlightProtect = 1.0 - highlightProtect;
-        if (effectiveHighlightProtect > 0.0 && val > symmetryPoint) {
-            double w_h = effectiveHighlightProtect * std::exp(-(1.0 - static_cast<double>(val)) / (1.0 - symmetryPoint + 1e-5));
-            stretched = (1.0 - w_h) * stretched + w_h * val;
-        }
+        stretched = blastro::MathUtils::applyGhsProtection(val, symmetryPoint, shadowProtect, highlightProtect, stretched);
         return static_cast<float>(stretched);
     }
 
@@ -91,18 +82,7 @@ static float evaluateGhsPixel(float val, double lowPoint, double highPoint, doub
     double normalized = (result - a) / denom;
     double stretched = std::clamp(normalized, 0.0, 1.0);
 
-    // Apply shadow protection
-    if (shadowProtect > 0.0 && val < symmetryPoint) {
-        double w_s = shadowProtect * std::exp(-static_cast<double>(val) / (symmetryPoint + 1e-5));
-        stretched = (1.0 - w_s) * stretched + w_s * val;
-    }
-
-    // Apply highlight protection
-    double effectiveHighlightProtect = 1.0 - highlightProtect;
-    if (effectiveHighlightProtect > 0.0 && val > symmetryPoint) {
-        double w_h = effectiveHighlightProtect * std::exp(-(1.0 - static_cast<double>(val)) / (1.0 - symmetryPoint + 1e-5));
-        stretched = (1.0 - w_h) * stretched + w_h * val;
-    }
+    stretched = blastro::MathUtils::applyGhsProtection(val, symmetryPoint, shadowProtect, highlightProtect, stretched);
 
     return static_cast<float>(stretched);
 }

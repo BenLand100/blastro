@@ -17,7 +17,7 @@
  */
 
 #include "StarFinder.h"
-#include "Solver.h"
+#include "core/MathUtils.h"
 #include <cmath>
 #include <algorithm>
 #include <numeric>
@@ -90,21 +90,8 @@ static double estimateBackgroundNoise(const float* data, int numPixels) {
         sample[i] = data[i * step];
     }
     
-    // Compute median
-    std::sort(sample.begin(), sample.end());
-    double median = sample[sampleSize / 2];
-    
-    // Compute MAD (Median Absolute Deviation)
-    std::vector<double> absDiffs(sampleSize);
-    for (int i = 0; i < sampleSize; ++i) {
-        absDiffs[i] = std::abs(sample[i] - median);
-    }
-    std::sort(absDiffs.begin(), absDiffs.end());
-    double mad = absDiffs[sampleSize / 2];
-    
-    // For normal distribution, sigma = 1.4826 * MAD
-    double sigma = 1.4826 * mad;
-    return sigma;
+    double mad = blastro::MathUtils::computeMAD(sample);
+    return 1.4826 * mad;
 }
 
 std::vector<Star> StarFinder::findStars(GrayscaleImagePtr img,
@@ -174,17 +161,8 @@ std::vector<Star> StarFinder::findStars(GrayscaleImagePtr img,
                 }
 
                 if (!blockPixels.empty()) {
-                    auto midIt = blockPixels.begin() + blockPixels.size() / 2;
-                    std::nth_element(blockPixels.begin(), midIt, blockPixels.end());
-                    double median = *midIt;
-                    
-                    std::vector<float> absDiffs(blockPixels.size());
-                    for (size_t i = 0; i < blockPixels.size(); ++i) {
-                        absDiffs[i] = std::abs(blockPixels[i] - median);
-                    }
-                    auto madIt = absDiffs.begin() + absDiffs.size() / 2;
-                    std::nth_element(absDiffs.begin(), madIt, absDiffs.end());
-                    double mad = *madIt;
+                    double median = blastro::MathUtils::computeMedian(blockPixels);
+                    double mad = blastro::MathUtils::computeMAD(blockPixels);
                     double sigma = 1.4826 * mad;
 
                     blockMedians[by * blocksX + bx] = median;
@@ -539,7 +517,7 @@ std::vector<Star> StarFinder::findStars(GrayscaleImagePtr img,
                     return residualSumSq;
                 };
 
-                auto fitRes = Solver::nelderMead(residualFn, x0, 1e-4, 500);
+                auto fitRes = blastro::MathUtils::nelderMead(residualFn, x0, 1e-4, 500);
                 if (fitRes.success) {
                     double mean_x = fitRes.x[0];
                     double mean_y = fitRes.x[1];
@@ -688,7 +666,7 @@ std::vector<Star> StarFinder::findStars(GrayscaleImagePtr img,
 
                 // Run solver
                 bool refinedSuccess = false;
-                auto fitRes = Solver::nelderMead(residualFn, x0, 1e-4, 500);
+                auto fitRes = blastro::MathUtils::nelderMead(residualFn, x0, 1e-4, 500);
                 if (fitRes.success) {
                     double mean_x = fitRes.x[0];
                     double mean_y = fitRes.x[1];

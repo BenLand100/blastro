@@ -64,6 +64,28 @@ To add a new processing algorithm:
 3. **Wire it Up:**
     - Register your dialog in `MainWindow.cpp` so it can be launched from the main menu. The base `AlgorithmDialog` class handles the execution signal that triggers the backend algorithm processing.
 
+### UI Preview Recipes
+
+When adding algorithms that support interactive previewing, choose one of these two common recipes depending on the computational cost of the algorithm:
+
+1. **Recipe 1: Live Previews (Fast Algorithms)**
+   - **Use Case**: Extremely fast algorithms (< 100ms) like Histogram Stretching.
+   - **Pattern**:
+     - Add a "Live Preview" checkbox (`QCheckBox* m_previewChk`).
+     - Connect parameter change events (slider value changes, etc.) directly to an `onParameterChanged()` slot.
+     - In `onParameterChanged()`, check if the preview checkbox is checked. If it is, start a short single-shot debounce timer (`QTimer* m_previewTimer`) to trigger the preview calculation after e.g., 150ms of inactivity.
+     - Call `win->setPreviewImage(previewResult)` to show the preview, and `win->restoreOriginalImage()` when unchecked.
+     - On "Apply", commit the result via `win->commitPreviewImage(finalResult)` and reset the preview checkbox.
+
+2. **Recipe 2: Manual Update Previews (Computationally Intense Algorithms)**
+   - **Use Case**: Algorithms with non-trivial processing times (e.g., Background Extraction, Star Finding, Denoising) where real-time slider updates would lag or freeze the GUI.
+   - **Pattern**:
+     - Add a "Show Preview" checkbox and an "Update Preview" button next to it.
+     - The "Update Preview" button should only be enabled when the checkbox is checked.
+     - Toggling the checkbox on runs the preview once and enables the button. Toggling it off restores the original image (`win->restoreOriginalImage()`) and disables the button.
+     - Parameter changes do *not* automatically trigger execution. Instead, the user manually clicks "Update Preview" to rerun the algorithm on the active view.
+     - Like Recipe 1, use `win->setPreviewImage(previewResult)` to display the result, and ensure that closing the dialog or switching windows cleans up by calling `win->restoreOriginalImage()`.
+
 ### In-Place vs. New Image Algorithms
 
 When developing or modifying algorithms in BLastro, it is critical to handle image lifecycle and UI expectations correctly depending on whether the algorithm mutates existing images or creates new ones:
@@ -209,12 +231,12 @@ All `AlgorithmDialog` subclasses follow the layout conventions established by th
 - **Sensor Gain Matching**: Calibration frames (bias, darks, flats, flat-darks) and light frames must be grouped and matched by sensor `GAIN` in addition to dimensions, exposure time, binning, and filter.
 - **Asynchronous Execution & GUI Safety**: All pipeline processing must run asynchronously on a background `QThread` (using `PreprocessingWorker`) so the main thread remains responsive. Calls to `MainWindow::setProcessingState` suspend other image MDI windows and menus, but the Preprocessing Wizard and the Process Console are exempted from this lock so they can receive cancellation clicks and display real-time log updates.
 - **Decoupled Star Finding & Registration**: Star detection is separated from Registration. Default star finding SNR thresholds (e.g. `snr_min = 4.0`) must be kept low/adaptive to support narrow-band frames (like Oiii). These parameters should be exposed in the Control UI. Registration consumes pre-detected stars and supports automatic reference selection by evaluating "Best SNR" or "Lowest FWHM" across the batch.
-- **Batch Background Normalization**: Background Extraction is injected dynamically between frame selection and alignment. By using the inverse affine transformations computed during registration, sample grids defined on the reference frame are correctly re-projected onto all target frames.
+- **Batch Background Normalization**: Background Extraction is executed after registration is finalized (the "Finalize Registration" step). By using the combined affine transformations computed during registration, sample grids defined on the reference frame are correctly re-projected onto all target frames using the relation $T_{\text{ref} \to \text{target}} = T_{\text{target}}^{-1} \times T_{\text{ref}}$, which maps reference frame coordinates back to target frame coordinates.
 - **Stacking Normalizations**: Stacking supports on-the-fly additive and multiplicative pixel scaling relative to the chosen reference frame. To preserve a low memory footprint inside the inner pixel loop, scaling coefficients are precomputed.
 - **Dynamic Tab UX**: The Frame Selection review tab should be omitted entirely on wizard startup, and dynamically inserted and focused only when Stage 1 completes successfully.
 - **Workspace Synchronization & Master Opening**: Upon successful completion of calibration or stacking, the master calibration frames (bias, dark, flat) or final stacked light master images can be opened automatically in the workspace MDI layout for inspection, depending on the **"Open Calibration Stacks"** and **"Open Light Masters"** checkboxes in the Control tab.
 - **Keep Intermediate Files**: When enabled, the pipeline relocates generated intermediate files to structured subdirectories (`flat_calib`, `light_calib`, `light_align`) in the output directory. It dynamically updates the batch filepaths and memory loader functions (`ImageBatch::setFrameLoader`) so subsequent steps load frames from their correct relocated paths. Raw bias and dark temporary batches are unregistered without copying.
-- **Optimized Mutual Stack Alignment**: Stacks are mutually aligned by mathematically adjusting the registration of each frame within a batch relative to the chosen reference frame (the frame with the highest SNR) using affine matrix multiplication and inversion ($T_{i \to B_S} = T_{B_S \to R_S}^{-1} \times T_{i \to R_S}$), rather than re-registering all frames en masse. Star detection is run lazily only on the batch reference frames when needed.
+- **Optimized Mutual Stack Alignment**: In the consolidated "Finalize Registration" step, frames across all batches are aligned to a single global reference batch (the batch with the highest SNR). For each frame in a batch, a combined transformation matrix is computed as $T_{\text{final}} = T_{\text{mutual}} \times T_{\text{local\_inv}} \times T_{\text{original}}$, where $T_{\text{local\_inv}}$ is the inverse transform of the batch's local best frame, and $T_{\text{mutual}}$ maps the batch's local best frame to the global reference batch. This applies both local frame registration and mutual batch-to-batch alignment in a single combined pass, avoiding separate registration phases. Star detection is run lazily only on the batch reference frames when needed.
 
 ### 9. High-Performance Star Detection & Refinement (Adaptive)
 - **Spatial Occupancy Grid**: Replaced $O(N \cdot M)$ pairwise distance checking loops inside the candidate peak loops with an $O(1)$ flat occupancy grid (marking a circle of size `patchRadius` around fitted stars). This prevents the star finder from hanging on large astronomical frames with thousands of candidates.

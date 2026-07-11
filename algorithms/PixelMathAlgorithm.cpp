@@ -21,6 +21,8 @@
 #include "thirdparty/exprtk.hpp"
 #include <stdexcept>
 #include <iostream>
+#include <set>
+#include <cctype>
 #include <omp.h>
 #include "core/Logger.h"
 #include <QElapsedTimer>
@@ -31,6 +33,7 @@ namespace blastro {
 // Helper structure to bind workspace variables to exprtk values
 struct ImageBindings {
     std::string name;
+    std::string varName;
     GrayscaleImagePtr grayImage;
     RGBImagePtr rgbImage;
     ImageBatchPtr batchImage;
@@ -100,6 +103,18 @@ void PixelMathAlgorithm::execute(WorkspaceRegistry& workspace,
 
     // 1. Gather all active elements in the workspace and prepare their bindings
     std::vector<std::string> names = workspace.elementNames();
+    std::map<std::string, std::string> varMap = getSanitizedVariableMap(names);
+    std::set<std::string> baseVarNames;
+    for (const auto& pair : varMap) {
+        baseVarNames.insert(pair.second);
+    }
+
+    // Preprocess expressions to replace backticked names with sanitized names
+    std::string cleanExprR = preprocessExpression(exprR, varMap);
+    std::string cleanExprG = preprocessExpression(exprG, varMap);
+    std::string cleanExprB = preprocessExpression(exprB, varMap);
+    std::string cleanExprK = preprocessExpression(exprK, varMap);
+
     std::vector<ImageBindings> bindings;
     
     int width = 0;
@@ -109,6 +124,7 @@ void PixelMathAlgorithm::execute(WorkspaceRegistry& workspace,
         WorkspaceElement elem = workspace.getElement(name);
         ImageBindings bind;
         bind.name = name;
+        bind.varName = varMap[name];
 
         if (std::holds_alternative<GrayscaleImagePtr>(elem)) {
             bind.grayImage = std::get<GrayscaleImagePtr>(elem);
@@ -163,38 +179,61 @@ void PixelMathAlgorithm::execute(WorkspaceRegistry& workspace,
         dummySymbolTable.add_variable("h", dummyVal);
         dummySymbolTable.add_constants();
         for (const auto& bind : bindings) {
-            dummySymbolTable.add_variable(bind.name, dummyVal);
-            dummySymbolTable.add_variable(bind.name + "_r", dummyVal);
-            dummySymbolTable.add_variable(bind.name + "_g", dummyVal);
-            dummySymbolTable.add_variable(bind.name + "_b", dummyVal);
-            dummySymbolTable.add_variable(bind.name + "_k", dummyVal);
+            dummySymbolTable.add_variable(bind.varName, dummyVal);
+            
+            auto registerChannel = [&](const std::string& suffix, double& val) {
+                std::string targetSymbol = bind.varName + suffix;
+                if (baseVarNames.count(targetSymbol) == 0) {
+                    dummySymbolTable.add_variable(targetSymbol, val);
+                }
+            };
+
+            registerChannel("_r", dummyVal);
+            registerChannel("_g", dummyVal);
+            registerChannel("_b", dummyVal);
+            registerChannel("_k", dummyVal);
+
+            registerChannel("_red", dummyVal);
+            registerChannel("_green", dummyVal);
+            registerChannel("_blue", dummyVal);
+            registerChannel("_gray", dummyVal);
+
+            registerChannel("_R", dummyVal);
+            registerChannel("_G", dummyVal);
+            registerChannel("_B", dummyVal);
+            registerChannel("_K", dummyVal);
+
+            registerChannel("R", dummyVal);
+            registerChannel("G", dummyVal);
+            registerChannel("B", dummyVal);
+            registerChannel("K", dummyVal);
         }
 
         exprtk::expression<double> dummyExpr;
         exprtk::parser<double> dummyParser;
 
         if (isRGB) {
-            if (!exprR.empty()) {
+            if (!cleanExprR.empty()) {
                 dummyExpr.register_symbol_table(dummySymbolTable);
-                if (!dummyParser.compile(exprR, dummyExpr)) {
+                if (!dummyParser.compile(cleanExprR, dummyExpr)) {
                     throw std::runtime_error("Failed to compile Red expression: " + dummyParser.error());
                 }
             }
-            if (!exprG.empty()) {
+            if (!cleanExprG.empty()) {
                 dummyExpr.register_symbol_table(dummySymbolTable);
-                if (!dummyParser.compile(exprG, dummyExpr)) {
+                if (!dummyParser.compile(cleanExprG, dummyExpr)) {
                     throw std::runtime_error("Failed to compile Green expression: " + dummyParser.error());
                 }
             }
-            if (!exprB.empty()) {
+            if (!cleanExprB.empty()) {
                 dummyExpr.register_symbol_table(dummySymbolTable);
-                if (!dummyParser.compile(exprB, dummyExpr)) {
+                if (!dummyParser.compile(cleanExprB, dummyExpr)) {
                     throw std::runtime_error("Failed to compile Blue expression: " + dummyParser.error());
                 }
             }
         } else {
             dummyExpr.register_symbol_table(dummySymbolTable);
-            if (!dummyParser.compile(exprK, dummyExpr)) {
+            if (!dummyParser.compile(cleanExprK, dummyExpr)) {
                 throw std::runtime_error("Failed to compile Grayscale expression: " + dummyParser.error());
             }
         }
@@ -235,32 +274,55 @@ void PixelMathAlgorithm::execute(WorkspaceRegistry& workspace,
         threadSymbolTable.add_constants();
 
         for (auto& bind : threadBindings) {
-            threadSymbolTable.add_variable(bind.name, bind.currentVal);
-            threadSymbolTable.add_variable(bind.name + "_r", bind.currentR);
-            threadSymbolTable.add_variable(bind.name + "_g", bind.currentG);
-            threadSymbolTable.add_variable(bind.name + "_b", bind.currentB);
-            threadSymbolTable.add_variable(bind.name + "_k", bind.currentVal);
+            threadSymbolTable.add_variable(bind.varName, bind.currentVal);
+
+            auto registerChannel = [&](const std::string& suffix, double& val) {
+                std::string targetSymbol = bind.varName + suffix;
+                if (baseVarNames.count(targetSymbol) == 0) {
+                    threadSymbolTable.add_variable(targetSymbol, val);
+                }
+            };
+
+            registerChannel("_r", bind.currentR);
+            registerChannel("_g", bind.currentG);
+            registerChannel("_b", bind.currentB);
+            registerChannel("_k", bind.currentVal);
+
+            registerChannel("_red", bind.currentR);
+            registerChannel("_green", bind.currentG);
+            registerChannel("_blue", bind.currentB);
+            registerChannel("_gray", bind.currentVal);
+
+            registerChannel("_R", bind.currentR);
+            registerChannel("_G", bind.currentG);
+            registerChannel("_B", bind.currentB);
+            registerChannel("_K", bind.currentVal);
+
+            registerChannel("R", bind.currentR);
+            registerChannel("G", bind.currentG);
+            registerChannel("B", bind.currentB);
+            registerChannel("K", bind.currentVal);
         }
 
         exprtk::expression<double> threadExprR, threadExprG, threadExprB, threadExprK;
         exprtk::parser<double> threadParser;
 
         if (isRGB) {
-            if (!exprR.empty()) {
+            if (!cleanExprR.empty()) {
                 threadExprR.register_symbol_table(threadSymbolTable);
-                threadParser.compile(exprR, threadExprR);
+                threadParser.compile(cleanExprR, threadExprR);
             }
-            if (!exprG.empty()) {
+            if (!cleanExprG.empty()) {
                 threadExprG.register_symbol_table(threadSymbolTable);
-                threadParser.compile(exprG, threadExprG);
+                threadParser.compile(cleanExprG, threadExprG);
             }
-            if (!exprB.empty()) {
+            if (!cleanExprB.empty()) {
                 threadExprB.register_symbol_table(threadSymbolTable);
-                threadParser.compile(exprB, threadExprB);
+                threadParser.compile(cleanExprB, threadExprB);
             }
         } else {
             threadExprK.register_symbol_table(threadSymbolTable);
-            threadParser.compile(exprK, threadExprK);
+            threadParser.compile(cleanExprK, threadExprK);
         }
 
         #pragma omp for schedule(static)
@@ -344,6 +406,62 @@ void PixelMathAlgorithm::execute(WorkspaceRegistry& workspace,
     if (progress) progress(100);
     Logger::success("PixelMath", QString("Finished execution in %1 ms. Registered output: %2")
                     .arg(totalTimer.elapsed()).arg(QString::fromStdString(outputName)));
+}
+
+std::string PixelMathAlgorithm::sanitizeIdentifier(const std::string& name) {
+    if (name.empty()) return "img";
+    std::string clean;
+    if (!std::isalpha(static_cast<unsigned char>(name[0]))) {
+        clean += "img_";
+    }
+    for (char c : name) {
+        if (std::isalnum(static_cast<unsigned char>(c)) || c == '_') {
+            clean += c;
+        } else {
+            clean += '_';
+        }
+    }
+    return clean;
+}
+
+std::map<std::string, std::string> PixelMathAlgorithm::getSanitizedVariableMap(const std::vector<std::string>& workspaceNames) {
+    std::map<std::string, std::string> mapping;
+    std::set<std::string> usedVarNames;
+    for (const auto& rawName : workspaceNames) {
+        std::string clean = sanitizeIdentifier(rawName);
+        std::string varName = clean;
+        int counter = 1;
+        while (usedVarNames.count(varName)) {
+            varName = clean + "_" + std::to_string(counter++);
+        }
+        usedVarNames.insert(varName);
+        mapping[rawName] = varName;
+    }
+    return mapping;
+}
+
+std::string PixelMathAlgorithm::preprocessExpression(const std::string& expr, const std::map<std::string, std::string>& varMap) {
+    std::string result;
+    size_t i = 0;
+    while (i < expr.length()) {
+        if (expr[i] == '`') {
+            size_t start = i + 1;
+            size_t end = expr.find('`', start);
+            if (end == std::string::npos) {
+                throw std::runtime_error("Unmatched backtick in expression starting at position " + std::to_string(i));
+            }
+            std::string rawName = expr.substr(start, end - start);
+            if (varMap.count(rawName) == 0) {
+                throw std::runtime_error("Referenced image '" + rawName + "' is not present in the workspace registry");
+            }
+            result += varMap.at(rawName);
+            i = end + 1;
+        } else {
+            result += expr[i];
+            i++;
+        }
+    }
+    return result;
 }
 
 } // namespace blastro

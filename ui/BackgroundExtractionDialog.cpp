@@ -266,20 +266,34 @@ BackgroundExtractionDialog::BackgroundExtractionDialog(WorkspaceRegistry& worksp
 
     mainLayout->addStretch(1); // Content top-justifies; buttons pin to bottom
 
+    // Control Box row
+    QHBoxLayout* ctrlLayout = new QHBoxLayout();
+    QPushButton* generateBtn = new QPushButton("Generate Grid", this);
+    connect(generateBtn, &QPushButton::clicked, this, &BackgroundExtractionDialog::onGenerateGridClicked);
+    ctrlLayout->addWidget(generateBtn);
+
+    QPushButton* clearBtn = new QPushButton("Clear Points", this);
+    connect(clearBtn, &QPushButton::clicked, this, &BackgroundExtractionDialog::onClearPointsClicked);
+    ctrlLayout->addWidget(clearBtn);
+
+    ctrlLayout->addStretch(1);
+
+    m_previewChk = new QCheckBox("Show Preview", this);
+    m_previewChk->setChecked(false);
+    ctrlLayout->addWidget(m_previewChk);
+
+    m_updatePreviewBtn = new QPushButton("Update Preview", this);
+    m_updatePreviewBtn->setEnabled(false);
+    ctrlLayout->addWidget(m_updatePreviewBtn);
+
+    mainLayout->addLayout(ctrlLayout);
+
     // Buttons Box
     QHBoxLayout* btnLayout = new QHBoxLayout();
     
     QPushButton* prefsBtn = new QPushButton("Preferences...", this);
     connect(prefsBtn, &QPushButton::clicked, this, &BackgroundExtractionDialog::onPrefsClicked);
     btnLayout->addWidget(prefsBtn);
-
-    QPushButton* generateBtn = new QPushButton("Generate Grid", this);
-    connect(generateBtn, &QPushButton::clicked, this, &BackgroundExtractionDialog::onGenerateGridClicked);
-    btnLayout->addWidget(generateBtn);
-
-    QPushButton* clearBtn = new QPushButton("Clear Points", this);
-    connect(clearBtn, &QPushButton::clicked, this, &BackgroundExtractionDialog::onClearPointsClicked);
-    btnLayout->addWidget(clearBtn);
 
     btnLayout->addStretch(1);
     
@@ -293,6 +307,18 @@ BackgroundExtractionDialog::BackgroundExtractionDialog(WorkspaceRegistry& worksp
     btnLayout->addWidget(applyBtn);
 
     mainLayout->addLayout(btnLayout);
+
+    connect(m_previewChk, &QCheckBox::toggled, this, [this](bool checked) {
+        m_updatePreviewBtn->setEnabled(checked);
+        if (checked) {
+            updatePreview();
+        } else {
+            if (auto win = getActiveImageWindow()) {
+                win->restoreOriginalImage();
+            }
+        }
+    });
+    connect(m_updatePreviewBtn, &QPushButton::clicked, this, &BackgroundExtractionDialog::updatePreview);
 
     if (auto* mdi = findMdiArea()) {
         connect(mdi, &QMdiArea::subWindowActivated, this, &BackgroundExtractionDialog::onSubWindowActivated);
@@ -322,6 +348,14 @@ void BackgroundExtractionDialog::onApplyClicked() {
         QMessageBox::warning(this, "Apply Error", "No active image found to apply background extraction.");
         close();
         return;
+    }
+
+    if (m_previewChk->isChecked()) {
+        win->restoreOriginalImage();
+        m_previewChk->blockSignals(true);
+        m_previewChk->setChecked(false);
+        m_previewChk->blockSignals(false);
+        m_updatePreviewBtn->setEnabled(false);
     }
 
     emit algorithmExecuted(algorithmName(), getConfig());
@@ -466,8 +500,16 @@ void BackgroundExtractionDialog::updateBgeModes() {
             if (win->imageView()) {
                 win->imageView()->setBgeMode(win == activeWin);
             }
+            if (win != activeWin) {
+                win->restoreOriginalImage();
+            }
         }
     }
+
+    m_previewChk->blockSignals(true);
+    m_previewChk->setChecked(false);
+    m_previewChk->blockSignals(false);
+    m_updatePreviewBtn->setEnabled(false);
 }
 
 void BackgroundExtractionDialog::disableAllBgeModes() {
@@ -479,6 +521,7 @@ void BackgroundExtractionDialog::disableAllBgeModes() {
             if (win->imageView()) {
                 win->imageView()->setBgeMode(false);
             }
+            win->restoreOriginalImage();
         }
     }
 }
@@ -513,6 +556,42 @@ void BackgroundExtractionDialog::restoreState(const QJsonObject& obj) {
         m_huberDelta = obj["huber_delta"].toDouble();
     if (obj.contains("threads"))
         m_threads = obj["threads"].toInt();
+}
+
+void BackgroundExtractionDialog::updatePreview() {
+    auto* win = getActiveImageWindow();
+    if (!win) return;
+
+    ImageVariant baseImg = win->originalImage();
+    if (baseImg.index() == 0 && std::get<0>(baseImg) == nullptr) return;
+
+    std::string method = m_methodCombo->currentIndex() == 1 ? "RBF" : "Polynomial";
+    int order = m_orderSpin->value();
+    double rbfSmoothing = m_rbfSmoothingSpin->value();
+    bool normalize = m_normalizeChk->isChecked();
+    int gridSize = std::max(m_gridColsSpin->value(), m_gridRowsSpin->value());
+    double maxDeviation = m_maxDeviationSpin->value();
+    double maxStructure = m_maxStructureSpin->value();
+
+    std::vector<std::pair<double, double>> ctrlPts = win->imageView() ? win->imageView()->getBgeControlPoints() : std::vector<std::pair<double, double>>();
+
+    ImageVariant previewResult;
+    try {
+        if (std::holds_alternative<GrayscaleImagePtr>(baseImg)) {
+            auto gray = std::get<GrayscaleImagePtr>(baseImg);
+            previewResult = BackgroundExtractor::extractGrayscale(
+                gray, order, gridSize, m_huberDelta, normalize,
+                nullptr, 0, 100, method, rbfSmoothing, ctrlPts, maxDeviation, maxStructure);
+        } else if (std::holds_alternative<RGBImagePtr>(baseImg)) {
+            auto rgb = std::get<RGBImagePtr>(baseImg);
+            previewResult = BackgroundExtractor::extractRGB(
+                rgb, order, gridSize, m_huberDelta, normalize,
+                nullptr, method, rbfSmoothing, ctrlPts, maxDeviation, maxStructure);
+        }
+        win->setPreviewImage(previewResult);
+    } catch (const std::exception& e) {
+        QMessageBox::critical(this, "Preview Error", QString("Error during preview generation:\n%1").arg(e.what()));
+    }
 }
 
 } // namespace blastro

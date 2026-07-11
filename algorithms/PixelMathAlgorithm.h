@@ -18,6 +18,9 @@
 
 #pragma once
 #include "Algorithm.h"
+#include <string>
+#include <map>
+#include <vector>
 
 namespace blastro {
 
@@ -31,6 +34,10 @@ public:
     void execute(WorkspaceRegistry& workspace, 
                  const std::map<std::string, std::string>& config, 
                  ProgressCallback progress = nullptr) override;
+
+    static std::string sanitizeIdentifier(const std::string& name);
+    static std::map<std::string, std::string> getSanitizedVariableMap(const std::vector<std::string>& workspaceNames);
+    static std::string preprocessExpression(const std::string& expr, const std::map<std::string, std::string>& varMap);
 };
 
 } // namespace blastro

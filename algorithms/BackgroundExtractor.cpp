@@ -345,23 +345,40 @@ GrayscaleImagePtr BackgroundExtractor::extractGrayscale(GrayscaleImagePtr src,
             half_coeffs[i] = rbfCoeffs[i] * 0.5;
         }
 
-        #pragma omp parallel for
-        for (int y = 0; y < h; ++y) {
-            double y_norm = (2.0 * y - h) / h;
-            for (int x = 0; x < w; ++x) {
-                double x_norm = x_norms[x];
+        constexpr int LUT_SIZE = 1048576;
+        constexpr double MAX_R2 = 8.0;
+        constexpr double R2_LUT_MULT = (LUT_SIZE - 1) / MAX_R2;
+        std::vector<double> r2_log_lut(LUT_SIZE);
+        for (int i = 0; i < LUT_SIZE; ++i) {
+            double r2 = i * MAX_R2 / (LUT_SIZE - 1);
+            r2_log_lut[i] = (r2 > 0.0) ? r2 * std::log(r2) : 0.0;
+        }
 
-                double bkgVal = c0 + c1 * x_norm + c2 * y_norm;
+        #pragma omp parallel
+        {
+            std::vector<double> dy2(n);
+            #pragma omp for
+            for (int y = 0; y < h; ++y) {
+                double y_norm = (2.0 * y - h) / h;
                 for (int i = 0; i < n; ++i) {
-                    double dx = x_norm - sx[i];
                     double dy = y_norm - sy[i];
-                    double r2 = dx*dx + dy*dy;
-                    if (r2 > 0.0) {
-                        bkgVal += half_coeffs[i] * r2 * std::log(r2);
-                    }
+                    dy2[i] = dy * dy;
                 }
-
-                outData[y * w + x] = data[y * w + x] - static_cast<float>(bkgVal);
+                for (int x = 0; x < w; ++x) {
+                    double x_norm = x_norms[x];
+                    double bkgVal = c0 + c1 * x_norm + c2 * y_norm;
+                    for (int i = 0; i < n; ++i) {
+                        double dx = x_norm - sx[i];
+                        double r2 = dx * dx + dy2[i];
+                        int idx = static_cast<int>(r2 * R2_LUT_MULT);
+                        if (idx >= 0 && idx < LUT_SIZE) {
+                            bkgVal += half_coeffs[i] * r2_log_lut[idx];
+                        } else if (r2 > 0.0) {
+                            bkgVal += half_coeffs[i] * r2 * std::log(r2);
+                        }
+                    }
+                    outData[y * w + x] = data[y * w + x] - static_cast<float>(bkgVal);
+                }
             }
         }
     } else {
@@ -439,21 +456,35 @@ GrayscaleImagePtr BackgroundExtractor::extractGrayscale(GrayscaleImagePtr src,
         if (progress) progress(progressStart + (progressEnd - progressStart) * 65 / 100);
         Logger::info("BackgroundExtraction", QString("  Evaluating background model and performing subtraction..."));
 
-        std::vector<double> x_norms(w);
-        for (int x = 0; x < w; ++x) x_norms[x] = (2.0 * x - w) / w;
+        std::vector<std::vector<double>> x_pows(w, std::vector<double>(order + 1, 1.0));
+        for (int x = 0; x < w; ++x) {
+            double x_norm = (2.0 * x - w) / w;
+            for (int i = 1; i <= order; ++i) {
+                x_pows[x][i] = x_pows[x][i - 1] * x_norm;
+            }
+        }
 
-        #pragma omp parallel for
-        for (int y = 0; y < h; ++y) {
-            double y_norm = (2.0 * y - h) / h;
-            for (int x = 0; x < w; ++x) {
-                double x_norm = x_norms[x];
-                std::vector<double> terms = getPolynomialTerms(x_norm, y_norm, order);
-                double bkgVal = 0.0;
-                for (int i = 0; i < numTerms; ++i) {
-                    bkgVal += terms[i] * coeffs[i];
+        #pragma omp parallel
+        {
+            std::vector<double> y_pow(order + 1, 1.0);
+            #pragma omp for
+            for (int y = 0; y < h; ++y) {
+                double y_norm = (2.0 * y - h) / h;
+                for (int j = 1; j <= order; ++j) {
+                    y_pow[j] = y_pow[j - 1] * y_norm;
                 }
 
-                outData[y * w + x] = data[y * w + x] - static_cast<float>(bkgVal);
+                for (int x = 0; x < w; ++x) {
+                    double bkgVal = 0.0;
+                    int k = 0;
+                    for (int i = 0; i <= order; ++i) {
+                        double xp = x_pows[x][i];
+                        for (int j = 0; j <= order - i; ++j) {
+                            bkgVal += coeffs[k++] * xp * y_pow[j];
+                        }
+                    }
+                    outData[y * w + x] = data[y * w + x] - static_cast<float>(bkgVal);
+                }
             }
         }
     }

@@ -27,9 +27,11 @@
 #include "algorithms/StretchingAlgorithm.h"
 #include "algorithms/PreprocessingPipeline.h"
 #include "algorithms/PlatesolveAlgorithm.h"
+#include "algorithms/PixelMathAlgorithm.h"
 #include "core/WorkspaceRegistry.h"
 #include "core/ImageBatch.h"
 #include "core/GrayscaleImage.h"
+#include "core/RGBImage.h"
 #include "core/ImageBuffer.h"
 #include "core/TempDirectory.h"
 #include "io/FitsIO.h"
@@ -1748,6 +1750,116 @@ void testPlatesolvingAndMetadataPreservation() {
     std::cout << "[+] Platesolving and Metadata Preservation Test PASSED." << std::endl << std::endl;
 }
 
+void testPixelMathNamingAndExecution() {
+    std::cout << "Running PixelMath Naming and Execution Test..." << std::endl;
+
+    // 1. Test sanitizeIdentifier directly
+    assert(PixelMathAlgorithm::sanitizeIdentifier("test-image") == "test_image");
+    assert(PixelMathAlgorithm::sanitizeIdentifier("123image") == "img_123image");
+    assert(PixelMathAlgorithm::sanitizeIdentifier("_image") == "img__image");
+    assert(PixelMathAlgorithm::sanitizeIdentifier("") == "img");
+    assert(PixelMathAlgorithm::sanitizeIdentifier("normal_image_123") == "normal_image_123");
+
+    // 2. Test getSanitizedVariableMap and collision resolution
+    std::vector<std::string> workspaceNames = {"my-image", "my_image", "123flat"};
+    std::map<std::string, std::string> varMap = PixelMathAlgorithm::getSanitizedVariableMap(workspaceNames);
+    assert(varMap["my-image"] == "my_image");
+    assert(varMap["my_image"] == "my_image_1"); // Collision resolved!
+    assert(varMap["123flat"] == "img_123flat"); // Non-alpha prepended!
+
+    // 3. Test preprocessExpression
+    assert(PixelMathAlgorithm::preprocessExpression("`my-image` * 2.0", varMap) == "my_image * 2.0");
+    assert(PixelMathAlgorithm::preprocessExpression("`my_image`R + `123flat`_r", varMap) == "my_image_1R + img_123flat_r");
+    
+    // Test unmatched backtick error handling
+    try {
+        PixelMathAlgorithm::preprocessExpression("`unmatched", varMap);
+        assert(false && "Should have thrown on unmatched backtick");
+    } catch (const std::runtime_error& e) {
+        // Expected
+    }
+
+    // Test missing image error handling
+    try {
+        PixelMathAlgorithm::preprocessExpression("`nonexistent` * 2.0", varMap);
+        assert(false && "Should have thrown on nonexistent image");
+    } catch (const std::runtime_error& e) {
+        // Expected
+    }
+
+    // 4. Test math execution on a real workspace
+    WorkspaceRegistry workspace;
+
+    // Create a 2x2 grayscale image named "test-image" filled with 0.4f
+    auto img1 = std::make_shared<GrayscaleImage>(2, 2);
+    img1->buffer()->setPixel(0, 0, 0.4f);
+    img1->buffer()->setPixel(1, 0, 0.4f);
+    img1->buffer()->setPixel(0, 1, 0.4f);
+    img1->buffer()->setPixel(1, 1, 0.4f);
+    workspace.registerElement("test-image", img1);
+
+    // Create a 2x2 RGB image named "123image" with specific channel values:
+    // Red: 0.1, Green: 0.2, Blue: 0.3
+    auto img2 = std::make_shared<RGBImage>(2, 2);
+    for (int y = 0; y < 2; ++y) {
+        for (int x = 0; x < 2; ++x) {
+            img2->r()->buffer()->setPixel(x, y, 0.1f);
+            img2->g()->buffer()->setPixel(x, y, 0.2f);
+            img2->b()->buffer()->setPixel(x, y, 0.3f);
+        }
+    }
+    workspace.registerElement("123image", img2);
+
+    // Create another image named "test_image" (collides with sanitized name of "test-image")
+    auto img3 = std::make_shared<GrayscaleImage>(2, 2);
+    img3->buffer()->setPixel(0, 0, 0.5f);
+    img3->buffer()->setPixel(1, 0, 0.5f);
+    img3->buffer()->setPixel(0, 1, 0.5f);
+    img3->buffer()->setPixel(1, 1, 0.5f);
+    workspace.registerElement("test_image", img3);
+
+    // Execute PixelMath in Grayscale space
+    // Expression: `test-image` * 2.0 + `123image`_b - `test_image`
+    // Sanitized expression compiled internally:
+    // test_image * 2.0 + img_123image_b - test_image_1
+    // Expected result: 0.4 * 2.0 + 0.3 - 0.5 = 0.8 + 0.3 - 0.5 = 0.6
+    std::map<std::string, std::string> pmConfig = {
+        {"color_space", "Grayscale"},
+        {"expr_k", "`test-image` * 2.0 + `123image`_b - `test_image`"},
+        {"output_name", "pm_output"},
+        {"threads", "1"}
+    };
+
+    PixelMathAlgorithm pmAlg;
+    pmAlg.execute(workspace, pmConfig);
+
+    assert(workspace.contains("pm_output"));
+    auto pmOutputElem = workspace.getElement("pm_output");
+    assert(std::holds_alternative<GrayscaleImagePtr>(pmOutputElem));
+    auto pmOut = std::get<GrayscaleImagePtr>(pmOutputElem);
+
+    assert(approxEqual(pmOut->buffer()->pixel(0, 0), 0.6, 1e-4));
+    assert(approxEqual(pmOut->buffer()->pixel(1, 1), 0.6, 1e-4));
+
+    // Test alternative suffix (R, G, B, _red, _green, _blue)
+    // Expression: `123image`R + `123image`_green
+    // Sanitized expression compiled internally:
+    // img_123imageR + img_123image_green
+    // Expected result: 0.1 + 0.2 = 0.3
+    std::map<std::string, std::string> pmConfigRGB = {
+        {"color_space", "Grayscale"},
+        {"expr_k", "`123image`R + `123image`_green"},
+        {"output_name", "pm_output_rgb"},
+        {"threads", "1"}
+    };
+    pmAlg.execute(workspace, pmConfigRGB);
+    assert(workspace.contains("pm_output_rgb"));
+    auto pmOutRGB = std::get<GrayscaleImagePtr>(workspace.getElement("pm_output_rgb"));
+    assert(approxEqual(pmOutRGB->buffer()->pixel(0, 0), 0.3, 1e-4));
+
+    std::cout << "[+] PixelMath Naming and Execution Test PASSED." << std::endl << std::endl;
+}
+
 int main() {
     std::cout << "========================================" << std::endl;
     std::cout << "Starting Blastro Algorithm Unit Tests..." << std::endl;
@@ -1765,6 +1877,7 @@ int main() {
     testPreprocessingCalibrationSelection();
     testMutualStackAlignment();
     testPlatesolvingAndMetadataPreservation();
+    testPixelMathNamingAndExecution();
 
     std::cout << "========================================" << std::endl;
     std::cout << "All Blastro Algorithm Unit Tests PASSED!" << std::endl;

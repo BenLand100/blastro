@@ -200,14 +200,14 @@ void PreprocessingPipeline::execute(WorkspaceRegistry& workspace,
             throw std::runtime_error("Preprocessing cancelled by user.");
         }
         if (m_stepCallback) {
-            m_stepCallback(currentStepIndex, 0, 0.0, false, false);
+            m_stepCallback(currentStepIndex, 0, 0.0, false, false, false);
         }
         stepTimer.start();
         
         try {
             alg.execute(workspace, algConfig, [this, &stepTimer, &progress, currentStepIndex, totalSteps](int pct) {
                 if (m_stepCallback) {
-                    m_stepCallback(currentStepIndex, pct, stepTimer.elapsed() / 1000.0, false, false);
+                    m_stepCallback(currentStepIndex, pct, stepTimer.elapsed() / 1000.0, false, false, false);
                 }
                 if (progress) {
                     progress((currentStepIndex * 100 + pct) / totalSteps);
@@ -215,7 +215,7 @@ void PreprocessingPipeline::execute(WorkspaceRegistry& workspace,
             });
             
             if (m_stepCallback) {
-                m_stepCallback(currentStepIndex, 100, stepTimer.elapsed() / 1000.0, true, true);
+                m_stepCallback(currentStepIndex, 100, stepTimer.elapsed() / 1000.0, true, true, false);
             }
             if (progress) {
                 progress((currentStepIndex + 1) * 100 / totalSteps);
@@ -223,7 +223,7 @@ void PreprocessingPipeline::execute(WorkspaceRegistry& workspace,
             currentStepIndex++;
         } catch (...) {
             if (m_stepCallback) {
-                m_stepCallback(currentStepIndex, 100, stepTimer.elapsed() / 1000.0, true, false);
+                m_stepCallback(currentStepIndex, 100, stepTimer.elapsed() / 1000.0, true, false, false);
             }
             throw;
         }
@@ -334,11 +334,12 @@ void PreprocessingPipeline::execute(WorkspaceRegistry& workspace,
 
                 if (!overwriteMasters && QFileInfo::exists(QString::fromStdString(masterPath))) {
                     Logger::info("Preprocessing", QString("Found cached master bias at %1. Loading it.").arg(QString::fromStdString(masterPath)));
+                    Logger::info("Preprocessing", QString("Step '%1' skipped: using cached master.").arg(QString::fromStdString(steps[currentStepIndex])));
                     auto masterImg = fits.readImage(masterPath);
                     workspace.registerElement(masterName, std::visit([](auto&& arg) -> WorkspaceElement { return arg; }, masterImg));
                     masterBiasNames[key] = masterName;
                     if (m_stepCallback) {
-                        m_stepCallback(currentStepIndex, 100, 0.0, true, true);
+                        m_stepCallback(currentStepIndex, 100, 0.0, true, true, true);
                     }
                     if (progress) {
                         progress((currentStepIndex + 1) * 100 / totalSteps);
@@ -385,11 +386,12 @@ void PreprocessingPipeline::execute(WorkspaceRegistry& workspace,
 
                 if (!overwriteMasters && QFileInfo::exists(QString::fromStdString(masterPath))) {
                     Logger::info("Preprocessing", QString("Found cached master dark at %1. Loading it.").arg(QString::fromStdString(masterPath)));
+                    Logger::info("Preprocessing", QString("Step '%1' skipped: using cached master.").arg(QString::fromStdString(steps[currentStepIndex])));
                     auto masterImg = fits.readImage(masterPath);
                     workspace.registerElement(masterName, std::visit([](auto&& arg) -> WorkspaceElement { return arg; }, masterImg));
                     masterDarkNames[key] = masterName;
                     if (m_stepCallback) {
-                        m_stepCallback(currentStepIndex, 100, 0.0, true, true);
+                        m_stepCallback(currentStepIndex, 100, 0.0, true, true, true);
                     }
                     if (progress) {
                         progress((currentStepIndex + 1) * 100 / totalSteps);
@@ -439,8 +441,9 @@ void PreprocessingPipeline::execute(WorkspaceRegistry& workspace,
                     workspace.registerElement(masterName, std::visit([](auto&& arg) -> WorkspaceElement { return arg; }, masterImg));
                     masterFlatNames[key] = masterName;
                     for (int step = 0; step < 2; ++step) {
+                        Logger::info("Preprocessing", QString("Step '%1' skipped: using cached master.").arg(QString::fromStdString(steps[currentStepIndex])));
                         if (m_stepCallback) {
-                            m_stepCallback(currentStepIndex, 100, 0.0, true, true);
+                            m_stepCallback(currentStepIndex, 100, 0.0, true, true, true);
                         }
                         if (progress) {
                             progress((currentStepIndex + 1) * 100 / totalSteps);
@@ -496,7 +499,7 @@ void PreprocessingPipeline::execute(WorkspaceRegistry& workspace,
 
                     // 1. Calibrate Flats
                     if (m_stepCallback) {
-                        m_stepCallback(currentStepIndex, 0, 0.0, false, false);
+                        m_stepCallback(currentStepIndex, 0, 0.0, false, false, false);
                     }
                     stepTimer.start();
                     try {
@@ -509,7 +512,7 @@ void PreprocessingPipeline::execute(WorkspaceRegistry& workspace,
                             {"flat_name", ""} // No flat for flats
                         }, [this, &stepTimer, &progress, currentStepIndex, totalSteps](int pct) {
                             if (m_stepCallback) {
-                                m_stepCallback(currentStepIndex, pct, stepTimer.elapsed() / 1000.0, false, false);
+                                m_stepCallback(currentStepIndex, pct, stepTimer.elapsed() / 1000.0, false, false, false);
                             }
                             if (progress) {
                                 progress((currentStepIndex * 100 + pct) / totalSteps);
@@ -517,7 +520,7 @@ void PreprocessingPipeline::execute(WorkspaceRegistry& workspace,
                         });
 
                         if (m_stepCallback) {
-                            m_stepCallback(currentStepIndex, 100, stepTimer.elapsed() / 1000.0, true, true);
+                            m_stepCallback(currentStepIndex, 100, stepTimer.elapsed() / 1000.0, true, true, false);
                         }
                         if (progress) {
                             progress((currentStepIndex + 1) * 100 / totalSteps);
@@ -528,7 +531,7 @@ void PreprocessingPipeline::execute(WorkspaceRegistry& workspace,
                         currentStepIndex++;
                     } catch (...) {
                         if (m_stepCallback) {
-                            m_stepCallback(currentStepIndex, 100, stepTimer.elapsed() / 1000.0, true, false);
+                            m_stepCallback(currentStepIndex, 100, stepTimer.elapsed() / 1000.0, true, false, false);
                         }
                         throw;
                     }
@@ -539,7 +542,7 @@ void PreprocessingPipeline::execute(WorkspaceRegistry& workspace,
 
                     // 2. Stack Flats
                     if (m_stepCallback) {
-                        m_stepCallback(currentStepIndex, 0, 0.0, false, false);
+                        m_stepCallback(currentStepIndex, 0, 0.0, false, false, false);
                     }
                     stepTimer.start();
                     try {
@@ -557,7 +560,7 @@ void PreprocessingPipeline::execute(WorkspaceRegistry& workspace,
                             {"quantile_high", "0.2"}
                         }, [this, &stepTimer, &progress, currentStepIndex, totalSteps](int pct) {
                             if (m_stepCallback) {
-                                m_stepCallback(currentStepIndex, pct, stepTimer.elapsed() / 1000.0, false, false);
+                                m_stepCallback(currentStepIndex, pct, stepTimer.elapsed() / 1000.0, false, false, false);
                             }
                             if (progress) {
                                 progress((currentStepIndex * 100 + pct) / totalSteps);
@@ -565,7 +568,7 @@ void PreprocessingPipeline::execute(WorkspaceRegistry& workspace,
                         });
 
                         if (m_stepCallback) {
-                            m_stepCallback(currentStepIndex, 100, stepTimer.elapsed() / 1000.0, true, true);
+                            m_stepCallback(currentStepIndex, 100, stepTimer.elapsed() / 1000.0, true, true, false);
                         }
                         if (progress) {
                             progress((currentStepIndex + 1) * 100 / totalSteps);
@@ -573,7 +576,7 @@ void PreprocessingPipeline::execute(WorkspaceRegistry& workspace,
                         currentStepIndex++;
                     } catch (...) {
                         if (m_stepCallback) {
-                            m_stepCallback(currentStepIndex, 100, stepTimer.elapsed() / 1000.0, true, false);
+                            m_stepCallback(currentStepIndex, 100, stepTimer.elapsed() / 1000.0, true, false, false);
                         }
                         throw;
                     }
@@ -750,7 +753,7 @@ void PreprocessingPipeline::execute(WorkspaceRegistry& workspace,
 
         // 1. Finalize Registration
         if (m_stepCallback) {
-            m_stepCallback(currentStepIndex, 0, 0.0, false, false);
+            m_stepCallback(currentStepIndex, 0, 0.0, false, false, false);
         }
         stepTimer.start();
 
@@ -972,7 +975,7 @@ void PreprocessingPipeline::execute(WorkspaceRegistry& workspace,
         }
 
         if (m_stepCallback) {
-            m_stepCallback(currentStepIndex, 100, stepTimer.elapsed() / 1000.0, true, true);
+            m_stepCallback(currentStepIndex, 100, stepTimer.elapsed() / 1000.0, true, true, false);
         }
         if (progress) {
             progress((currentStepIndex + 1) * 100 / totalSteps);

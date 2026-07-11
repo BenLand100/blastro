@@ -58,7 +58,7 @@ public:
 
     std::string name() const override { return "PreprocessingPipeline"; }
     
-    using StepProgressCallback = std::function<void(int stepIndex, int percent, double elapsedSeconds, bool finished, bool success)>;
+    using StepProgressCallback = std::function<void(int stepIndex, int percent, double elapsedSeconds, bool finished, bool success, bool cached)>;
     void setStepCallback(StepProgressCallback cb) { m_stepCallback = cb; }
     void setCancelCallback(std::function<bool()> cb) { m_cancelCallback = cb; }
     static bool isCancelled();

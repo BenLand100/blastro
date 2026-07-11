@@ -56,19 +56,30 @@ PlatesolveDialog::PlatesolveDialog(WorkspaceRegistry& workspace, QWidget* parent
     formLayout->addRow("Solver Engine:", m_solverCombo);
 
     // 3. Hints: RA / DEC
+    m_blindSolveChk = new QCheckBox("Blind Solve", this);
+    m_blindSolveChk->setChecked(true);
+    formLayout->addRow("", m_blindSolveChk);
+
     m_raHintSpin = new QDoubleSpinBox(this);
     m_raHintSpin->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-    m_raHintSpin->setRange(-1.0, 360.0);
-    m_raHintSpin->setValue(-1.0);
-    m_raHintSpin->setSuffix(" deg (-1 for blind)");
+    m_raHintSpin->setRange(0.0, 360.0);
+    m_raHintSpin->setValue(0.0);
+    m_raHintSpin->setSuffix(" deg");
+    m_raHintSpin->setEnabled(false);
     formLayout->addRow("RA Hint:", m_raHintSpin);
 
     m_decHintSpin = new QDoubleSpinBox(this);
     m_decHintSpin->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-    m_decHintSpin->setRange(-99.0, 90.0);
-    m_decHintSpin->setValue(-99.0);
-    m_decHintSpin->setSuffix(" deg (-99 for blind)");
+    m_decHintSpin->setRange(-90.0, 90.0);
+    m_decHintSpin->setValue(0.0);
+    m_decHintSpin->setSuffix(" deg");
+    m_decHintSpin->setEnabled(false);
     formLayout->addRow("DEC Hint:", m_decHintSpin);
+
+    connect(m_blindSolveChk, &QCheckBox::toggled, this, [this](bool checked) {
+        m_raHintSpin->setDisabled(checked);
+        m_decHintSpin->setDisabled(checked);
+    });
 
     // 4. Hints: Focal Length / Pixel Size
     m_focalLengthSpin = new QDoubleSpinBox(this);
@@ -117,8 +128,13 @@ std::map<std::string, std::string> PlatesolveDialog::getConfig() const {
     std::map<std::string, std::string> config;
     config["input_name"] = m_targetInputCombo->currentText().toStdString();
     config["solver"] = m_solverCombo->currentData().toString().toStdString();
-    config["ra_hint"] = std::to_string(m_raHintSpin->value());
-    config["dec_hint"] = std::to_string(m_decHintSpin->value());
+    if (m_blindSolveChk->isChecked()) {
+        config["ra_hint"] = "-1.0";
+        config["dec_hint"] = "-99.0";
+    } else {
+        config["ra_hint"] = std::to_string(m_raHintSpin->value());
+        config["dec_hint"] = std::to_string(m_decHintSpin->value());
+    }
     config["focal_length"] = std::to_string(m_focalLengthSpin->value());
     config["pixel_size"] = std::to_string(m_pixelSizeSpin->value());
     return config;
@@ -140,6 +156,7 @@ void PlatesolveDialog::refreshWorkspaceElements() {
 QJsonObject PlatesolveDialog::serializeState() const {
     QJsonObject obj;
     obj["solver"] = m_solverCombo->currentData().toString();
+    obj["blind_solve"] = m_blindSolveChk->isChecked();
     obj["ra_hint"] = m_raHintSpin->value();
     obj["dec_hint"] = m_decHintSpin->value();
     obj["focal_length"] = m_focalLengthSpin->value();
@@ -151,6 +168,9 @@ void PlatesolveDialog::restoreState(const QJsonObject& obj) {
     if (obj.contains("solver")) {
         int idx = m_solverCombo->findData(obj["solver"].toString());
         if (idx >= 0) m_solverCombo->setCurrentIndex(idx);
+    }
+    if (obj.contains("blind_solve")) {
+        m_blindSolveChk->setChecked(obj["blind_solve"].toBool());
     }
     if (obj.contains("ra_hint"))
         m_raHintSpin->setValue(obj["ra_hint"].toDouble());

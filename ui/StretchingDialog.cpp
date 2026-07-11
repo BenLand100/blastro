@@ -215,6 +215,7 @@ StretchingDialog::StretchingDialog(WorkspaceRegistry& workspace, QWidget* parent
         m_spSpin->setValue(val / 1000.0);
         m_spSpin->blockSignals(false);
         m_spPoint = val / 1000.0;
+        enforceGhsConstraints(ConstraintSource::SymmetryPoint);
         onParameterChanged();
     });
     connect(m_spSpin, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double val) {
@@ -222,6 +223,7 @@ StretchingDialog::StretchingDialog(WorkspaceRegistry& workspace, QWidget* parent
         m_spSlider->setValue(static_cast<int>(val * 1000.0));
         m_spSlider->blockSignals(false);
         m_spPoint = val;
+        enforceGhsConstraints(ConstraintSource::SymmetryPoint);
         onParameterChanged();
     });
 
@@ -275,6 +277,7 @@ StretchingDialog::StretchingDialog(WorkspaceRegistry& workspace, QWidget* parent
         m_shadowSpin->setValue(val / 100.0);
         m_shadowSpin->blockSignals(false);
         m_shadowProtect = val / 100.0;
+        enforceGhsConstraints(ConstraintSource::ShadowProtect);
         onParameterChanged();
     });
     connect(m_shadowSpin, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double val) {
@@ -282,6 +285,7 @@ StretchingDialog::StretchingDialog(WorkspaceRegistry& workspace, QWidget* parent
         m_shadowSlider->setValue(static_cast<int>(val * 100.0));
         m_shadowSlider->blockSignals(false);
         m_shadowProtect = val;
+        enforceGhsConstraints(ConstraintSource::ShadowProtect);
         onParameterChanged();
     });
 
@@ -305,6 +309,7 @@ StretchingDialog::StretchingDialog(WorkspaceRegistry& workspace, QWidget* parent
         m_highlightSpin->setValue(val / 100.0);
         m_highlightSpin->blockSignals(false);
         m_highlightProtect = val / 100.0;
+        enforceGhsConstraints(ConstraintSource::HighlightProtect);
         onParameterChanged();
     });
     connect(m_highlightSpin, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double val) {
@@ -312,6 +317,7 @@ StretchingDialog::StretchingDialog(WorkspaceRegistry& workspace, QWidget* parent
         m_highlightSlider->setValue(static_cast<int>(val * 100.0));
         m_highlightSlider->blockSignals(false);
         m_highlightProtect = val;
+        enforceGhsConstraints(ConstraintSource::HighlightProtect);
         onParameterChanged();
     });
 
@@ -466,6 +472,7 @@ void StretchingDialog::onGhsParamsChanged(double sp, double d) {
         m_dSlider->blockSignals(false);
     }
 
+    enforceGhsConstraints(ConstraintSource::SymmetryPoint);
     onParameterChanged();
 }
 
@@ -495,6 +502,8 @@ void StretchingDialog::onGhsProtectionsChanged(double shadowProtect, double high
         m_highlightSlider->blockSignals(false);
     }
 
+    enforceGhsConstraints(ConstraintSource::ShadowProtect);
+    enforceGhsConstraints(ConstraintSource::HighlightProtect);
     onParameterChanged();
 }
 
@@ -537,7 +546,7 @@ void StretchingDialog::onParameterChanged() {
 }
 
 void StretchingDialog::syncUiFromValues() {
-    // HT UI sync
+    // 1. HT block signals & set
     m_bSpin->blockSignals(true);
     m_bSpin->setValue(m_blackpoint);
     m_bSpin->blockSignals(false);
@@ -559,7 +568,7 @@ void StretchingDialog::syncUiFromValues() {
     m_mSlider->setValue(static_cast<int>(m_midpoint * 1000.0));
     m_mSlider->blockSignals(false);
 
-    // GHS UI sync
+    // 2. GHS block signals & set
     m_spSpin->blockSignals(true);
     m_spSpin->setValue(m_spPoint);
     m_spSpin->blockSignals(false);
@@ -588,11 +597,83 @@ void StretchingDialog::syncUiFromValues() {
     m_highlightSlider->setValue(static_cast<int>(m_highlightProtect * 100.0));
     m_highlightSlider->blockSignals(false);
 
-    if (m_isGhsMode) {
+    // Set widget params
+    if (m_histogramWidget) {
+        m_histogramWidget->setStretchParams(m_blackpoint, m_whitepoint, m_midpoint);
         m_histogramWidget->setGhsParams(m_spPoint, m_stretchFactor);
         m_histogramWidget->setGhsProtections(m_shadowProtect, m_highlightProtect);
-    } else {
-        m_histogramWidget->setStretchParams(m_blackpoint, m_whitepoint, m_midpoint);
+    }
+}
+
+void StretchingDialog::enforceGhsConstraints(ConstraintSource source) {
+    bool spChanged = false;
+    bool shadowChanged = false;
+    bool highlightChanged = false;
+
+    if (source == ConstraintSource::SymmetryPoint) {
+        if (m_shadowProtect > m_spPoint) {
+            m_shadowProtect = m_spPoint;
+            shadowChanged = true;
+        }
+        if (m_highlightProtect < m_spPoint) {
+            m_highlightProtect = m_spPoint;
+            highlightChanged = true;
+        }
+    } else if (source == ConstraintSource::ShadowProtect) {
+        if (m_shadowProtect > m_spPoint) {
+            m_spPoint = m_shadowProtect;
+            spChanged = true;
+            if (m_highlightProtect < m_spPoint) {
+                m_highlightProtect = m_spPoint;
+                highlightChanged = true;
+            }
+        }
+    } else if (source == ConstraintSource::HighlightProtect) {
+        if (m_highlightProtect < m_spPoint) {
+            m_spPoint = m_highlightProtect;
+            spChanged = true;
+            if (m_shadowProtect > m_spPoint) {
+                m_shadowProtect = m_spPoint;
+                shadowChanged = true;
+            }
+        }
+    }
+
+    if (spChanged) {
+        if (m_spSpin) {
+            m_spSpin->blockSignals(true);
+            m_spSpin->setValue(m_spPoint);
+            m_spSpin->blockSignals(false);
+        }
+        if (m_spSlider) {
+            m_spSlider->blockSignals(true);
+            m_spSlider->setValue(static_cast<int>(m_spPoint * 1000.0));
+            m_spSlider->blockSignals(false);
+        }
+    }
+    if (shadowChanged) {
+        if (m_shadowSpin) {
+            m_shadowSpin->blockSignals(true);
+            m_shadowSpin->setValue(m_shadowProtect);
+            m_shadowSpin->blockSignals(false);
+        }
+        if (m_shadowSlider) {
+            m_shadowSlider->blockSignals(true);
+            m_shadowSlider->setValue(static_cast<int>(m_shadowProtect * 100.0));
+            m_shadowSlider->blockSignals(false);
+        }
+    }
+    if (highlightChanged) {
+        if (m_highlightSpin) {
+            m_highlightSpin->blockSignals(true);
+            m_highlightSpin->setValue(m_highlightProtect);
+            m_highlightSpin->blockSignals(false);
+        }
+        if (m_highlightSlider) {
+            m_highlightSlider->blockSignals(true);
+            m_highlightSlider->setValue(static_cast<int>(m_highlightProtect * 100.0));
+            m_highlightSlider->blockSignals(false);
+        }
     }
 }
 

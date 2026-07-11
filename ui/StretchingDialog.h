@@ -60,6 +60,13 @@ private:
     WorkspaceImageWindow* getActiveImageWindow() const;
     void syncUiFromValues();
 
+    enum class ConstraintSource {
+        SymmetryPoint,
+        ShadowProtect,
+        HighlightProtect
+    };
+    void enforceGhsConstraints(ConstraintSource source);
+
     // Dialog layout components
     QTabWidget* m_tabWidget;
     HistogramWidget* m_histogramWidget;

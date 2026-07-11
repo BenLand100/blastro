@@ -22,6 +22,7 @@
 #include <QMouseEvent>
 #include <cmath>
 #include <algorithm>
+#include "core/MathUtils.h"
 
 namespace blastro {
 
@@ -69,6 +70,7 @@ void HistogramWidget::setGhsProtections(double shadowProtect, double highlightPr
 
 void HistogramWidget::setHistogram(const std::vector<int>& hist) {
     m_histogram = hist;
+    m_cacheDirty = true;
     update();
 }
 
@@ -98,8 +100,8 @@ HistogramWidget::DragTarget HistogramWidget::getCloseLine(const QPoint& pos) con
 
     if (m_ghsMode) {
         double xSP = valueToX(m_spPoint);
-        double xS = valueToX(m_shadowProtect * m_spPoint);
-        double xH = valueToX(m_spPoint + m_highlightProtect * (1.0 - m_spPoint));
+        double xS = valueToX(m_shadowProtect);
+        double xH = valueToX(m_highlightProtect);
 
         double dxSP = std::abs(pos.x() - xSP);
         double dxS = std::abs(pos.x() - xS);
@@ -231,104 +233,116 @@ void HistogramWidget::paintEvent(QPaintEvent* event) {
     int w = width();
     int h = height();
 
-    // 1. Draw rounded background and border manually
-    painter.setPen(QPen(QColor("#333333"), 1));
-    painter.setBrush(QBrush(QColor("#1a1a1a")));
-    painter.drawRoundedRect(QRectF(0.5, 0.5, w - 1.0, h - 1.0), 4.0, 4.0);
+    if (m_cacheDirty || m_cachedBackground.size() != size()) {
+        m_cachedBackground = QPixmap(w, h);
+        m_cachedBackground.fill(Qt::transparent);
+        
+        QPainter bgPainter(&m_cachedBackground);
+        bgPainter.setRenderHint(QPainter::Antialiasing, true);
 
-    // 2. Draw background grid
-    painter.setPen(QPen(QColor("#262626"), 1, Qt::DashLine));
-    for (int i = 1; i < 10; ++i) {
-        double val = static_cast<double>(i) / 10.0;
-        double x = valueToX(val);
-        if (x >= 0 && x <= w) {
-            painter.drawLine(x, 1, x, h - 1);
-        }
-    }
+        // 1. Draw rounded background and border manually
+        bgPainter.setPen(QPen(QColor("#333333"), 1));
+        bgPainter.setBrush(QBrush(QColor("#1a1a1a")));
+        bgPainter.drawRoundedRect(QRectF(0.5, 0.5, w - 1.0, h - 1.0), 4.0, 4.0);
 
-    // 3. Draw Histogram Curve
-    if (!m_histogram.empty()) {
-        int numBins = m_histogram.size();
-        int nonZeroCount = 0;
-        for (int val : m_histogram) {
-            if (val > 0) nonZeroCount++;
-        }
-
-        std::vector<double> renderHist(numBins, 0.0);
-        if (nonZeroCount > 0 && nonZeroCount < 500) {
-            int windowSize = std::max(5, numBins / 256 + 1);
-            if (windowSize % 2 == 0) windowSize++;
-            int half = windowSize / 2;
-            double currentSum = 0;
-            for (int i = 0; i < half && i < numBins; ++i) {
-                currentSum += m_histogram[i];
-            }
-            for (int i = 0; i < numBins; ++i) {
-                int addIdx = i + half;
-                int removeIdx = i - half - 1;
-                if (addIdx < numBins) currentSum += m_histogram[addIdx];
-                if (removeIdx >= 0) currentSum -= m_histogram[removeIdx];
-                renderHist[i] = currentSum / windowSize;
-            }
-        } else {
-            for (int i = 0; i < numBins; ++i) {
-                renderHist[i] = m_histogram[i];
+        // 2. Draw background grid
+        bgPainter.setPen(QPen(QColor("#262626"), 1, Qt::DashLine));
+        for (int i = 1; i < 10; ++i) {
+            double val = static_cast<double>(i) / 10.0;
+            double x = valueToX(val);
+            if (x >= 0 && x <= w) {
+                bgPainter.drawLine(x, 1, x, h - 1);
             }
         }
 
-        double maxVal = *std::max_element(renderHist.begin(), renderHist.end());
-        if (maxVal > 0.0) {
-            double logMax = std::log1p(maxVal);
-            QPainterPath path;
-            bool started = false;
-            
-            for (int x = 0; x < w; ++x) {
-                double val = xToValue(x);
-                if (val >= 0.0 && val <= 1.0) {
-                    int bin = std::max(0, std::min(numBins - 1, static_cast<int>(val * (numBins - 1))));
-                    double logVal = std::log1p(renderHist[bin]);
-                    double y = h - (logVal / logMax) * (h - 6);
-                    
-                    if (!started) {
-                        path.moveTo(x, h - 1);
-                        path.lineTo(x, y);
-                        started = true;
-                    } else {
-                        path.lineTo(x, y);
-                    }
+        // 3. Draw Histogram Curve
+        if (!m_histogram.empty()) {
+            int numBins = m_histogram.size();
+            int nonZeroCount = 0;
+            for (int val : m_histogram) {
+                if (val > 0) nonZeroCount++;
+            }
+
+            std::vector<double> renderHist(numBins, 0.0);
+            if (nonZeroCount > 0 && nonZeroCount < 500) {
+                int windowSize = std::max(5, numBins / 256 + 1);
+                if (windowSize % 2 == 0) windowSize++;
+                int half = windowSize / 2;
+                double currentSum = 0;
+                for (int i = 0; i < half && i < numBins; ++i) {
+                    currentSum += m_histogram[i];
+                }
+                for (int i = 0; i < numBins; ++i) {
+                    int addIdx = i + half;
+                    int removeIdx = i - half - 1;
+                    if (addIdx < numBins) currentSum += m_histogram[addIdx];
+                    if (removeIdx >= 0) currentSum -= m_histogram[removeIdx];
+                    renderHist[i] = currentSum / windowSize;
+                }
+            } else {
+                for (int i = 0; i < numBins; ++i) {
+                    renderHist[i] = m_histogram[i];
                 }
             }
-            if (started) {
-                double endX = valueToX(1.0);
-                path.lineTo(std::min(static_cast<double>(w), endX), h - 1);
-                path.closeSubpath();
-            }
 
-            QLinearGradient gradient(0, 0, 0, h);
-            gradient.setColorAt(0, QColor(0, 122, 204, 80));
-            gradient.setColorAt(1, QColor(0, 122, 204, 10));
-            painter.fillPath(path, gradient);
-
-            painter.setPen(QPen(QColor(0, 150, 255, 120), 1.0));
-            QPainterPath outlinePath;
-            started = false;
-            for (int x = 0; x < w; ++x) {
-                double val = xToValue(x);
-                if (val >= 0.0 && val <= 1.0) {
-                    int bin = std::max(0, std::min(numBins - 1, static_cast<int>(val * (numBins - 1))));
-                    double logVal = std::log1p(renderHist[bin]);
-                    double y = h - (logVal / logMax) * (h - 6);
-                    if (!started) {
-                        outlinePath.moveTo(x, y);
-                        started = true;
-                    } else {
-                        outlinePath.lineTo(x, y);
+            double maxVal = *std::max_element(renderHist.begin(), renderHist.end());
+            if (maxVal > 0.0) {
+                double logMax = std::log1p(maxVal);
+                QPainterPath path;
+                bool started = false;
+                
+                for (int x = 0; x < w; ++x) {
+                    double val = xToValue(x);
+                    if (val >= 0.0 && val <= 1.0) {
+                        int bin = std::max(0, std::min(numBins - 1, static_cast<int>(val * (numBins - 1))));
+                        double logVal = std::log1p(renderHist[bin]);
+                        double y = h - (logVal / logMax) * (h - 6);
+                        
+                        if (!started) {
+                            path.moveTo(x, h - 1);
+                            path.lineTo(x, y);
+                            started = true;
+                        } else {
+                            path.lineTo(x, y);
+                        }
                     }
                 }
+                if (started) {
+                    double endX = valueToX(1.0);
+                    path.lineTo(std::min(static_cast<double>(w), endX), h - 1);
+                    path.closeSubpath();
+                }
+
+                QLinearGradient gradient(0, 0, 0, h);
+                gradient.setColorAt(0, QColor(0, 122, 204, 80));
+                gradient.setColorAt(1, QColor(0, 122, 204, 10));
+                bgPainter.fillPath(path, gradient);
+
+                bgPainter.setPen(QPen(QColor(0, 150, 255, 120), 1.0));
+                QPainterPath outlinePath;
+                started = false;
+                for (int x = 0; x < w; ++x) {
+                    double val = xToValue(x);
+                    if (val >= 0.0 && val <= 1.0) {
+                        int bin = std::max(0, std::min(numBins - 1, static_cast<int>(val * (numBins - 1))));
+                        double logVal = std::log1p(renderHist[bin]);
+                        double y = h - (logVal / logMax) * (h - 6);
+                        if (!started) {
+                            outlinePath.moveTo(x, y);
+                            started = true;
+                        } else {
+                            outlinePath.lineTo(x, y);
+                        }
+                    }
+                }
+                bgPainter.drawPath(outlinePath);
             }
-            painter.drawPath(outlinePath);
         }
+        
+        m_cacheDirty = false;
     }
+
+    painter.drawPixmap(0, 0, m_cachedBackground);
 
     if (!m_active) {
         return;
@@ -346,7 +360,7 @@ void HistogramWidget::paintEvent(QPaintEvent* event) {
         }
 
         // Draw Shadow Protection line
-        double xS = valueToX(m_shadowProtect * m_spPoint);
+        double xS = valueToX(m_shadowProtect);
         if (xS >= 0 && xS <= w) {
             painter.setPen(QPen(QColor("#00e5ff"), 1.2)); // cyan/light blue
             painter.drawLine(xS, 1, xS, h - 1);
@@ -354,8 +368,8 @@ void HistogramWidget::paintEvent(QPaintEvent* event) {
             painter.drawEllipse(QPointF(xS, h / 2.0), 3, 3);
         }
 
-        // Draw Highlight Protection line (mapped to [SP, 1.0])
-        double xH = valueToX(m_spPoint + m_highlightProtect * (1.0 - m_spPoint));
+        // Draw Highlight Protection line
+        double xH = valueToX(m_highlightProtect);
         if (xH >= 0 && xH <= w) {
             painter.setPen(QPen(QColor("#ffab40"), 1.2)); // orange/yellow
             painter.drawLine(xH, 1, xH, h - 1);
@@ -422,11 +436,33 @@ void HistogramWidget::paintEvent(QPaintEvent* event) {
     if (m_drawCurve) {
         QPainterPath curvePath;
         bool started = false;
-        for (int px = 0; px < w; ++px) {
+        
+        // Pre-compute constants for GHS to prevent lag during dragging
+        double D = 0.0, a = 0.0, denom = 1.0, sp = m_spPoint;
+        bool doGhsMath = false;
+        if (m_ghsMode && m_stretchFactor >= 1e-5) {
+            D = std::exp(m_stretchFactor) - 1.0;
+            a = -localGhsFunction(sp, D, 1);
+            double b = localGhsFunction(1.0 - sp, D, 1);
+            denom = b - a;
+            if (std::abs(denom) < 1e-8) denom = 1e-8;
+            doGhsMath = true;
+        }
+
+        for (int px = 0; px <= w; px += 2) {
+            if (px > w) px = w; // Ensure last pixel is drawn
             double val = xToValue(px);
             double yVal = 0.0;
             if (m_ghsMode) {
-                yVal = evaluateLocalGhs(val, m_spPoint, m_stretchFactor, m_shadowProtect, m_highlightProtect);
+                double stretched = std::clamp(val, 0.0, 1.0);
+                if (doGhsMath) {
+                    double x = val - sp;
+                    double result = (x >= 0.0) ? localGhsFunction(x, D, 1) : -localGhsFunction(-x, D, 1);
+                    stretched = std::clamp((result - a) / denom, 0.0, 1.0);
+                }
+                
+                stretched = blastro::MathUtils::applyGhsProtection(val, sp, m_shadowProtect, m_highlightProtect, stretched);
+                yVal = stretched;
             } else {
                 yVal = evaluateLocalHt(val, m_blackpoint, m_whitepoint, m_midpoint);
             }
@@ -437,11 +473,17 @@ void HistogramWidget::paintEvent(QPaintEvent* event) {
             } else {
                 curvePath.lineTo(px, py);
             }
+            if (px == w) break;
         }
         painter.setPen(QPen(QColor(m_ghsMode ? "#ffaa00" : "#44ff44"), 1.6));
         painter.setBrush(Qt::NoBrush);
         painter.drawPath(curvePath);
     }
+}
+
+void HistogramWidget::resizeEvent(QResizeEvent* event) {
+    QWidget::resizeEvent(event);
+    m_cacheDirty = true;
 }
 
 void HistogramWidget::mousePressEvent(QMouseEvent* event) {
@@ -482,6 +524,7 @@ void HistogramWidget::mouseMoveEvent(QMouseEvent* event) {
         m_scrollOffset -= dv;
         m_scrollOffset = std::max(0.0, std::min(1.0 - 1.0 / m_zoom, m_scrollOffset));
         m_lastMousePos = event->pos();
+        m_cacheDirty = true;
         update();
         event->accept();
         return;
@@ -508,13 +551,30 @@ void HistogramWidget::mouseMoveEvent(QMouseEvent* event) {
     if (m_ghsMode) {
         if (m_dragTarget == SymmetryPoint) {
             m_spPoint = val;
+            if (m_shadowProtect > m_spPoint) m_shadowProtect = m_spPoint;
+            if (m_highlightProtect < m_spPoint) m_highlightProtect = m_spPoint;
             emit ghsParamsChanged(m_spPoint, m_stretchFactor);
+            emit ghsProtectionsChanged(m_shadowProtect, m_highlightProtect);
         } else if (m_dragTarget == ShadowProtect) {
-            m_shadowProtect = std::clamp(val / std::max(1e-5, m_spPoint), 0.0, 1.0);
-            emit ghsProtectionsChanged(m_shadowProtect, m_highlightProtect);
+            m_shadowProtect = val;
+            if (m_shadowProtect > m_spPoint) {
+                m_spPoint = m_shadowProtect;
+                if (m_highlightProtect < m_spPoint) m_highlightProtect = m_spPoint;
+                emit ghsProtectionsChanged(m_shadowProtect, m_highlightProtect);
+                emit ghsParamsChanged(m_spPoint, m_stretchFactor);
+            } else {
+                emit ghsProtectionsChanged(m_shadowProtect, m_highlightProtect);
+            }
         } else if (m_dragTarget == HighlightProtect) {
-            m_highlightProtect = std::clamp((val - m_spPoint) / std::max(1e-5, 1.0 - m_spPoint), 0.0, 1.0);
-            emit ghsProtectionsChanged(m_shadowProtect, m_highlightProtect);
+            m_highlightProtect = val;
+            if (m_highlightProtect < m_spPoint) {
+                m_spPoint = m_highlightProtect;
+                if (m_shadowProtect > m_spPoint) m_shadowProtect = m_spPoint;
+                emit ghsProtectionsChanged(m_shadowProtect, m_highlightProtect);
+                emit ghsParamsChanged(m_spPoint, m_stretchFactor);
+            } else {
+                emit ghsProtectionsChanged(m_shadowProtect, m_highlightProtect);
+            }
         }
     } else {
         if (m_dragTarget == Black) {
@@ -551,6 +611,7 @@ void HistogramWidget::wheelEvent(QWheelEvent* event) {
     m_scrollOffset = mouseVal - mouseX / (m_zoom * width());
     m_scrollOffset = std::max(0.0, std::min(1.0 - 1.0 / m_zoom, m_scrollOffset));
     
+    m_cacheDirty = true;
     update();
     event->accept();
 }
@@ -567,12 +628,14 @@ void HistogramWidget::snapToBlackToMid() {
         m_zoom = 1.0;
         m_scrollOffset = 0.0;
     }
+    m_cacheDirty = true;
     update();
 }
 
 void HistogramWidget::resetZoom() {
     m_zoom = 1.0;
     m_scrollOffset = 0.0;
+    m_cacheDirty = true;
     update();
 }
 

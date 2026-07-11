@@ -18,6 +18,7 @@
 
 #pragma once
 #include <QWidget>
+#include <QPixmap>
 #include <vector>
 
 namespace blastro {
@@ -50,6 +51,7 @@ signals:
 
 protected:
     void paintEvent(QPaintEvent* event) override;
+    void resizeEvent(QResizeEvent* event) override;
     void mousePressEvent(QMouseEvent* event) override;
     void mouseReleaseEvent(QMouseEvent* event) override;
     void mouseMoveEvent(QMouseEvent* event) override;
@@ -96,6 +98,9 @@ private:
     DragTarget m_dragTarget;
     bool m_isScrolling;
     QPoint m_lastMousePos;
+    
+    QPixmap m_cachedBackground;
+    bool m_cacheDirty = true;
 };
 
 } // namespace blastro

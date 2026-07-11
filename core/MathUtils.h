@@ -12,6 +12,7 @@
 #include <vector>
 #include <array>
 #include <utility>
+#include <functional>
 
 namespace blastro {
 namespace MathUtils {
@@ -31,12 +32,31 @@ namespace MathUtils {
     double computeMedian(std::vector<double>& values);
     float computeMedian(std::vector<float>& values);
     
+    double computeMAD(std::vector<double>& values);
+    float computeMAD(std::vector<float>& values);
+    
     // Rousseeuw Sn estimator (robust scale estimator). O(N^2) complexity, parallelized with OpenMP.
     double computeRousseeuwSn(const std::vector<double>& values);
     float computeRousseeuwSn(const std::vector<float>& values);
 
     // Estimate median and Sn of a float buffer (skipping NaNs), using sampling if requested.
     void estimateImageStats(const float* data, int numPixels, double& median, double& sn, int maxSamples = 2000);
+
+    // Applies threshold-based shadow/highlight protection to a stretched GHS value.
+    double applyGhsProtection(double val, double symmetryPoint, double shadowProtect, double highlightProtect, double stretched);
+
+    // Nelder-Mead downhill simplex optimization
+    struct NelderMeadResult {
+        std::vector<double> x;
+        double fun;
+        bool success;
+        int nit;
+        int nfev;
+    };
+    NelderMeadResult nelderMead(std::function<double(const std::vector<double>&)> f,
+                               const std::vector<double>& x0,
+                               double tol = 1e-5,
+                               int maxIter = 1000);
 
 } // namespace MathUtils
 } // namespace blastro

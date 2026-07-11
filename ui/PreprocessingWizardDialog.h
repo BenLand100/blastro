@@ -72,7 +72,7 @@ private slots:
     void onCancel();
     void onStepStarted(int stepIndex);
     void onStepProgressUpdated(int stepIndex, int percent, double elapsed);
-    void onStepFinished(int stepIndex, bool success, double elapsed);
+    void onStepFinished(int stepIndex, bool success, double elapsed, bool cached = false);
     void onFilterSelectionChanged(int index);
     void recomputeColumnWidths();
     void onFileDoubleClicked(QTableWidgetItem* item);
@@ -234,7 +234,7 @@ signals:
     void finished(bool success, const QString& errorMsg);
     void stepStarted(int stepIndex);
     void stepProgressUpdated(int stepIndex, int percent, double elapsed);
-    void stepFinished(int stepIndex, bool success, double elapsed);
+    void stepFinished(int stepIndex, bool success, double elapsed, bool cached = false);
 
 private:
     WorkspaceRegistry& m_workspace;

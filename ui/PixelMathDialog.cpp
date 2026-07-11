@@ -17,6 +17,7 @@
  */
 
 #include "PixelMathDialog.h"
+#include "algorithms/PixelMathAlgorithm.h"
 #include <QEvent>
 #include <QJsonObject>
 #include <QVBoxLayout>
@@ -128,8 +129,8 @@ PixelMathDialog::PixelMathDialog(WorkspaceRegistry& workspace, QWidget* parent)
     QPushButton* closeBtn = new QPushButton("Close", this);
     
     btnLayout->addStretch();
-    btnLayout->addWidget(runBtn);
     btnLayout->addWidget(closeBtn);
+    btnLayout->addWidget(runBtn);
     mainLayout->addLayout(btnLayout);
  
     // Connections
@@ -240,17 +241,25 @@ void PixelMathDialog::refreshWorkspaceElements() {
     if (idx >= 0) {
         m_targetImageCombo->setCurrentIndex(idx);
     }
-
+ 
     if (m_infoLabel) {
         QString infoText = "<b>Active Workspace Variables (click to insert):</b><br>";
         if (keys.empty()) {
             infoText += "&nbsp;&nbsp;(No images open. Math will output using default 800x600 dimensions)";
         } else {
+            std::map<std::string, std::string> varMap = PixelMathAlgorithm::getSanitizedVariableMap(keys);
             for (const auto& name : keys) {
                 QString nameStr = QString::fromStdString(name);
-                infoText += QString("&nbsp;&nbsp;•&nbsp;<a href=\"%1\" style=\"color: #88ff88; text-decoration: underline;\"><font color=\"#88ff88\">%1</font></a><br>").arg(nameStr);
+                QString varNameStr = QString::fromStdString(varMap[name]);
+                if (nameStr == varNameStr) {
+                    infoText += QString("&nbsp;&nbsp;•&nbsp;<a href=\"%1\" style=\"color: #88ff88; text-decoration: underline;\"><font color=\"#88ff88\">%1</font></a><br>").arg(varNameStr);
+                } else {
+                    infoText += QString("&nbsp;&nbsp;•&nbsp;%1 &nbsp;→&nbsp; <a href=\"%2\" style=\"color: #88ff88; text-decoration: underline;\"><font color=\"#88ff88\">%2</font></a><br>")
+                                .arg(nameStr)
+                                .arg(varNameStr);
+                }
             }
-            infoText += "<br>Note: For RGB images, you can also use suffix _r, _g, _b (e.g. Image1_r)<br>";
+            infoText += "<br>Note: For RGB images, you can also use suffix _r, _g, _b, _red, _green, _blue, _R, _G, _B or R, G, B (e.g. Image1_r, Image1_red, Image1R).<br>";
             infoText += "Any valid image name in the workspace registry can be used as a variable.";
         }
         m_infoLabel->setText(infoText);

@@ -170,6 +170,26 @@ float computeMedian(std::vector<float>& values) {
     }
 }
 
+double computeMAD(std::vector<double>& values) {
+    if (values.empty()) return 0.0;
+    double median = computeMedian(values);
+    std::vector<double> absDiffs(values.size());
+    for (size_t i = 0; i < values.size(); ++i) {
+        absDiffs[i] = std::abs(values[i] - median);
+    }
+    return computeMedian(absDiffs);
+}
+
+float computeMAD(std::vector<float>& values) {
+    if (values.empty()) return 0.0f;
+    float median = computeMedian(values);
+    std::vector<float> absDiffs(values.size());
+    for (size_t i = 0; i < values.size(); ++i) {
+        absDiffs[i] = std::abs(values[i] - median);
+    }
+    return computeMedian(absDiffs);
+}
+
 double computeRousseeuwSn(const std::vector<double>& values) {
     if (values.size() < 2) return 0.0;
     size_t n = values.size();
@@ -225,6 +245,185 @@ void estimateImageStats(const float* data, int numPixels, double& median, double
     }
     median = computeMedian(sample);
     sn = computeRousseeuwSn(sample);
+}
+
+double applyGhsProtection(double val, double symmetryPoint, double shadowProtect, double highlightProtect, double stretched) {
+    // Apply shadow protection if active (shadowProtect > 0.0)
+    if (shadowProtect > 0.0 && val < symmetryPoint) {
+        double w_s = shadowProtect * std::exp(-val / (symmetryPoint - val + 1e-9));
+        return (1.0 - w_s) * stretched + w_s * val;
+    }
+
+    // Apply highlight protection if active (highlightProtect < 1.0)
+    double effectiveHighlightProtect = 1.0 - highlightProtect;
+    if (effectiveHighlightProtect > 0.0 && val > symmetryPoint) {
+        double w_h = effectiveHighlightProtect * std::exp(-(1.0 - val) / (val - symmetryPoint + 1e-9));
+        return (1.0 - w_h) * stretched + w_h * val;
+    }
+
+    return stretched;
+}
+
+struct SimplexVertex {
+    std::vector<double> x;
+    double val;
+
+    bool operator<(const SimplexVertex& other) const {
+        return val < other.val;
+    }
+};
+
+NelderMeadResult nelderMead(std::function<double(const std::vector<double>&)> f,
+                           const std::vector<double>& x0,
+                           double tol,
+                           int maxIter) {
+    int n = x0.size();
+    if (n == 0) {
+        throw std::invalid_argument("Dimension must be greater than zero");
+    }
+
+    // Coefficients
+    const double alpha = 1.0;  // Reflection
+    const double gamma = 2.0;  // Expansion
+    const double rho = 0.5;    // Contraction
+    const double sigma = 0.5;  // Shrink
+
+    int nfev = 0;
+    auto evaluate = [&](const std::vector<double>& x) -> double {
+        nfev++;
+        return f(x);
+    };
+
+    // 1. Initialize simplex of n + 1 vertices
+    std::vector<SimplexVertex> simplex(n + 1);
+    
+    // First vertex is x0
+    simplex[0].x = x0;
+    simplex[0].val = evaluate(x0);
+
+    // Other vertices are perturbed versions of x0
+    for (int i = 1; i <= n; ++i) {
+        std::vector<double> xi = x0;
+        double val = xi[i - 1];
+        double step = (std::abs(val) > 1e-5) ? (0.05 * val) : 0.05;
+        xi[i - 1] += step;
+        
+        simplex[i].x = xi;
+        simplex[i].val = evaluate(xi);
+    }
+
+    std::sort(simplex.begin(), simplex.end());
+
+    int nit = 0;
+    bool success = false;
+
+    while (nit < maxIter) {
+        nit++;
+
+        double maxFuncDiff = 0.0;
+        for (int i = 1; i <= n; ++i) {
+            double diff = std::abs(simplex[i].val - simplex[0].val);
+            if (diff > maxFuncDiff) {
+                maxFuncDiff = diff;
+            }
+        }
+
+        double maxCoordDiff = 0.0;
+        for (int i = 1; i <= n; ++i) {
+            for (int j = 0; j < n; ++j) {
+                double diff = std::abs(simplex[i].x[j] - simplex[0].x[j]);
+                if (diff > maxCoordDiff) {
+                    maxCoordDiff = diff;
+                }
+            }
+        }
+
+        if (maxFuncDiff < tol && maxCoordDiff < tol) {
+            success = true;
+            break;
+        }
+
+        // 2. Centroid of the first n vertices (all except the worst, index n)
+        std::vector<double> xbar(n, 0.0);
+        for (int i = 0; i < n; ++i) {
+            for (int j = 0; j < n; ++j) {
+                xbar[j] += simplex[i].x[j];
+            }
+        }
+        for (int j = 0; j < n; ++j) {
+            xbar[j] /= n;
+        }
+
+        // 3. Reflection
+        std::vector<double> xr(n);
+        for (int j = 0; j < n; ++j) {
+            xr[j] = xbar[j] + alpha * (xbar[j] - simplex[n].x[j]);
+        }
+        double fxr = evaluate(xr);
+
+        if (fxr >= simplex[0].val && fxr < simplex[n - 1].val) {
+            simplex[n].x = xr;
+            simplex[n].val = fxr;
+        } else if (fxr < simplex[0].val) {
+            std::vector<double> xe(n);
+            for (int j = 0; j < n; ++j) {
+                xe[j] = xbar[j] + gamma * (xr[j] - xbar[j]);
+            }
+            double fxe = evaluate(xe);
+
+            if (fxe < fxr) {
+                simplex[n].x = xe;
+                simplex[n].val = fxe;
+            } else {
+                simplex[n].x = xr;
+                simplex[n].val = fxr;
+            }
+        } else {
+            bool contracted = false;
+            if (fxr < simplex[n].val) {
+                std::vector<double> xc(n);
+                for (int j = 0; j < n; ++j) {
+                    xc[j] = xbar[j] + rho * (xr[j] - xbar[j]);
+                }
+                double fxc = evaluate(xc);
+                if (fxc < fxr) {
+                    simplex[n].x = xc;
+                    simplex[n].val = fxc;
+                    contracted = true;
+                }
+            } else {
+                std::vector<double> xc(n);
+                for (int j = 0; j < n; ++j) {
+                    xc[j] = xbar[j] + rho * (simplex[n].x[j] - xbar[j]);
+                }
+                double fxc = evaluate(xc);
+                if (fxc < simplex[n].val) {
+                    simplex[n].x = xc;
+                    simplex[n].val = fxc;
+                    contracted = true;
+                }
+            }
+
+            if (!contracted) {
+                for (int i = 1; i <= n; ++i) {
+                    for (int j = 0; j < n; ++j) {
+                        simplex[i].x[j] = simplex[0].x[j] + sigma * (simplex[i].x[j] - simplex[0].x[j]);
+                    }
+                    simplex[i].val = evaluate(simplex[i].x);
+                }
+            }
+        }
+
+        std::sort(simplex.begin(), simplex.end());
+    }
+
+    NelderMeadResult res;
+    res.x = simplex[0].x;
+    res.fun = simplex[0].val;
+    res.success = success;
+    res.nit = nit;
+    res.nfev = nfev;
+    return res;
 }
 
 } // namespace MathUtils
