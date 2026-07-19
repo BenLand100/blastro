@@ -61,7 +61,7 @@ PixelMathDialog::PixelMathDialog(WorkspaceRegistry& workspace, QWidget* parent)
     scrollArea->setStyleSheet("QScrollArea { background-color: transparent; border: none; }");
     
     m_infoLabel = new QLabel(this);
-    m_infoLabel->setStyleSheet("font-family: monospace; color: #88ff88; background-color: transparent;");
+    m_infoLabel->setStyleSheet("font-family: monospace; color: #ccc; background-color: transparent;");
     m_infoLabel->setWordWrap(true);
     m_infoLabel->setTextInteractionFlags(Qt::TextBrowserInteraction);
     connect(m_infoLabel, &QLabel::linkActivated, this, &PixelMathDialog::onVariableClicked);
@@ -256,25 +256,32 @@ void PixelMathDialog::refreshWorkspaceElements() {
     }
  
     if (m_infoLabel) {
-        QString infoText = "<b>Active Workspace Variables (click to insert):</b><br>";
+        QString infoText;
         if (keys.empty()) {
-            infoText += "&nbsp;&nbsp;(No images open. Math will output using default 800x600 dimensions)";
+            infoText = "All images are valid variable names. Click a name to insert into the current expression.<br>";
+            infoText += "(No images open. Math will output using default 800x600 dimensions)<br><br>";
         } else {
-            std::map<std::string, std::string> varMap = PixelMathAlgorithm::getSanitizedVariableMap(keys);
-            for (const auto& name : keys) {
-                QString nameStr = QString::fromStdString(name);
-                QString varNameStr = QString::fromStdString(varMap[name]);
-                if (nameStr == varNameStr) {
-                    infoText += QString("&nbsp;&nbsp;•&nbsp;<a href=\"%1\" style=\"color: #88ff88; text-decoration: underline;\"><font color=\"#88ff88\">%1</font></a><br>").arg(varNameStr);
-                } else {
-                    infoText += QString("&nbsp;&nbsp;•&nbsp;%1 &nbsp;→&nbsp; <a href=\"%2\" style=\"color: #88ff88; text-decoration: underline;\"><font color=\"#88ff88\">%2</font></a><br>")
-                                .arg(nameStr)
-                                .arg(varNameStr);
+            auto isCleanIdentifier = [](const std::string& s) {
+                if (s.empty()) return false;
+                if (!std::isalpha(static_cast<unsigned char>(s[0])) && s[0] != '_') return false;
+                for (char c : s) {
+                    if (!std::isalnum(static_cast<unsigned char>(c)) && c != '_') return false;
                 }
+                return true;
+            };
+
+            QStringList links;
+            for (const auto& name : keys) {
+                QString displayStr = QString::fromStdString(name);
+                QString insertStr = isCleanIdentifier(name) ? displayStr : QString("`%1`").arg(displayStr);
+                links << QString("<a href=\"%1\" style=\"color: #88ff88; text-decoration: underline;\"><font color=\"#88ff88\">%1</font></a>").arg(insertStr);
             }
-            infoText += "<br>Note: For RGB images, you can also use suffix _r, _g, _b, _red, _green, _blue, _R, _G, _B or R, G, B (e.g. Image1_r, Image1_red, Image1R).<br>";
-            infoText += "Any valid image name in the workspace registry can be used as a variable.";
+            infoText += "All images are valid variable names. Click a name to insert into the current expression.<br>";
+            infoText += links.join(", ") + "<br><br>";
         }
+        infoText += "<b>Special Characters:</b> Use SQL backticks if the image name contains spaces, dashes, or special characters (e.g. `2026-07-13_M16_stacked`).<br>";
+        infoText += "<b>Channel Suffixes:</b> For RGB/color images, append _r, _g, _b, _red, _green, _blue, _R, _G, _B, _K, _gray (e.g. Image1_r, `Image-1`_red).";
+        
         m_infoLabel->setText(infoText);
     }
 }

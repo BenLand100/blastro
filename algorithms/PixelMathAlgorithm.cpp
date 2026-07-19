@@ -65,6 +65,30 @@ static ImageMetadata getFirstBindingMetadata(const std::vector<ImageBindings>& b
     return meta;
 }
 
+static bool isIdentifierReferenced(const std::string& varName, const std::vector<std::string>& expressions) {
+    std::vector<std::string> suffixes = {
+        "", "_r", "_g", "_b", "_k", "_red", "_green", "_blue", "_gray",
+        "_R", "_G", "_B", "_K"
+    };
+    for (const auto& expr : expressions) {
+        if (expr.empty()) continue;
+        for (const auto& suffix : suffixes) {
+            std::string target = varName + suffix;
+            size_t pos = 0;
+            while ((pos = expr.find(target, pos)) != std::string::npos) {
+                bool startOk = (pos == 0) || (!std::isalnum(static_cast<unsigned char>(expr[pos - 1])) && expr[pos - 1] != '_');
+                bool endOk = (pos + target.length() == expr.length()) || 
+                             (!std::isalnum(static_cast<unsigned char>(expr[pos + target.length()])) && expr[pos + target.length()] != '_');
+                if (startOk && endOk) {
+                    return true;
+                }
+                pos += target.length();
+            }
+        }
+    }
+    return false;
+}
+
 void PixelMathAlgorithm::execute(WorkspaceRegistry& workspace, 
                                  const std::map<std::string, std::string>& config, 
                                  ProgressCallback progress) {
@@ -127,54 +151,61 @@ void PixelMathAlgorithm::execute(WorkspaceRegistry& workspace,
     int height = 0;
 
     for (const auto& name : names) {
+        std::string varName = varMap[name];
+        bool referenced = isIdentifierReferenced(varName, {cleanExprR, cleanExprG, cleanExprB, cleanExprK});
+        if (!referenced) continue;
+
         WorkspaceElement elem = workspace.getElement(name);
         ImageBindings bind;
         bind.name = name;
-        bind.varName = varMap[name];
+        bind.varName = varName;
+
+        int imgW = 0;
+        int imgH = 0;
 
         if (std::holds_alternative<GrayscaleImagePtr>(elem)) {
             bind.grayImage = std::get<GrayscaleImagePtr>(elem);
             bind.grayData = bind.grayImage->buffer()->data();
-            if (width == 0) {
-                width = bind.grayImage->width();
-                height = bind.grayImage->height();
-            }
-            bindings.push_back(bind);
+            imgW = bind.grayImage->width();
+            imgH = bind.grayImage->height();
         } else if (std::holds_alternative<RGBImagePtr>(elem)) {
             bind.rgbImage = std::get<RGBImagePtr>(elem);
             bind.rData = bind.rgbImage->r()->buffer()->data();
             bind.gData = bind.rgbImage->g()->buffer()->data();
             bind.bData = bind.rgbImage->b()->buffer()->data();
-            if (width == 0) {
-                width = bind.rgbImage->width();
-                height = bind.rgbImage->height();
-            }
-            bindings.push_back(bind);
+            imgW = bind.rgbImage->width();
+            imgH = bind.rgbImage->height();
         } else if (std::holds_alternative<ImageBatchPtr>(elem)) {
             bind.batchImage = std::get<ImageBatchPtr>(elem);
-            // Get frame 0 for sizing if possible
             if (bind.batchImage->count() > 0) {
                 auto firstFrame = bind.batchImage->getImage(0);
                 if (std::holds_alternative<GrayscaleImagePtr>(firstFrame)) {
                     auto img = std::get<GrayscaleImagePtr>(firstFrame);
                     bind.grayData = img->buffer()->data();
-                    if (width == 0) {
-                        width = img->width();
-                        height = img->height();
-                    }
+                    imgW = img->width();
+                    imgH = img->height();
                 } else if (std::holds_alternative<RGBImagePtr>(firstFrame)) {
                     auto img = std::get<RGBImagePtr>(firstFrame);
                     bind.rData = img->r()->buffer()->data();
                     bind.gData = img->g()->buffer()->data();
                     bind.bData = img->b()->buffer()->data();
-                    if (width == 0) {
-                        width = img->width();
-                        height = img->height();
-                    }
+                    imgW = img->width();
+                    imgH = img->height();
                 }
             }
-            bindings.push_back(bind);
         }
+
+        if (imgW > 0 && imgH > 0) {
+            if (width == 0) {
+                width = imgW;
+                height = imgH;
+            } else if (imgW != width || imgH != height) {
+                throw std::runtime_error("Image dimension mismatch in PixelMath: '" + name + 
+                                         "' is " + std::to_string(imgW) + "x" + std::to_string(imgH) + 
+                                         ", but target dimensions are " + std::to_string(width) + "x" + std::to_string(height));
+            }
+        }
+        bindings.push_back(bind);
     }
 
     // Default dimensions if no images are in the workspace
@@ -187,11 +218,8 @@ void PixelMathAlgorithm::execute(WorkspaceRegistry& workspace,
     {
         exprtk::symbol_table<double> dummySymbolTable;
         double dummyVal = 0.0;
-        dummySymbolTable.add_variable("x", dummyVal);
-        dummySymbolTable.add_variable("y", dummyVal);
-        dummySymbolTable.add_variable("w", dummyVal);
-        dummySymbolTable.add_variable("h", dummyVal);
-        dummySymbolTable.add_constants();
+
+        // 1. Add image variables and channel suffixes first for top-level precedence!
         for (const auto& bind : bindings) {
             dummySymbolTable.add_variable(bind.varName, dummyVal);
             
@@ -216,12 +244,16 @@ void PixelMathAlgorithm::execute(WorkspaceRegistry& workspace,
             registerChannel("_G", dummyVal);
             registerChannel("_B", dummyVal);
             registerChannel("_K", dummyVal);
-
-            registerChannel("R", dummyVal);
-            registerChannel("G", dummyVal);
-            registerChannel("B", dummyVal);
-            registerChannel("K", dummyVal);
         }
+
+        // 2. Add x, y, w, h only if they don't conflict with image names
+        if (baseVarNames.count("x") == 0) dummySymbolTable.add_variable("x", dummyVal);
+        if (baseVarNames.count("y") == 0) dummySymbolTable.add_variable("y", dummyVal);
+        if (baseVarNames.count("w") == 0) dummySymbolTable.add_variable("w", dummyVal);
+        if (baseVarNames.count("h") == 0) dummySymbolTable.add_variable("h", dummyVal);
+
+        // 3. Add constants (pi, e, etc.), which will not overwrite existing image variables
+        dummySymbolTable.add_constants();
 
         exprtk::expression<double> dummyExpr;
         exprtk::parser<double> dummyParser;
@@ -297,12 +329,8 @@ void PixelMathAlgorithm::execute(WorkspaceRegistry& workspace,
         std::vector<ImageBindings> threadBindings = bindings;
 
         exprtk::symbol_table<double> threadSymbolTable;
-        threadSymbolTable.add_variable("x", threadX);
-        threadSymbolTable.add_variable("y", threadY);
-        threadSymbolTable.add_variable("w", threadW);
-        threadSymbolTable.add_variable("h", threadH);
-        threadSymbolTable.add_constants();
 
+        // 1. Add image variables and channel suffixes first for top-level precedence!
         for (auto& bind : threadBindings) {
             threadSymbolTable.add_variable(bind.varName, bind.currentVal);
 
@@ -327,12 +355,16 @@ void PixelMathAlgorithm::execute(WorkspaceRegistry& workspace,
             registerChannel("_G", bind.currentG);
             registerChannel("_B", bind.currentB);
             registerChannel("_K", bind.currentVal);
-
-            registerChannel("R", bind.currentR);
-            registerChannel("G", bind.currentG);
-            registerChannel("B", bind.currentB);
-            registerChannel("K", bind.currentVal);
         }
+
+        // 2. Add x, y, w, h only if they don't conflict with image names
+        if (baseVarNames.count("x") == 0) threadSymbolTable.add_variable("x", threadX);
+        if (baseVarNames.count("y") == 0) threadSymbolTable.add_variable("y", threadY);
+        if (baseVarNames.count("w") == 0) threadSymbolTable.add_variable("w", threadW);
+        if (baseVarNames.count("h") == 0) threadSymbolTable.add_variable("h", threadH);
+
+        // 3. Add constants (pi, e, etc.), which will not overwrite existing image variables
+        threadSymbolTable.add_constants();
 
         exprtk::expression<double> threadExprR, threadExprG, threadExprB, threadExprK;
         exprtk::parser<double> threadParser;
