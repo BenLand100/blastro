@@ -1,6 +1,6 @@
 # TODO
 
-* PixelMath is doing something wrong - 15-30s on simple operations (needs to be fixed)
+* PixelMath is doing something wrong - 15-30s on simple operations (needs to be fixed) and image names should take precedence
 * Test platesolving
 * Test OSC workflow
 

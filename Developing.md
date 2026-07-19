@@ -86,6 +86,28 @@ When adding algorithms that support interactive previewing, choose one of these 
      - Parameter changes do *not* automatically trigger execution. Instead, the user manually clicks "Update Preview" to rerun the algorithm on the active view.
      - Like Recipe 1, use `win->setPreviewImage(previewResult)` to display the result, and ensure that closing the dialog or switching windows cleans up by calling `win->restoreOriginalImage()`.
 
+3. **Global Preview Lifecycle Rule**:
+   - To prevent multiple previews from overlapping or sticking around when switching contexts, previews must automatically turn off if a different window is focused.
+   - All `AlgorithmDialog` sub-classes implementing a preview must override the following `AlgorithmDialog` virtual methods:
+     - `bool hasActivePreview() const`: Returns whether a preview is currently active on the image (e.g., `m_previewChk->isChecked()`).
+     - `void clearPreview()`: Cleanly turns off the preview, unchecks the preview checkbox, stops any pending timers, and restores the original image via `win->restoreOriginalImage()`.
+     - `QMdiSubWindow* getTargetWindow() const`: Returns the MDI subwindow currently targeted by the dialog.
+   - `MainWindow` monitors window activations (`subWindowActivated`) and automatically calls `clearPreview()` on any dialog whose target or dialog window is no longer active.
+
+4. **Hoisting Common UI State & Operations to Base Classes**:
+   - Repeated patterns of traversing the Qt widget tree to locate a `WorkspaceArea` or the current active `WorkspaceImageWindow` **must not be duplicated** across dialog subclasses. Instead, these operations should be implemented once in the `AlgorithmDialog` base class.
+   - `AlgorithmDialog` exposes two standardized helpers that all subclasses should use:
+     - `WorkspaceArea* findWorkspaceArea() const` — walks the parent chain to locate the `WorkspaceArea`.
+     - `WorkspaceImageWindow* getActiveImageWindow() const` — returns the currently active image window, automatically filtering out any window that is itself showing a preview (unless this dialog is the one running it). This ensures dialogs never accidentally observe their own preview image as the source image.
+   - When adding new algorithm dialogs, always prefer calling these base class helpers rather than duplicating the traversal logic.
+
+5. **Preview vs. Apply Performance Strategy**:
+   - For dialogs with computationally expensive transformations (e.g., stretching), distinguish between the **live preview** path and the **final apply** path:
+     - **Preview**: Use precomputed LUT (Look-Up Table) approximations (65,536 entries) for the per-pixel loop. LUTs allow a single table-lookup with linear interpolation to replace repeated transcendental function calls (`std::pow`, `std::exp`, `std::log`) or rational expressions, massively accelerating per-frame responsiveness. Build LUTs using `StretchingAlgorithm::buildHistogramLUT()` or `::buildGhsLUT()`. For curves, use the widget's pre-cached LUT from `CurvesWidget::getLut()`.
+     - **Apply**: Run the exact analytical math, without LUT approximations, to preserve full floating-point precision in the final committed result.
+   - Both paths must still use OpenMP (`#pragma omp parallel for`) over raw pixel data pointers for maximum throughput.
+
+
 ### In-Place vs. New Image Algorithms
 
 When developing or modifying algorithms in BLastro, it is critical to handle image lifecycle and UI expectations correctly depending on whether the algorithm mutates existing images or creates new ones:
@@ -166,6 +188,7 @@ To ensure BLastro remains extremely performant and reliable under typical astron
 ### 4. Image Stacking & NaN Handling
 
 - **NaN as Masked/Missing Data**: In BLastro, `NaN` (Not a Number) values represent masked or missing pixel data rather than arithmetic errors. This includes sparse data patterns (like raw bayer channels before debayering), aligned frame edges (due to dithering and rotation shifts), or mosaic overlaps. Stacking algorithms must treat `NaN`s as missing observations, not outliers to reject.
+- **Sparse CFA Pattern Handling (Drizzle)**: When standard debayering is bypassed, raw Bayer pixels form a sparse matrix, with empty channels filled with `NaN`. The alignment/drizzle algorithm maps these single-color pixels directly to the final coordinate grid without debayer interpolation.
 - **Dynamic Normalization**: At each stacked pixel location, stacking algorithms must only calculate statistics (means, medians, and sigmas) using non-NaN pixel values. When normalizing (averaging) at a pixel location, the summed intensity of valid pixels is divided by the dynamic count of non-NaN frames contributing at that specific location, rather than the constant total frame count. E.g., if an average stack has 50 frames, 5 NaN and 45 with value 0.15, the output is `(45 * 0.15) / 45 = 0.15`, not `(45 * 0.15) / 50`.
 - **All-NaN Pixel Propagation**: If every contributing frame has a `NaN` value at a given pixel, the stacked output pixel must be set to `NaN` (to indicate that no data exists at that location), rather than falling back to a arbitrary numeric value like `0.0f`.
 - **NaN Handling in Other Algorithms**: Other algorithms (like Stretching, Background Extraction, Calibration, or Histogram calculation) must safely propagate or ignore `NaN` values. Any sorting of pixel values (e.g., finding medians or quantiles for background fitting or auto-stretching) must filter out `NaN`s beforehand to prevent undefined behavior in `std::sort`.
@@ -177,6 +200,7 @@ To ensure BLastro remains extremely performant and reliable under typical astron
 - **Middle-Elided Titles**: Image window titles and tabs should be elided in the middle (`...`) using `QFontMetrics::elidedText` with `Qt::ElideMiddle` so they do not take up excessive width, while permitting tab expansion when workspace views are collapsed/expanded.
 - **Disabled UI Element Contrast**: Ensure that all custom-styled widgets (especially `QPushButton` in dialogs) have highly distinct disabled states. When overriding styles dynamically (e.g. coloring the cancel button or execution buttons), explicitly define the `:disabled` selector (e.g. background `#222222`, text `#555555`, border `#2a2a2a`) to ensure disabled controls are visually muted and distinct from enabled states in dark mode.
 - **Configurable Options in UI**: All algorithm-configurable parameters (e.g., RANSAC tolerances, threshold values, max star counts, and detection parameters) must be fully exposed in the graphical user interface dialogs and automation wizards (like the Preprocessing Wizard) with sane, robust default values. Avoid hardcoding parameters in background pipelines; always check the configuration map and use the UI-provided parameters.
+- **Automation and Dialog Settings Consistency**: Algorithm-specific dialogs (such as the Alignment dialog) and the automation wizards (such as the Preprocessing Wizard control tab) must expose similar/consistent configuration settings and options. This ensures that users can configure the same details whether running the algorithm manually on a single batch or scheduling it as part of an automated preprocessing pipeline. Furthermore, when underlying algorithms are changed or extended (e.g. adding new parameters or modes), the corresponding manual dialog UIs and wizard UIs must be updated simultaneously to reflect those changes.
 
 ### 6. FITS Metadata & WCS Coordinates Preservation
 - **Generalized ImageMetadata**: All workspace image types (`GrayscaleImage`, `RGBImage`) and batch subframes (`FrameMetadata::baseMetadata`) hold an `ImageMetadata` instance. This struct stores structured astrometry (WCS solved flag, RA/Dec center, pixel scale, rotation), exposure parameters (time, gain, filter), and a key-value map of all original FITS keywords.
@@ -253,7 +277,8 @@ All `AlgorithmDialog` subclasses follow the layout conventions established by th
 ### 11. High-Performance Image Alignment & Interpolation (Affine, Bicubic, Lanczos)
 - **Affine Transformation Solving**: When selected, constellation matching solves for a full 6-element affine transformation matrix mapping the target coordinate system to the reference coordinate system via a Least Squares formulation of RANSAC inliers. This accounts for scale and shear variations.
 - **Matrix Composition & Inversion**: All coordinate transformations in alignment are performed using 2D affine matrix algebra. Sub-pixel relative alignments (e.g., centering average frames or mutual stacking alignments) multiply target transformations by the inverse of the reference transformation.
-- **Advanced Interpolation**: Bilinear warping is supplemented with Bicubic, Lanczos-3, and Lanczos-4 interpolators to preserve details (high-frequency star profiles) during warping. Standard separable precomputations on X and Y coordinate weights are implemented to optimize computation time.
+- **Drizzle Algorithm**: A state-of-the-art Drizzle alignment interpolator mathematically projects input source pixels onto the target pixel grid with scale and drop-shrink parameters, producing an output structure that tracks both intensity (`value`) and pixel coverage (`weight`). This outputs a 6-plane master FITS containing RGB intensities and individual RGB weight maps.
+- **Advanced Interpolation**: Bilinear warping is supplemented with Bicubic, Lanczos-3, Lanczos-4, and Drizzle interpolators to preserve details (high-frequency star profiles) during warping. Standard separable precomputations on X and Y coordinate weights are implemented to optimize computation time.
 
 ## Build Requirements
 

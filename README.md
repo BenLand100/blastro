@@ -8,8 +8,8 @@ Built with performance in mind, BLastro leverages C++17, Qt6, and OpenMP, utiliz
 
 ## Key Features
 
-- **Full Processing Pipeline:** Calibration, Debayering, Background Normalization, Star Finding, Alignment, Registration, and Stacking.
-- **Advanced Adjustments:** Stretching, PixelMath, and filtering.
+- **Full Processing Pipeline:** Calibration, Debayering (including sparse CFA for native color integrity), Background Normalization, Star Finding, Alignment (supporting full mathematically rigorous Drizzle), Registration, and Stacking.
+- **Advanced Adjustments:** Stretching (Histogram Transform, Generalized Hyperbolic Stretch, and interactive Spline Curves), PixelMath, and filtering.
 - **PixInsight Plugin Compatibility:** A first-of-its-kind `PCLBridge` allows you to load and execute select plugins and modules designed for the PixInsight ecosystem directly inside BLastro. Output console messages from loaded modules are formatted with native terminal ANSI color sequence parsing, and logged under the module's own name for a cleaner developer log.
 - **Workspace:** An MDI (Multiple Document Interface) workspace allows you to work with multiple images, cubes, and image batches simultaneously. During in-place background processing by native algorithms or PCL modules, updates to the UI viewport are automatically suspended to ensure thread safety.
 - **Third-Party Repositories Manager:** Configure and query PixInsight-compatible repository feeds (like DeepSNR or SetiAstro) directly. The update manager parses `updates.xri` XML manifests, filters by target platform (Linux/x64), downloads packages securely, and automatically extracts/installs plugins locally.

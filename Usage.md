@@ -44,17 +44,19 @@ All simple image operations apply to the **active single image MDI window**:
 > [!NOTE]
 > **Undo/Redo Depth**: The undo stack keeps up to **10 history states** in memory to avoid running out of RAM. These edits apply only to single images, not to whole batches.
 
----
+## 4. Stretching Controls (Histogram, GHS & Curves)
 
-## 4. Histogram Stretching & GHS Controls
+When using the Stretching Transformation panel, you have three mutually exclusive modes: Histogram Transform (HT), Generalized Hyperbolic Stretch (GHS), and Curves.
 
-When using the histogram panel (manual stretching or Generalized Hyperbolic Stretch - GHS), the widget has several interactive features:
-
-- **Adjusting Parameters**: Left-click and drag any of the vertical slider lines:
-  - **Manual Stretch**: Blackpoint, Midpoint, and Whitepoint.
-  - **GHS Stretch**: Symmetry Point (SP), Shadow Protection, and Highlight Protection.
-- **Scrolling the Histogram**: Right-click and drag anywhere on the histogram to pan/scroll horizontally.
-- **Zooming the Histogram**: Scroll the mouse wheel up or down over the histogram to zoom in or out centered on your mouse cursor.
+- **Histogram & GHS**:
+  - **Adjusting Parameters**: Left-click and drag any of the vertical slider lines (e.g. Midpoint, Symmetry Point).
+  - **Scrolling**: Right-click and drag anywhere on the histogram to pan/scroll horizontally.
+  - **Zooming**: Scroll the mouse wheel up or down over the histogram to zoom in or out centered on your mouse cursor.
+- **Curves**:
+  - **Add/Move Points**: Left-click on the curve or background to add a control point, and drag to adjust its position.
+  - **Remove Points**: Right-click directly on a control point to instantly remove it.
+  - **Smooth Interpolation**: The curves use Monotone Cubic Spline (Fritsch-Carlson) interpolation to prevent unnatural overshoot and inversion.
+  - **Channels**: Selecting "L" edits Luminance with color preservation. "S" targets Saturation (only). "K", "R", "G", "B" edit the individual or linked channel intensities.
 
 ---
 
@@ -81,6 +83,9 @@ The **Preprocessing Wizard** calibrates, normalizes the background, detects star
   - **Open Calibration Stacks**: When checked (default), automatically opens the stacked master calibration frames (bias, dark, flat) in the workspace for inspection after Stage 1 completes.
   - **Open Light Masters**: When checked (default), automatically opens the final stacked light master image(s) after Stage 2 completes.
   - **Keep Intermediate Files**: When checked, generated intermediate files (calibrated flats, calibrated/debayered lights, and aligned lights) are moved from temporary storage into structured subfolders (`flat_calib`, `light_calib`, `light_align`) inside your output directory. Raw bias/darks are stacked directly and temporary frames unregistered to conserve space.
+
+> [!TIP]
+> **OSC CFA Drizzle**: When processing OSC images, you can achieve superior sharpness by bypassing standard debayer interpolation. In the Preprocessing Wizard, set the **Debayer Method** to `sparse` and the **Alignment Interpolation** to `drizzle`. This uses a mathematically rigorous drizzle technique directly on the native Bayer pattern data, and outputs a 6-plane FITS master file containing both the RGB data and weight maps used during stacking rejection.
 
 ---
 
