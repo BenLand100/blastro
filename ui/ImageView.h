@@ -66,7 +66,7 @@ public:
     
     // Display modes and stretching
     DisplayMode displayMode() const { return m_displayMode; }
-    void setDisplayMode(DisplayMode mode);
+    void setDisplayMode(DisplayMode mode, bool cycle = false);
     void setAutoStretchLevel(int level);
     void setLocalHistLevel(int level);
     

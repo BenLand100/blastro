@@ -45,7 +45,7 @@ void HistogramBaseWidget::setActive(bool active) {
 }
 
 void HistogramBaseWidget::setActiveChannel(int channel) {
-    m_activeChannel = channel;
+    m_activeChannel = static_cast<Channel>(channel);
     m_cacheDirty = true;
     update();
 }

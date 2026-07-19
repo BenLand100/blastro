@@ -39,6 +39,10 @@ void GhsWidget::setGhsProtections(const std::array<double, 6>& shadowProtect, co
     update();
 }
 
+bool GhsWidget::isChannelActive(int c) const {
+    return c == m_activeChannel;
+}
+
 GhsWidget::DragTarget GhsWidget::getCloseLine(const QPoint& pos) const {
     if (!m_active) return {DragTarget::None, 0};
 
@@ -47,9 +51,9 @@ GhsWidget::DragTarget GhsWidget::getCloseLine(const QPoint& pos) const {
     DragTarget target = {DragTarget::None, 0};
     double h = height();
 
-    int activeIdx = m_activeChannel;
+    for (int c = 0; c < 6; ++c) {
+        if (!isChannelActive(c)) continue;
 
-    for (int c = activeIdx; c <= activeIdx; ++c) {
         double xSP = valueToX(m_spPoint[c]);
         double xS = valueToX(m_shadowProtect[c]);
         double xH = valueToX(m_highlightProtect[c]);
@@ -128,7 +132,7 @@ void GhsWidget::paintEvent(QPaintEvent* event) {
 
     // Draw background/inactive curves first
     for (int c = 0; c < 6; ++c) {
-        if (c == activeIdx) continue;
+        if (isChannelActive(c)) continue;
         if (isDefault(c)) continue;
 
         QColor lineColor;
@@ -178,9 +182,9 @@ void GhsWidget::paintEvent(QPaintEvent* event) {
         }
     }
 
-    // Now draw active channel (foreground)
-    {
-        int c = activeIdx;
+    // Now draw active channels (foreground)
+    for (int c = 0; c < 6; ++c) {
+        if (!isChannelActive(c)) continue;
         QColor lineColor;
         if (c == 0) lineColor = QColor("#ffffff"); // K
         else if (c == 1) lineColor = QColor("#cc3333"); // R
@@ -317,11 +321,6 @@ void GhsWidget::mouseMoveEvent(QMouseEvent* event) {
         m_spPoint[c] = val;
         if (m_shadowProtect[c] > m_spPoint[c]) m_shadowProtect[c] = m_spPoint[c];
         if (m_highlightProtect[c] < m_spPoint[c]) m_highlightProtect[c] = m_spPoint[c];
-        if (isWidgetChannelsLinked() && c == 0) {
-            m_spPoint.fill(m_spPoint[c]);
-            m_shadowProtect.fill(m_shadowProtect[c]);
-            m_highlightProtect.fill(m_highlightProtect[c]);
-        }
         emit ghsParamsChanged(m_spPoint, m_stretchFactor);
         emit ghsProtectionsChanged(m_shadowProtect, m_highlightProtect);
     } else if (m_dragTarget.type == DragTarget::ShadowProtect) {
@@ -330,11 +329,6 @@ void GhsWidget::mouseMoveEvent(QMouseEvent* event) {
             m_spPoint[c] = m_shadowProtect[c];
             if (m_highlightProtect[c] < m_spPoint[c]) m_highlightProtect[c] = m_spPoint[c];
         }
-        if (isWidgetChannelsLinked() && c == 0) {
-            m_spPoint.fill(m_spPoint[c]);
-            m_shadowProtect.fill(m_shadowProtect[c]);
-            m_highlightProtect.fill(m_highlightProtect[c]);
-        }
         emit ghsProtectionsChanged(m_shadowProtect, m_highlightProtect);
         emit ghsParamsChanged(m_spPoint, m_stretchFactor);
     } else if (m_dragTarget.type == DragTarget::HighlightProtect) {
@@ -342,11 +336,6 @@ void GhsWidget::mouseMoveEvent(QMouseEvent* event) {
         if (m_highlightProtect[c] < m_spPoint[c]) {
             m_spPoint[c] = m_highlightProtect[c];
             if (m_shadowProtect[c] > m_spPoint[c]) m_shadowProtect[c] = m_spPoint[c];
-        }
-        if (isWidgetChannelsLinked() && c == 0) {
-            m_spPoint.fill(m_spPoint[c]);
-            m_shadowProtect.fill(m_shadowProtect[c]);
-            m_highlightProtect.fill(m_highlightProtect[c]);
         }
         emit ghsProtectionsChanged(m_shadowProtect, m_highlightProtect);
         emit ghsParamsChanged(m_spPoint, m_stretchFactor);

@@ -41,6 +41,15 @@ class CurvesWidget;
 class StretchingDialog : public AlgorithmDialog {
     Q_OBJECT
 public:
+    enum class ActiveChannel {
+        K = 0,
+        R = 1,
+        G = 2,
+        B = 3,
+        L = 4,
+        S = 5
+    };
+
     StretchingDialog(WorkspaceRegistry& workspace, QWidget* parent = nullptr);
     ~StretchingDialog() override;
 
@@ -71,6 +80,7 @@ private slots:
     void onResetStretchClicked();
     void updatePreview();
     ImageVariant applyCurrentStretch(const ImageVariant& baseImg, bool isPreview = false);
+    ImageVariant applyPartialStretch(const ImageVariant& baseImg, ActiveChannel activeChannel);
     void refreshHistogramAndCache();
     void onTargetImageChanged(QMdiSubWindow* sub);
     void onTargetImageUpdated();
@@ -120,37 +130,21 @@ private:
     enum class StretchMode { HT, GHS, Curves };
     StretchMode m_mode = StretchMode::HT;
     
-    enum class ActiveChannel {
-        K = 0,
-        R = 1,
-        G = 2,
-        B = 3,
-        L = 4,
-        S = 5
-    };
     ActiveChannel m_activeChannel = ActiveChannel::K;
     bool m_channelsLinked = true;
     
     QPointer<QMdiSubWindow> m_currentTrackedSub;
 
-    // HT Parameters (RGB, L, S)
-    std::array<double, 3> m_blackpoint = {0.0, 0.0, 0.0};
-    std::array<double, 3> m_whitepoint = {1.0, 1.0, 1.0};
-    std::array<double, 3> m_midpoint = {0.5, 0.5, 0.5};
-    double m_lBlackpoint = 0.0;
-    double m_lWhitepoint = 1.0;
-    double m_lMidpoint = 0.5;
-    double m_sBlackpoint = 0.0;
-    double m_sWhitepoint = 1.0;
-    double m_sMidpoint = 0.5;
+    // HT Parameters (RGB, R, G, B, L, S)
+    std::array<double, 6> m_blackpoint = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+    std::array<double, 6> m_whitepoint = {1.0, 1.0, 1.0, 1.0, 1.0, 1.0};
+    std::array<double, 6> m_midpoint = {0.5, 0.5, 0.5, 0.5, 0.5, 0.5};
 
-    // GHS Parameters (RGB, L, S)
-    std::array<double, 3> m_spPoint = {0.5, 0.5, 0.5};
-    std::array<double, 3> m_stretchFactor = {0.0, 0.0, 0.0};
-    std::array<double, 3> m_shadowProtect = {0.0, 0.0, 0.0};
-    std::array<double, 3> m_highlightProtect = {1.0, 1.0, 1.0};
-    double m_lSpPoint = 0.5, m_lStretchFactor = 0.0, m_lShadowProtect = 0.0, m_lHighlightProtect = 1.0;
-    double m_sSpPoint = 0.5, m_sStretchFactor = 0.0, m_sShadowProtect = 0.0, m_sHighlightProtect = 1.0;
+    // GHS Parameters (RGB, R, G, B, L, S)
+    std::array<double, 6> m_spPoint = {0.5, 0.5, 0.5, 0.5, 0.5, 0.5};
+    std::array<double, 6> m_stretchFactor = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+    std::array<double, 6> m_shadowProtect = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+    std::array<double, 6> m_highlightProtect = {1.0, 1.0, 1.0, 1.0, 1.0, 1.0};
 
     // Curves Parameters (K, R, G, B, L, S)
     std::array<std::vector<QPointF>, 6> m_curvePoints;
@@ -158,12 +152,10 @@ private:
     int m_threads = -1;
 
     // Caching
-    std::shared_ptr<ImageBuffer> m_cachedHBuf;
-    std::shared_ptr<ImageBuffer> m_cachedSBuf;
-    std::shared_ptr<ImageBuffer> m_cachedLBuf;
-    void* m_cachedBaseImgPtr = nullptr;
     std::vector<std::vector<int>> m_cachedHistogram;
-    int m_cachedHistogramChannel = -1;
+    std::vector<std::vector<int>> m_stageHistograms[4];
+    int m_cachedHistogramStage = -1;
+    bool m_ignoreImageUpdates = false;
 };
 
 } // namespace blastro

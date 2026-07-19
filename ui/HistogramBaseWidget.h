@@ -18,6 +18,15 @@ namespace blastro {
 class HistogramBaseWidget : public QWidget {
     Q_OBJECT
 public:
+    enum Channel {
+        K = 0, // Grayscale / Linked
+        R = 1, // Red
+        G = 2, // Green
+        B = 3, // Blue
+        L = 4, // Luminance
+        S = 5  // Saturation
+    };
+
     explicit HistogramBaseWidget(QWidget* parent = nullptr);
     ~HistogramBaseWidget() override = default;
 
@@ -35,9 +44,13 @@ public:
     bool drawCurve() const { return m_drawCurve; }
 
     bool isActive() const { return m_active; }
+    int activeChannel() const { return m_activeChannel; }
     bool isWidgetChannelsLinked() const {
-        return m_channelsLinked || m_activeChannel == 0 || m_activeChannel == 4 || m_activeChannel == 5;
+        return m_channelsLinked;
     }
+
+    void setIsImageWindow(bool isImageWindow) { m_isImageWindow = isImageWindow; }
+    bool isImageWindow() const { return m_isImageWindow; }
 
 protected:
     double valueToX(double val) const;
@@ -57,7 +70,7 @@ protected:
     bool m_channelsLinked = true;
     bool m_active = true;
     bool m_drawCurve = true;
-    int m_activeChannel = 0; // 0=K, 1=R, 2=G, 3=B, 4=L, 5=S
+    Channel m_activeChannel = K;
     QColor m_singleChannelColor = QColor("#ffffff");
     QColor m_singleTraceColor = Qt::white;
 
@@ -68,6 +81,7 @@ protected:
 
     QPixmap m_cachedBackground;
     bool m_cacheDirty = true;
+    bool m_isImageWindow = false;
 };
 
 } // namespace blastro

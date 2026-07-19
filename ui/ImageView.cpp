@@ -99,18 +99,23 @@ void ImageView::setImage(const ImageVariant& image, bool preserveStretch, bool p
     }
 }
 
-void ImageView::setDisplayMode(DisplayMode mode) {
+void ImageView::setDisplayMode(DisplayMode mode, bool cycle) {
     if (mode == Autostretch) {
         if (m_displayMode == Autostretch) {
-            m_autoStretchLevel = (m_autoStretchLevel + 1) % 3;
+            if (cycle) {
+                m_autoStretchLevel = (m_autoStretchLevel + 1) % 3;
+            }
         } else {
             m_autoStretchLevel = 0; // Start with the lowest intensity
         }
+        m_displayMode = Autostretch;
         runAutostretch();
     } else if (mode == LocalHist) {
         if (m_displayMode == LocalHist) {
-            m_localHistLevel = (m_localHistLevel + 1) % 3;
-            clearCLAHE(); // Recompute cache for new clipLimitVal
+            if (cycle) {
+                m_localHistLevel = (m_localHistLevel + 1) % 3;
+                clearCLAHE(); // Recompute cache for new clipLimitVal
+            }
         } else {
             m_localHistLevel = 0; // Start with lowest intensity
         }

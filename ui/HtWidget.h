@@ -44,6 +44,7 @@ private:
         int channel = 0;
     };
 
+    bool isChannelActive(int c) const;
     DragTarget getCloseLine(const QPoint& pos) const;
 
     std::array<double, 6> m_blackpoint = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0};

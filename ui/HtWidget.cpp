@@ -32,6 +32,22 @@ void HtWidget::setStretchParams(const std::array<double, 6>& b, const std::array
     update();
 }
 
+bool HtWidget::isChannelActive(int c) const {
+    if (m_isImageWindow) {
+        if (isWidgetChannelsLinked()) {
+            return c == 0;
+        } else {
+            if (m_activeChannel == 0) {
+                return c == 1 || c == 2 || c == 3;
+            } else {
+                return c == m_activeChannel;
+            }
+        }
+    } else {
+        return c == m_activeChannel;
+    }
+}
+
 HtWidget::DragTarget HtWidget::getCloseLine(const QPoint& pos) const {
     if (!m_active) return {DragTarget::None, 0};
 
@@ -40,9 +56,9 @@ HtWidget::DragTarget HtWidget::getCloseLine(const QPoint& pos) const {
     DragTarget target = {DragTarget::None, 0};
     double h = height();
 
-    int activeIdx = m_activeChannel;
+    for (int c = 0; c < 6; ++c) {
+        if (!isChannelActive(c)) continue;
 
-    for (int c = activeIdx; c <= activeIdx; ++c) {
         double xB = valueToX(m_blackpoint[c]);
         double xW = valueToX(m_whitepoint[c]);
         double xM = valueToX(m_blackpoint[c] + m_midpoint[c] * (m_whitepoint[c] - m_blackpoint[c]));
@@ -107,7 +123,7 @@ void HtWidget::paintEvent(QPaintEvent* event) {
 
     // Draw background/inactive curves first
     for (int c = 0; c < 6; ++c) {
-        if (c == activeIdx) continue;
+        if (isChannelActive(c)) continue;
         if (isDefault(m_blackpoint[c], m_whitepoint[c], m_midpoint[c])) continue;
 
         QColor lineColor;
@@ -142,9 +158,10 @@ void HtWidget::paintEvent(QPaintEvent* event) {
         }
     }
 
-    // Now draw active channel (foreground)
-    {
-        int c = activeIdx;
+    // Now draw active channels (foreground)
+    for (int c = 0; c < 6; ++c) {
+        if (!isChannelActive(c)) continue;
+
         QColor lineColor;
         if (c == 0) lineColor = QColor("#ffffff"); // K
         else if (c == 1) lineColor = QColor("#cc3333"); // R
@@ -169,36 +186,27 @@ void HtWidget::paintEvent(QPaintEvent* event) {
 
         // Blackpoint line
         if (xB >= 0 && xB <= w) {
-            painter.setPen(QPen(lineColor, lineWidth));
-            painter.drawLine(xB, 1, xB, h - 1);
-            painter.setBrush(lineColor);
-            painter.drawEllipse(QPointF(xB, h - 4), 3, 3); // bottom
+             painter.setPen(QPen(lineColor, lineWidth));
+             painter.drawLine(xB, 1, xB, h - 1);
+             painter.setBrush(lineColor);
+             painter.drawEllipse(QPointF(xB, h - 4), 3, 3); // bottom
         }
 
         // Whitepoint line
         if (xW >= 0 && xW <= w) {
-            painter.setPen(QPen(lineColor, lineWidth));
-            painter.drawLine(xW, 1, xW, h - 1);
-            painter.setBrush(lineColor);
-            painter.drawEllipse(QPointF(xW, 4), 3, 3); // top
+             painter.setPen(QPen(lineColor, lineWidth));
+             painter.drawLine(xW, 1, xW, h - 1);
+             painter.setBrush(lineColor);
+             painter.drawEllipse(QPointF(xW, 4), 3, 3); // top
         }
 
         // Midpoint line
         if (xM >= 0 && xM <= w) {
-            painter.setPen(QPen(lineColor, lineWidth));
-            painter.drawLine(xM, 1, xM, h - 1);
-            painter.setBrush(lineColor);
-            painter.drawEllipse(QPointF(xM, h / 2.0), 3, 3); // middle
+             painter.setPen(QPen(lineColor, lineWidth));
+             painter.drawLine(xM, 1, xM, h - 1);
+             painter.setBrush(lineColor);
+             painter.drawEllipse(QPointF(xM, h / 2.0), 3, 3); // middle
         }
-
-        // Status text
-        painter.setPen(QColor(255, 255, 255, 140));
-        painter.setFont(QFont("monospace", 7));
-        QString txt = QString("HT   B:%1 M:%2 W:%3")
-                      .arg(m_blackpoint[c], 0, 'f', 4)
-                      .arg(m_blackpoint[c] + m_midpoint[c] * (m_whitepoint[c] - m_blackpoint[c]), 0, 'f', 4)
-                      .arg(m_whitepoint[c], 0, 'f', 4);
-        painter.drawText(8, h - 6, txt);
 
         if (m_drawCurve) {
             QPolygonF curvePolygon;
@@ -220,6 +228,18 @@ void HtWidget::paintEvent(QPaintEvent* event) {
                 painter.drawPolyline(curvePolygon);
             }
         }
+    }
+
+    // Finally draw status text for the base active channel
+    {
+        int c = m_activeChannel;
+        painter.setPen(QColor(255, 255, 255, 140));
+        painter.setFont(QFont("monospace", 7));
+        QString txt = QString("HT   B:%1 M:%2 W:%3")
+                      .arg(m_blackpoint[c], 0, 'f', 4)
+                      .arg(m_blackpoint[c] + m_midpoint[c] * (m_whitepoint[c] - m_blackpoint[c]), 0, 'f', 4)
+                      .arg(m_whitepoint[c], 0, 'f', 4);
+        painter.drawText(8, h - 6, txt);
     }
 }
 
@@ -283,27 +303,12 @@ void HtWidget::mouseMoveEvent(QMouseEvent* event) {
 
     if (m_dragTarget.type == DragTarget::Black) {
         m_blackpoint[c] = std::min(val, m_whitepoint[c] - 0.001);
-        if (isWidgetChannelsLinked() && c == 0) {
-            m_blackpoint[1] = m_blackpoint[0];
-            m_blackpoint[2] = m_blackpoint[0];
-            m_blackpoint[3] = m_blackpoint[0];
-        }
     } else if (m_dragTarget.type == DragTarget::White) {
         m_whitepoint[c] = std::max(val, m_blackpoint[c] + 0.001);
-        if (isWidgetChannelsLinked() && c == 0) {
-            m_whitepoint[1] = m_whitepoint[0];
-            m_whitepoint[2] = m_whitepoint[0];
-            m_whitepoint[3] = m_whitepoint[0];
-        }
     } else if (m_dragTarget.type == DragTarget::Mid) {
         if (m_whitepoint[c] > m_blackpoint[c]) {
             double relativeVal = (val - m_blackpoint[c]) / (m_whitepoint[c] - m_blackpoint[c]);
             m_midpoint[c] = std::max(0.001, std::min(0.999, relativeVal));
-            if (isWidgetChannelsLinked() && c == 0) {
-                m_midpoint[1] = m_midpoint[0];
-                m_midpoint[2] = m_midpoint[0];
-                m_midpoint[3] = m_midpoint[0];
-            }
         }
     }
 
@@ -317,8 +322,7 @@ void HtWidget::snapToBlackToMid() {
     double bp = m_blackpoint[activeIdx];
     double wp = m_whitepoint[activeIdx];
     double rel_mp = m_midpoint[activeIdx];
-    double abs_mp = bp + rel_mp * (wp - bp);
-    HistogramBaseWidget::snapToBlackToMid(bp, abs_mp, wp);
+    HistogramBaseWidget::snapToBlackToMid(bp, rel_mp, wp);
 }
 
 } // namespace blastro

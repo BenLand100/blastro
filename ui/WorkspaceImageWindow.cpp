@@ -49,6 +49,7 @@ WorkspaceImageWindow::WorkspaceImageWindow(const QString& name, const WorkspaceE
       m_histogramWidget(new HtWidget(this)) {
 
     // 1. Create viewport based on element type
+    m_histogramWidget->setIsImageWindow(true);
     if (std::holds_alternative<GrayscaleImagePtr>(element) || std::holds_alternative<RGBImagePtr>(element)) {
         ImageView* iv = new ImageView(this);
         if (std::holds_alternative<GrayscaleImagePtr>(element)) {
@@ -205,8 +206,12 @@ WorkspaceImageWindow::WorkspaceImageWindow(const QString& name, const WorkspaceE
     } else if (std::holds_alternative<ImageBatchPtr>(element)) {
         auto batch = std::get<ImageBatchPtr>(element);
         if (batch && batch->count() > 0) {
-            if (std::holds_alternative<RGBImagePtr>(batch->getImage(0))) {
-                isRGBElement = true;
+            try {
+                if (std::holds_alternative<RGBImagePtr>(batch->getImage(0))) {
+                    isRGBElement = true;
+                }
+            } catch (const std::exception& e) {
+                qWarning() << "[WorkspaceImageWindow] Warning: Failed to query first batch frame format:" << e.what();
             }
         }
     }
@@ -280,6 +285,7 @@ WorkspaceImageWindow::WorkspaceImageWindow(const QString& name, const WorkspaceE
         } else if (id == 3) {
             m_imageView->setChannelMode(ImageView::BLUE_ONLY);
         }
+        updateHistogram();
     });
 
     mainLayout->addWidget(m_headerBar);
@@ -327,7 +333,7 @@ void WorkspaceImageWindow::onModeButtonClicked(int id) {
         m_localHistBtn->setText("Hist");
         updateHistogram(); // Refresh histogram display
     } else if (id == 2) { // Auto
-        m_imageView->setDisplayMode(ImageView::Autostretch);
+        m_imageView->setDisplayMode(ImageView::Autostretch, true);
         m_histogramWidget->setActive(true);
         m_localHistBtn->setText("Hist");
         int lvl = m_imageView->autoStretchLevel();
@@ -341,7 +347,7 @@ void WorkspaceImageWindow::onModeButtonClicked(int id) {
         updateHistogram();
         m_histogramWidget->snapToBlackToMid();
     } else if (id == 3) { // Hist (Local Hist)
-        m_imageView->setDisplayMode(ImageView::LocalHist);
+        m_imageView->setDisplayMode(ImageView::LocalHist, true);
         m_histogramWidget->setActive(false);
         m_autoBtn->setText("Auto");
         int lvl = m_imageView->localHistLevel();
@@ -382,6 +388,27 @@ void WorkspaceImageWindow::onStretchParamsChangedInWidget(const std::array<doubl
 }
 
 void WorkspaceImageWindow::onStretchParamsChangedInView(const std::array<double, 3>& b, const std::array<double, 3>& w, const std::array<double, 3>& m) {
+    // Synchronize channels linked state and active channel
+    bool linked = m_imageView->channelsLinked();
+    m_histogramWidget->setChannelsLinked(linked);
+    if (linked) {
+        m_histogramWidget->setActiveChannel(HistogramBaseWidget::K);
+    } else {
+        int chanMode = m_channelGroup->checkedId();
+        if (chanMode == 1) {
+            m_histogramWidget->setActiveChannel(HistogramBaseWidget::R);
+        } else if (chanMode == 2) {
+            m_histogramWidget->setActiveChannel(HistogramBaseWidget::G);
+        } else if (chanMode == 3) {
+            m_histogramWidget->setActiveChannel(HistogramBaseWidget::B);
+        } else {
+            int currentActive = m_histogramWidget->activeChannel();
+            if (currentActive < HistogramBaseWidget::R || currentActive > HistogramBaseWidget::B) {
+                m_histogramWidget->setActiveChannel(HistogramBaseWidget::R);
+            }
+        }
+    }
+
     auto make6 = [this](const std::array<double, 3>& val, double defVal) {
         std::array<double, 6> arr;
         if (m_imageView->channelsLinked()) {
@@ -412,6 +439,7 @@ void WorkspaceImageWindow::onStretchParamsChangedInView(const std::array<double,
         } else {
             m_autoBtn->setText("Auto H");
         }
+        m_histogramWidget->snapToBlackToMid(); // Ensure zoom matches new autostretch level params
     } else if (m_imageView->displayMode() == ImageView::Stretch) {
         m_stretchBtn->setChecked(true);
         m_histogramWidget->setActive(true);
@@ -446,27 +474,43 @@ void WorkspaceImageWindow::updateHistogram() {
     if (m_imageView && m_imageView->isUpdatesSuspended()) {
         return;
     }
+
+    // Sync channels linked state and active channel
+    bool linked = m_imageView->channelsLinked();
+    m_histogramWidget->setChannelsLinked(linked);
+    if (linked) {
+        m_histogramWidget->setActiveChannel(HistogramBaseWidget::K);
+    } else {
+        int chanMode = m_channelGroup->checkedId();
+        if (chanMode == 1) {
+            m_histogramWidget->setActiveChannel(HistogramBaseWidget::R);
+        } else if (chanMode == 2) {
+            m_histogramWidget->setActiveChannel(HistogramBaseWidget::G);
+        } else if (chanMode == 3) {
+            m_histogramWidget->setActiveChannel(HistogramBaseWidget::B);
+        } else {
+            m_histogramWidget->setActiveChannel(HistogramBaseWidget::K);
+        }
+    }
+
     // Query histogram with 16-bit (65536 bins) resolution for high-detail zooming
     m_histogramWidget->setHistograms(m_imageView->getHistogram(65536));
-    if (m_histogramWidget->isActive()) {
-        m_histogramWidget->setChannelsLinked(m_imageView->channelsLinked());
-        
-        auto make6 = [this](const std::array<double, 3>& val, double defVal) {
-            std::array<double, 6> arr;
-            if (m_imageView->channelsLinked()) {
-                arr = { val[0], defVal, defVal, defVal, defVal, defVal };
-            } else {
-                arr = { defVal, val[0], val[1], val[2], defVal, defVal };
-            }
-            return arr;
-        };
+    
+    auto make6 = [this](const std::array<double, 3>& val, double defVal) {
+        std::array<double, 6> arr;
+        if (m_imageView->channelsLinked()) {
+            arr = { val[0], defVal, defVal, defVal, defVal, defVal };
+        } else {
+            arr = { defVal, val[0], val[1], val[2], defVal, defVal };
+        }
+        return arr;
+    };
 
-        m_histogramWidget->setStretchParams(
-            make6(m_imageView->blackpoints(), 0.0),
-            make6(m_imageView->whitepoints(), 1.0),
-            make6(m_imageView->midpoints(), 0.5)
-        );
-    }
+    m_histogramWidget->setStretchParams(
+        make6(m_imageView->blackpoints(), 0.0),
+        make6(m_imageView->whitepoints(), 1.0),
+        make6(m_imageView->midpoints(), 0.5)
+    );
 }
 
 void WorkspaceImageWindow::onExpandHistClicked() {
@@ -755,6 +799,8 @@ void WorkspaceImageWindow::restoreWindowState(const QJsonObject& obj) {
     // Restore view state
     if (m_imageView && obj.contains("view")) {
         m_imageView->restoreViewState(obj["view"].toObject());
+        m_linkedBtn->setChecked(m_imageView->channelsLinked());
+        onStretchParamsChangedInView(m_imageView->blackpoints(), m_imageView->whitepoints(), m_imageView->midpoints());
     }
 }
 
