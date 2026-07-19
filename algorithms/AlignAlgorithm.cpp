@@ -76,10 +76,19 @@ void AlignAlgorithm::execute(WorkspaceRegistry& workspace,
     bool evictCache = config.at("evict_cache") == "true";
     std::string interpolation = config.count("interpolation_method") ? config.at("interpolation_method") : "bilinear";
 
-    Logger::header("Align", QString("Starting execution. Input batch: %1, output batch: %2, drizzle scale: %3, threads: %4, interpolation: %5")
-                   .arg(QString::fromStdString(inputName))
-                   .arg(QString::fromStdString(outputName))
-                   .arg(drizzleScale).arg(threads).arg(QString::fromStdString(interpolation)));
+    if (interpolation == "drizzle") {
+        double dropShrink = config.count("drop_shrink") ? std::stod(config.at("drop_shrink")) : 1.0;
+        Logger::header("Align", QString("Starting execution. Input batch: %1, output batch: %2, drizzle scale: %3, drop size: %4, threads: %5")
+                       .arg(QString::fromStdString(inputName))
+                       .arg(QString::fromStdString(outputName))
+                       .arg(drizzleScale).arg(dropShrink).arg(threads));
+    } else {
+        Logger::header("Align", QString("Starting execution. Input batch: %1, output batch: %2, interpolation: %3, upscale: %4x, threads: %5")
+                       .arg(QString::fromStdString(inputName))
+                       .arg(QString::fromStdString(outputName))
+                       .arg(QString::fromStdString(interpolation))
+                       .arg(drizzleScale).arg(threads));
+    }
 
     QElapsedTimer totalTimer;
     totalTimer.start();

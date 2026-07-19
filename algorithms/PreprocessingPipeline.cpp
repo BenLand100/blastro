@@ -1247,13 +1247,9 @@ std::vector<std::string> PreprocessingPipeline::getPlannedSteps(const std::map<s
             }
         }
 
-        // 3. Align
+        // 3. Align and Stack per filter
         for (const auto& filter : filters) {
             steps.push_back("Align " + filter + " Frames");
-        }
-        
-        // 4. Stack
-        for (const auto& filter : filters) {
             steps.push_back("Stack " + filter + " Frames");
         }
     }

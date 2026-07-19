@@ -95,15 +95,15 @@ AlignDialog::AlignDialog(WorkspaceRegistry& workspace, QWidget* parent)
     m_interpolationCombo->setCurrentIndex(2); // Default to Lanczos-3
     formLayout->addRow("Interpolation Method:", m_interpolationCombo);
 
-    // 5. Drizzle Scale ComboBox
+    // 5. Scale Factor ComboBox
     m_drizzleCombo = new QComboBox(this);
     m_drizzleCombo->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-    m_drizzleCombo->addItem("1.0x Drizzle", 1.0);
-    m_drizzleCombo->addItem("1.5x Drizzle", 1.5);
-    m_drizzleCombo->addItem("2.0x Drizzle", 2.0);
-    m_drizzleCombo->addItem("3.0x Drizzle", 3.0);
+    m_drizzleCombo->addItem("1.0x", 1.0);
+    m_drizzleCombo->addItem("1.5x", 1.5);
+    m_drizzleCombo->addItem("2.0x", 2.0);
+    m_drizzleCombo->addItem("3.0x", 3.0);
     m_drizzleCombo->setCurrentIndex(2); // Default to 2.0x
-    formLayout->addRow("Drizzle Scale:", m_drizzleCombo);
+    formLayout->addRow("Scale Factor (Upscale):", m_drizzleCombo);
 
     // 6. Drizzle Drop Size SpinBox
     m_drizzleDropSizeSpin = new QDoubleSpinBox(this);
@@ -214,7 +214,7 @@ std::map<std::string, std::string> AlignDialog::getConfig() const {
         config["drop_shrink"] = std::to_string(m_drizzleDropSizeSpin->value());
     } else {
         config["interpolation_method"] = m_interpolationCombo->currentData().toString().toStdString();
-        config["drizzle_scale"] = "1.0";
+        config["drizzle_scale"] = std::to_string(m_drizzleCombo->currentData().toDouble());
         config["drop_shrink"] = "1.0";
     }
     return config;
@@ -304,7 +304,7 @@ void AlignDialog::onMethodChanged(int index) {
         m_drizzleDropSizeSpin->setEnabled(true);
     } else {
         m_interpolationCombo->setEnabled(true);
-        m_drizzleCombo->setEnabled(false);
+        m_drizzleCombo->setEnabled(true);
         m_drizzleDropSizeSpin->setEnabled(false);
     }
 }

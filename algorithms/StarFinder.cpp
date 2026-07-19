@@ -389,6 +389,7 @@ std::vector<Star> StarFinder::findStars(GrayscaleImagePtr img,
 
             // SNR Check
             double localNoise = globalNoiseSigma;
+            double localBkg = patchMin;
             if (isAdaptive) {
                 double gx = (static_cast<double>(x_max) / blockSize) - 0.5;
                 double gy = (static_cast<double>(y_max) / blockSize) - 0.5;
@@ -412,8 +413,23 @@ std::vector<Star> StarFinder::findStars(GrayscaleImagePtr img,
                              tx * (1.0 - ty) * v10 +
                              (1.0 - tx) * ty * v01 +
                              tx * ty * v11;
+                
+                double m00 = blockMedians[by0 * blocksX + bx0];
+                double m10 = blockMedians[by0 * blocksX + bx1];
+                double m01 = blockMedians[by1 * blocksX + bx0];
+                double m11 = blockMedians[by1 * blocksX + bx1];
+                
+                localBkg = (1.0 - tx) * (1.0 - ty) * m00 +
+                           tx * (1.0 - ty) * m10 +
+                           (1.0 - tx) * ty * m01 +
+                           tx * ty * m11;
+            } else {
+                std::vector<double> tmp = patchValues;
+                std::sort(tmp.begin(), tmp.end());
+                localBkg = tmp[tmp.size() / 2];
             }
-            double amplitude = patchMax - patchMin;
+            
+            double amplitude = patchMax - localBkg;
             if (amplitude <= 0.0 || (amplitude / localNoise) < snrMin) {
                 continue;
             }
@@ -432,7 +448,7 @@ std::vector<Star> StarFinder::findStars(GrayscaleImagePtr img,
 
             if (!runNelderMeadNow) {
                 // Centroiding (Fast) Mode
-                bkg_lvl = patchMin;
+                bkg_lvl = localBkg;
                 double sumWeights = 0.0;
                 double sumX = 0.0;
                 double sumY = 0.0;
@@ -472,11 +488,11 @@ std::vector<Star> StarFinder::findStars(GrayscaleImagePtr img,
                 std::vector<double> x0 = {
                     0.0,                              // mean_x
                     0.0,                              // mean_y
-                    2.0,                              // sig_x
-                    2.0,                              // sig_y
+                    1.5,                              // sig_x
+                    1.5,                              // sig_y
                     0.0,                              // theta
-                    patchMax - patchMin,              // A (amplitude)
-                    patchMin                          // B (background)
+                    std::max(1e-5, patchMax - localBkg), // A (amplitude)
+                    localBkg                          // B (background)
                 };
 
                 auto residualFn = [&](const std::vector<double>& p) -> double {
@@ -587,6 +603,7 @@ std::vector<Star> StarFinder::findStars(GrayscaleImagePtr img,
         });
 
         int numRefine = std::min(static_cast<int>(detectedStars.size()), maxRefinedStars);
+        detectedStars.resize(numRefine);
 
         #pragma omp parallel
         {
@@ -618,13 +635,18 @@ std::vector<Star> StarFinder::findStars(GrayscaleImagePtr img,
                     }
                 }
 
+                std::vector<double> tmp = patchValues;
+                std::sort(tmp.begin(), tmp.end());
+                double localBkg = tmp[tmp.size() / 2];
+
+                double sig_init = std::max(0.5, star.fwhm / 2.35482);
                 x0[0] = 0.0;                              // mean_x relative to patch center
                 x0[1] = 0.0;                              // mean_y relative to patch center
-                x0[2] = 2.0;                              // sig_x
-                x0[3] = 2.0;                              // sig_y
+                x0[2] = sig_init;                         // sig_x
+                x0[3] = sig_init;                         // sig_y
                 x0[4] = 0.0;                              // theta
-                x0[5] = patchMax - patchMin;              // A (amplitude)
-                x0[6] = patchMin;                         // B (background)
+                x0[5] = std::max(1e-5, patchMax - localBkg); // A (amplitude)
+                x0[6] = localBkg;                         // B (background)
 
                 auto residualFn = [&](const std::vector<double>& p) -> double {
                     double mean_x = p[0];

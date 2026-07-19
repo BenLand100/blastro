@@ -470,7 +470,7 @@ PreprocessingWizardDialog::PreprocessingWizardDialog(WorkspaceRegistry& workspac
         m_drizzleScaleSpin->setSingleStep(0.5);
         m_drizzleScaleSpin->setDecimals(1);
         m_drizzleScaleSpin->setSuffix("×");
-        form->addRow("Drizzle Scale:", m_drizzleScaleSpin);
+        form->addRow("Scale Factor (Upscale):", m_drizzleScaleSpin);
 
         m_drizzleDropSizeSpin->setRange(0.1, 1.0);
         m_drizzleDropSizeSpin->setValue(1.0);
@@ -1662,7 +1662,7 @@ void PreprocessingWizardDialog::onResumeStacking() {
         config["drop_shrink"] = QString::number(m_drizzleDropSizeSpin->value()).toStdString();
     } else {
         config["interpolation_method"] = m_interpolationMethodCombo->currentData().toString().toStdString();
-        config["drizzle_scale"] = "1.0";
+        config["drizzle_scale"] = QString::number(m_drizzleScaleSpin->value()).toStdString();
         config["drop_shrink"] = "1.0";
     }
     config["align_ref_mode"] = m_alignRefModeCombo->currentData().toString().toStdString();
@@ -2085,7 +2085,7 @@ void PreprocessingWizardDialog::updateStepsPlan(const std::string& dummyStage) {
         config["drop_shrink"] = QString::number(m_drizzleDropSizeSpin->value()).toStdString();
     } else {
         config["interpolation_method"] = m_interpolationMethodCombo->currentData().toString().toStdString();
-        config["drizzle_scale"] = "1.0";
+        config["drizzle_scale"] = QString::number(m_drizzleScaleSpin->value()).toStdString();
         config["drop_shrink"] = "1.0";
     }
     config["align_ref_mode"] = m_alignRefModeCombo->currentData().toString().toStdString();
@@ -2456,7 +2456,7 @@ void PreprocessingWizardDialog::onAlignMethodChanged(int index) {
         m_drizzleDropSizeSpin->setEnabled(true);
     } else {
         m_interpolationMethodCombo->setEnabled(true);
-        m_drizzleScaleSpin->setEnabled(false);
+        m_drizzleScaleSpin->setEnabled(true);
         m_drizzleDropSizeSpin->setEnabled(false);
     }
 }

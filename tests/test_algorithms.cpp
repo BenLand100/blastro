@@ -1848,14 +1848,14 @@ void testPixelMathNamingAndExecution() {
     assert(approxEqual(pmOut->buffer()->pixel(0, 0), 0.6, 1e-4));
     assert(approxEqual(pmOut->buffer()->pixel(1, 1), 0.6, 1e-4));
 
-    // Test alternative suffix (R, G, B, _red, _green, _blue)
-    // Expression: `123image`R + `123image`_green
+    // Test alternative suffix (_R, _G, _B, _red, _green, _blue)
+    // Expression: `123image`_R + `123image`_green
     // Sanitized expression compiled internally:
-    // img_123imageR + img_123image_green
+    // img_123image_R + img_123image_green
     // Expected result: 0.1 + 0.2 = 0.3
     std::map<std::string, std::string> pmConfigRGB = {
         {"color_space", "Grayscale"},
-        {"expr_k", "`123image`R + `123image`_green"},
+        {"expr_k", "`123image`_R + `123image`_green"},
         {"output_name", "pm_output_rgb"},
         {"threads", "1"}
     };
@@ -1910,6 +1910,132 @@ void testPixelMathRGBMode() {
     std::cout << "[+] PixelMath RGB Mode Test PASSED." << std::endl << std::endl;
 }
 
+void testPixelMathDimensionMismatch() {
+    std::cout << "Running PixelMath Dimension Mismatch Test..." << std::endl;
+    WorkspaceRegistry workspace;
+
+    // Create 2x2 Image
+    auto img1 = std::make_shared<GrayscaleImage>(2, 2);
+    for (int i = 0; i < 4; ++i) img1->buffer()->data()[i] = 1.0f;
+    workspace.registerElement("Image2x2", img1);
+
+    // Create 3x3 Image
+    auto img2 = std::make_shared<GrayscaleImage>(3, 3);
+    for (int i = 0; i < 9; ++img2->buffer()->data()[i++] = 2.0f);
+    workspace.registerElement("Image3x3", img2);
+
+    PixelMathAlgorithm pmAlg;
+    std::map<std::string, std::string> pmConfig = {
+        {"color_space", "Grayscale"},
+        {"expr_k", "Image2x2 + Image3x3"},
+        {"output_name", "pm_mismatch_out"},
+        {"threads", "1"}
+    };
+
+    bool exceptionThrown = false;
+    try {
+        pmAlg.execute(workspace, pmConfig);
+    } catch (const std::runtime_error& e) {
+        exceptionThrown = true;
+        std::cout << "[+] Dimension mismatch exception caught: " << e.what() << std::endl;
+    }
+    assert(exceptionThrown);
+    std::cout << "[+] PixelMath Dimension Mismatch Test PASSED." << std::endl << std::endl;
+}
+
+void testPixelMathPrecedence() {
+    std::cout << "Running PixelMath Image Name Precedence Test..." << std::endl;
+    WorkspaceRegistry workspace;
+
+    // Create a 2x2 image named "h" filled with 3.0f
+    auto imgH = std::make_shared<GrayscaleImage>(2, 2);
+    for (int i = 0; i < 4; ++i) imgH->buffer()->data()[i] = 3.0f;
+    workspace.registerElement("h", imgH);
+
+    PixelMathAlgorithm pmAlg;
+    std::map<std::string, std::string> pmConfig = {
+        {"color_space", "Grayscale"},
+        {"expr_k", "h * 2.0"},
+        {"output_name", "pm_precedence_out"},
+        {"threads", "1"}
+    };
+
+    pmAlg.execute(workspace, pmConfig);
+
+    auto outVar = workspace.getElement("pm_precedence_out");
+    assert(std::holds_alternative<GrayscaleImagePtr>(outVar));
+    auto outImg = std::get<GrayscaleImagePtr>(outVar);
+    assert(outImg->width() == 2 && outImg->height() == 2);
+    
+    // If "h" was resolved as the height variable (2), result would be 2 * 2 = 4
+    // Since "h" is the image (3.0f), result must be 3.0 * 2 = 6.0
+    for (int i = 0; i < 4; ++i) {
+        assert(approxEqual(outImg->buffer()->data()[i], 6.0f, 1e-4f));
+    }
+
+    std::cout << "[+] PixelMath Image Name Precedence Test PASSED." << std::endl << std::endl;
+}
+
+void testDrizzleReadWrite() {
+    std::cout << "Running Drizzle Read/Write Test..." << std::endl;
+    std::string tempDir = TempDirectory::createTempDir("drizzle_test");
+    std::string fitsGray = tempDir + "/drizzle_gray.fits";
+    std::string fitsRgb = tempDir + "/drizzle_rgb.fits";
+
+    // 1. Grayscale Drizzle Test
+    auto dataG = std::make_shared<GrayscaleImage>(10, 10);
+    auto weightG = std::make_shared<GrayscaleImage>(10, 10);
+    for (int i = 0; i < 100; ++i) {
+        dataG->buffer()->data()[i] = 0.5f + 0.001f * i;
+        weightG->buffer()->data()[i] = 1.0f;
+    }
+
+    FitsIO fits;
+    bool writeGSuccess = fits.writeDrizzleImage(fitsGray, dataG, weightG);
+    assert(writeGSuccess && "Failed to write grayscale drizzle image");
+
+    ImageVariant readG = fits.readImage(fitsGray);
+    assert(std::holds_alternative<GrayscaleImagePtr>(readG) && "Expected GrayscaleImage from grayscale drizzle FITS");
+    auto readGPtr = std::get<GrayscaleImagePtr>(readG);
+    assert(readGPtr->width() == 10 && readGPtr->height() == 10);
+    for (int i = 0; i < 100; ++i) {
+        assert(approxEqual(readGPtr->buffer()->data()[i], 0.5f + 0.001f * i, 1e-4));
+    }
+
+    // 2. RGB Drizzle Test
+    auto rData = std::make_shared<GrayscaleImage>(10, 10);
+    auto rWeight = std::make_shared<GrayscaleImage>(10, 10);
+    auto gData = std::make_shared<GrayscaleImage>(10, 10);
+    auto gWeight = std::make_shared<GrayscaleImage>(10, 10);
+    auto bData = std::make_shared<GrayscaleImage>(10, 10);
+    auto bWeight = std::make_shared<GrayscaleImage>(10, 10);
+
+    for (int i = 0; i < 100; ++i) {
+        rData->buffer()->data()[i] = 0.1f + 0.001f * i;
+        gData->buffer()->data()[i] = 0.2f + 0.001f * i;
+        bData->buffer()->data()[i] = 0.3f + 0.001f * i;
+        rWeight->buffer()->data()[i] = 1.0f;
+        gWeight->buffer()->data()[i] = 1.0f;
+        bWeight->buffer()->data()[i] = 1.0f;
+    }
+
+    bool writeRGBSuccess = fits.writeDrizzleRGBImage(fitsRgb, rData, rWeight, gData, gWeight, bData, bWeight);
+    assert(writeRGBSuccess && "Failed to write RGB drizzle image");
+
+    ImageVariant readRGB = fits.readImage(fitsRgb);
+    assert(std::holds_alternative<RGBImagePtr>(readRGB) && "Expected RGBImage from RGB drizzle FITS");
+    auto readRGBPtr = std::get<RGBImagePtr>(readRGB);
+    assert(readRGBPtr->width() == 10 && readRGBPtr->height() == 10);
+    for (int i = 0; i < 100; ++i) {
+        assert(approxEqual(readRGBPtr->r()->buffer()->data()[i], 0.1f + 0.001f * i, 1e-4));
+        assert(approxEqual(readRGBPtr->g()->buffer()->data()[i], 0.2f + 0.001f * i, 1e-4));
+        assert(approxEqual(readRGBPtr->b()->buffer()->data()[i], 0.3f + 0.001f * i, 1e-4));
+    }
+
+    std::cout << "[+] Drizzle Read/Write Test PASSED." << std::endl << std::endl;
+    QDir(QString::fromStdString(tempDir)).removeRecursively();
+}
+
 int main() {
     std::cout << "========================================" << std::endl;
     std::cout << "Starting Blastro Algorithm Unit Tests..." << std::endl;
@@ -1929,6 +2055,9 @@ int main() {
     testPlatesolvingAndMetadataPreservation();
     testPixelMathNamingAndExecution();
     testPixelMathRGBMode();
+    testPixelMathDimensionMismatch();
+    testPixelMathPrecedence();
+    testDrizzleReadWrite();
 
     std::cout << "========================================" << std::endl;
     std::cout << "All Blastro Algorithm Unit Tests PASSED!" << std::endl;
