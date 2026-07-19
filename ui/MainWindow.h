@@ -132,7 +132,7 @@ public:
     bool executePCLProcessOnActiveImage(const QString& processId, void* hProcess);
     void testProcessOnImage(const QString& pluginPath, const QString& imagePath);
     void testRegisterOnCube(const QString& cubePath, int refFrameIdx = 0, const QString& detectionMethod = "centroid");
-    bool loadImageDirectly(const QString& filepath, const QString& refName);
+    Q_INVOKABLE bool loadImageDirectly(const QString& filepath, const QString& refName);
 
 protected:
     void closeEvent(QCloseEvent* event) override;
@@ -202,6 +202,8 @@ private:
 
     /// Returns the default session file path (in app config dir).
     static QString defaultSessionPath();
+
+    void saveWorkspaceSingleImages(const QString& projectDir);
 
     WorkspaceRegistry m_workspace;
     WorkspaceArea* m_workspaceArea;

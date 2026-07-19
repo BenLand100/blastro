@@ -18,6 +18,7 @@ BLastro is built using modern C++17, Qt6, and OpenMP, prioritizing performance a
 The core concept in BLastro is the `WorkspaceRegistry`. All loaded images and image batches exist within this registry. 
 - Elements are defined as a `std::variant<GrayscaleImagePtr, RGBImagePtr, ImageBatchPtr>`.
 - Algorithms execute against elements in the workspace, modifying them in place or creating new elements.
+- **Reactive Workspace Event Callbacks**: The registry supports thread-safe registration of callbacks (`setElementRegisteredCallback`, `setElementUnregisteredCallback`, `setElementRenamedCallback`). These allow external components (like the GUI `MainWindow` main event loop) to listen reactively to all additions, removals, and renames in the workspace registry. Callbacks must be invoked *outside* the registry's internal mutex locks to prevent recursive locking deadlocks, and GUI-bound actions must be marshaled back to the main thread via queued connections (e.g. `QMetaObject::invokeMethod`).
 
 ### Interacting with the ImageBuffer
 
@@ -76,6 +77,7 @@ When adding algorithms that support interactive previewing, choose one of these 
      - In `onParameterChanged()`, check if the preview checkbox is checked. If it is, start a short single-shot debounce timer (`QTimer* m_previewTimer`) to trigger the preview calculation after e.g., 150ms of inactivity.
      - Build composed RGB/L and Saturation LUTs (65536 entries, sequential composition of steps) and pass them to the target window via `win->imageView()->setLivePreview(liveLut, liveSatLut)`. This is display-only and does not mutate or swap the workspace's image buffer.
      - Clear the live preview via `win->restoreOriginalImage()` when unchecked or dialog is closed.
+       - **Beware Signal Loops**: Clearing a preview (e.g., via `win->restoreOriginalImage()`) typically emits an `imageUpdated()` signal to synchronize the broader UI (like histogram panels). If your dialog listens to `imageUpdated()` to refresh its own internal caches (e.g., via `onTargetImageUpdated`), this can cause a severe signal loop where clearing the preview forces the dialog to aggressively wipe and rebuild its caches on every UI interaction. Protect against this by setting an `m_ignoreImageUpdates = true` flag during the clear, or by checking `win->hasPreviewActive()` to avoid redundant calls.
      - On "Apply", compute the exact analytical stretch on the original image, save undo state, commit the result by updating the window element via `win->setElement()`, and reset the preview checkbox.
 
 2. **Recipe 2: Manual Update Previews (Computationally Intense Algorithms)**
@@ -297,12 +299,23 @@ BLastro provides full project saving/loading and session persistence:
 - **Custom Dialog Serialization**: Persistent dialogs participate in serialization by overriding `serializeState()` and `restoreState()`. Custom widgets must serialize all user-configurable parameters (such as checkboxes, slider values, and paths) into a `QJsonObject` and restore them precisely during project/session loads.
 - **Wizard State Serialization**: Automation UIs (like the Preprocessing Wizard) serialize their settings separately via explicit functions (e.g., `serializeControlState()` / `restoreControlState()`) to preserve the state of the scheduled options across launches.
 - **Referenced File Management**: When saving projects, `ProjectSerializer` identifies all external paths in the active `WorkspaceRegistry` and provides helpers (`copyReferencesIntoProject()`) to copy external source FITS files directly into the project directory for portability.
+- **Robustness on Missing Batch Files**: When a project is loaded, some intermediate or temporary frame files in a batch might be missing (e.g. they were deleted or the project was moved). In [MainWindow::loadBatchPaths()](file:///home/benland100/Desktop/blastro/ui/MainWindow.cpp#L2306), detect which files are missing, show a warning popup dialog listing the missing files, and proceed to load the batch with only the existing/found files. If all files in a batch are missing, skip loading the batch entirely.
+- **Exception Protection in Viewer**: In [WorkspaceImageWindow](file:///home/benland100/Desktop/blastro/ui/WorkspaceImageWindow.cpp#L208), wrap any checks fetching batch frames (such as checking `std::holds_alternative<RGBImagePtr>(batch->getImage(0))`) in a `try-catch` block to prevent exceptions from propagating to the Qt event loop and causing a crash.
 
 ### 14. Astrometry & Star Matching
 
 For alignment and coordinates solves, BLastro incorporates astrometric modules:
 - **`PlatesolveAlgorithm`**: Integrates with external command-line platesolvers (ASTAP or solve-field) configured in `Preferences`. It outputs a temporary FITS file of the active view, runs the solver process asynchronously via `QProcess` with appropriate RA/Dec hints and field-of-view parameters, and parses the resulting `.wcs` file via `CCfits` to read the solved WCS coordinates (CRVAL, CROTA, CD matrix) and store them back in the image's `ImageMetadata`.
-- **`ConstellationMatcher`**: RANSAC-based alignment solver. It builds a database of triangles between the `k-nearest` stars (to ensure scale and rotation invariance). The triangles are indexed by side ratios and matched between the reference and target frame. RANSAC is then used to find the largest inlier set of matched stars and solve a 6-element affine transformation matrix mapping the target coordinate system to the reference coordinate system.
+- `ConstellationMatcher`: RANSAC-based alignment solver. It builds a database of triangles between the `k-nearest` stars (to ensure scale and rotation invariance). The triangles are indexed by side ratios and matched between the reference and target frame. RANSAC is then used to find the largest inlier set of matched stars and solve a 6-element affine transformation matrix mapping the target coordinate system to the reference coordinate system.
+
+### 15. PixelMath Expression Evaluation & Naming
+
+PixelMath provides arbitrary mathematical operations on workspace images using ExprTk:
+- **Symbol Precedence**: Workspace image names (and their channel suffixes) must take top-level precedence over default coordinates/dimensions (`x`, `y`, `w`, `h`) or built-in constants (like `h` for Planck's constant). Register image variables first, and register dimension/coordinate variables only if they do not conflict with active image names.
+- **Selective Variable Binding**: To prevent crashes and optimize performance, only bind image/variable symbols to the parser if they are actually referenced in the math expressions (using `isIdentifierReferenced`).
+- **Dimension Mismatch Protection**: Verify that all referenced images have identical dimensions (width and height) before executing. Abort execution and throw a descriptive runtime exception if a mismatch is detected to prevent memory corruption or segmentation faults.
+- **Suffix Namespaces**: Single-character channel suffixes (e.g. `R`, `G`, `B`, `K` without underscores) are removed to prevent collisions with words or other identifiers. Standard channel suffixes must use underscores (e.g. `_R`, `_G`, `_B`, `_K`, `_red`, `_green`, `_blue`).
+- **Clean Variable Naming**: In the PixelMath Dialog UI, display clean workspace identifiers directly or wrapped in backticks (e.g. `` `123image` ``) for non-standard names. Avoid presenting confusing prefix variables (e.g., `img_`).
 
 ## Build Requirements
 

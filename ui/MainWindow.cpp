@@ -94,16 +94,14 @@ MainWindow::MainWindow(QWidget* parent)
     m_statusReadout = new QLabel(this);
     m_statusReadout->setStyleSheet("color: #aaa; font-family: monospace; font-size: 11px; margin-right: 10px;");
 
-    // Center: Target indicator label
-    m_targetLabel = new QLabel(this);
-    m_targetLabel->setStyleSheet("color: #00d2ff; font-family: monospace; font-size: 11px; font-weight: bold; margin-right: 10px;");
-    m_targetLabel->setAlignment(Qt::AlignCenter);
-    m_targetLabel->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
-
-    // Add permanently: the target label fills the middle, the readout goes to the right
-    statusBar()->addPermanentWidget(m_targetLabel, 1);
+    // Add permanently: the readout goes to the right
     statusBar()->addPermanentWidget(m_statusReadout);
     statusBar()->setStyleSheet("QStatusBar { background-color: #202020; color: #aaa; border-top: 1px solid #333; font-size: 11px; }");
+
+    // Left side: Target indicator label and status message side-by-side
+    m_targetLabel = new QLabel("Target: [None]", this);
+    m_targetLabel->setStyleSheet("color: #aaa; font-family: sans-serif; font-size: 11px; margin-left: 5px; margin-right: 15px;");
+    statusBar()->addWidget(m_targetLabel);
 
     // Add status label for left status messages side-by-side with progress bar
     m_statusLabel = new QLabel("Ready", this);
@@ -162,6 +160,52 @@ MainWindow::MainWindow(QWidget* parent)
     connect(m_workspaceArea, &WorkspaceArea::elementRenameRequested, this, &MainWindow::onRenameElement);
     connect(m_workspaceArea, &WorkspaceArea::elementClosed, this, [this](const QString& name) {
         m_workspace.unregisterElement(name.toStdString());
+    });
+
+    m_workspace.setElementRegisteredCallback([this](const std::string& name) {
+        QString qName = QString::fromStdString(name);
+        QMetaObject::invokeMethod(this, [this, qName]() {
+            if (!m_workspace.contains(qName.toStdString())) return;
+            WorkspaceElement element = m_workspace.getElement(qName.toStdString());
+            WorkspaceImageWindow* win = m_workspaceArea->getImageWindow(qName);
+            if (win) {
+                win->saveUndoState();
+                win->setElement(element, true);
+            } else {
+                m_workspaceArea->addElementView(qName, element);
+            }
+            for (auto* dlg : findChildren<AlgorithmDialog*>()) {
+                dlg->refreshWorkspaceElements();
+            }
+            updateImageMenuState();
+        }, Qt::QueuedConnection);
+    });
+
+    m_workspace.setElementUnregisteredCallback([this](const std::string& name) {
+        QString qName = QString::fromStdString(name);
+        QMetaObject::invokeMethod(this, [this, qName]() {
+            if (m_workspaceArea->getImageWindow(qName)) {
+                m_workspaceArea->removeElementView(qName);
+            }
+            for (auto* dlg : findChildren<AlgorithmDialog*>()) {
+                dlg->refreshWorkspaceElements();
+            }
+            updateImageMenuState();
+        }, Qt::QueuedConnection);
+    });
+
+    m_workspace.setElementRenamedCallback([this](const std::string& oldName, const std::string& newName) {
+        QString qOld = QString::fromStdString(oldName);
+        QString qNew = QString::fromStdString(newName);
+        QMetaObject::invokeMethod(this, [this, qOld, qNew]() {
+            if (m_workspaceArea->getImageWindow(qOld)) {
+                m_workspaceArea->renameElementView(qOld, qNew);
+            }
+            for (auto* dlg : findChildren<AlgorithmDialog*>()) {
+                dlg->refreshWorkspaceElements();
+            }
+            updateImageMenuState();
+        }, Qt::QueuedConnection);
     });
 
     // Auto-load PCL modules from the PCL module folder on startup
@@ -433,36 +477,38 @@ void MainWindow::createMenus() {
 
 void MainWindow::onOpenImage() {
     QString filter = "All Images (*.fits *.fit *.png *.jpg *.jpeg *.tiff *.bmp);;FITS Files (*.fits *.fit);;Standard Images (*.png *.jpg *.jpeg *.tiff *.bmp)";
-    QString filepath = QFileDialog::getOpenFileName(this, "Open Image", "", filter);
-    if (filepath.isEmpty()) return;
+    QStringList filepaths = QFileDialog::getOpenFileNames(this, "Open Images", "", filter);
+    if (filepaths.isEmpty()) return;
 
-    QFileInfo info(filepath);
-    QString ext = info.suffix().toLower();
-    
-    // Use filename as the image name by default, resolving duplicates
-    QString baseName = info.completeBaseName();
-    if (baseName.isEmpty()) {
-        baseName = info.fileName();
-    }
-    QString name = baseName;
-    int counter = 1;
-    while (m_workspace.contains(name.toStdString())) {
-        name = QString("%1_%2").arg(baseName).arg(counter++);
-    }
-
-    try {
-        WorkspaceElement elem;
-        if (ext == "fits" || ext == "fit") {
-            FitsIO reader;
-            elem = std::visit([](auto&& arg) -> WorkspaceElement { return arg; }, reader.readImage(filepath.toStdString()));
-        } else {
-            QtImageIO reader;
-            elem = std::visit([](auto&& arg) -> WorkspaceElement { return arg; }, reader.readImage(filepath.toStdString()));
+    for (const QString& filepath : filepaths) {
+        QFileInfo info(filepath);
+        QString ext = info.suffix().toLower();
+        
+        // Use filename as the image name by default, resolving duplicates
+        QString baseName = info.completeBaseName();
+        if (baseName.isEmpty()) {
+            baseName = info.fileName();
+        }
+        QString name = baseName;
+        int counter = 1;
+        while (m_workspace.contains(name.toStdString())) {
+            name = QString("%1_%2").arg(baseName).arg(counter++);
         }
 
-        addImageToWorkspace(name, elem);
-    } catch (const std::exception& e) {
-        QMessageBox::critical(this, "Error Opening Image", QString("Failed to load image:\n%1").arg(e.what()));
+        try {
+            WorkspaceElement elem;
+            if (ext == "fits" || ext == "fit") {
+                FitsIO reader;
+                elem = std::visit([](auto&& arg) -> WorkspaceElement { return arg; }, reader.readImage(filepath.toStdString()));
+            } else {
+                QtImageIO reader;
+                elem = std::visit([](auto&& arg) -> WorkspaceElement { return arg; }, reader.readImage(filepath.toStdString()));
+            }
+
+            addImageToWorkspace(name, elem);
+        } catch (const std::exception& e) {
+            QMessageBox::critical(this, "Error Opening Image", QString("Failed to load image %1:\n%2").arg(filepath).arg(e.what()));
+        }
     }
 }
 
@@ -1013,36 +1059,23 @@ void MainWindow::executeAlgorithmSlot(const std::string& name, const std::map<st
                         win->notifyImageUpdated();
                     }
                 }
-
                 if (resolvedConfig.count("output_name")) {
                     std::string outName = resolvedConfig.at("output_name");
-                    WorkspaceElement outElem = m_workspace.getElement(outName);
-
                     QString qOutName = QString::fromStdString(outName);
-                    WorkspaceImageWindow* win = m_workspaceArea->getImageWindow(qOutName);
-                    if (win) {
-                        win->saveUndoState();
-                        win->setElement(outElem, true); // Update in-place and preserve zoom
-                        if (name == "BackgroundExtraction") {
+                    
+                    if (name == "BackgroundExtraction") {
+                        WorkspaceImageWindow* win = m_workspaceArea->getImageWindow(qOutName);
+                        if (win) {
                             if (ImageView* iv = win->imageView()) {
                                 iv->setShowBgeControlPoints(false);
                             }
                         }
-                    } else {
-                        m_workspaceArea->removeElementView(qOutName);
-                        m_workspaceArea->addElementView(qOutName, outElem);
                     }
 
                     showStatusMessage(QString("Successfully completed %1: %2").arg(QString::fromStdString(name)).arg(qOutName), 5000);
                 } else {
                     showStatusMessage(QString("Successfully completed %1").arg(QString::fromStdString(name)), 5000);
                 }
-                
-                // Refresh dialogs
-                for (auto* dlg : findChildren<AlgorithmDialog*>()) {
-                    dlg->refreshWorkspaceElements();
-                }
-                updateImageMenuState();
             } catch (const std::exception& e) {
                 QMessageBox::critical(this, "Display Error", 
                                      QString("Algorithm finished successfully, but failed to retrieve or display the output element:\n%1").arg(e.what()));
@@ -1060,20 +1093,12 @@ void MainWindow::executeAlgorithmSlot(const std::string& name, const std::map<st
 void MainWindow::addImageToWorkspace(const QString& name, const WorkspaceElement& element) {
     std::string stdName = name.toStdString();
     
-    // Register in workspace core model
+    // Register in workspace core model. The callbacks on WorkspaceRegistry will
+    // automatically handle creating/updating the MDI window and updating open dialogs.
     if (m_workspace.contains(stdName)) {
         m_workspace.unregisterElement(stdName);
     }
     m_workspace.registerElement(stdName, element);
-    
-    // Add to MDI workspace area
-    m_workspaceArea->removeElementView(name);
-    m_workspaceArea->addElementView(name, element);
-
-    // Refresh dialogs
-    for (auto* dlg : findChildren<AlgorithmDialog*>()) {
-        dlg->refreshWorkspaceElements();
-    }
 }
 
 void MainWindow::onSubWindowActivated(QMdiSubWindow* window) {
@@ -1107,7 +1132,7 @@ void MainWindow::onSubWindowActivated(QMdiSubWindow* window) {
             m_statusReadout->clear();
         }
         if (m_targetLabel) {
-            m_targetLabel->clear();
+            m_targetLabel->setText("Target: [None]");
         }
     } else {
         // Get the widget inside the subwindow
@@ -1701,13 +1726,7 @@ void MainWindow::onRenameElement(const QString& oldName, const QString& newName)
     }
     
     if (m_workspace.renameElement(stdOld, stdNew)) {
-        m_workspaceArea->renameElementView(oldName, newName);
         showStatusMessage(QString("Renamed '%1' to '%2'").arg(oldName, newName), 3000);
-        
-        // Refresh dialogs
-        for (auto* dlg : findChildren<AlgorithmDialog*>()) {
-            dlg->refreshWorkspaceElements();
-        }
     } else {
         QMessageBox::warning(this, "Rename Error", "Failed to rename workspace element.");
     }
@@ -2220,6 +2239,7 @@ bool MainWindow::openProject(const QString& projectDir) {
 
 bool MainWindow::saveProject() {
     if (m_projectPath.isEmpty()) return saveProjectAs("");
+    saveWorkspaceSingleImages(m_projectPath);
     return ProjectSerializer::saveProject(m_projectPath,
                                           m_workspace,
                                           m_workspaceArea,
@@ -2254,11 +2274,46 @@ bool MainWindow::saveProjectAs(const QString& dir) {
     m_projectPath = projectDir;
     setWindowTitle(QString("BLastro — %1").arg(QDir(projectDir).dirName()));
     if (m_ppwDlg) m_ppwDlg->updateProcessDirLabel();
+    saveWorkspaceSingleImages(projectDir);
     return ProjectSerializer::saveProject(projectDir,
                                           m_workspace,
                                           m_workspaceArea,
                                           buildDialogSet(),
                                           this);
+}
+
+void MainWindow::saveWorkspaceSingleImages(const QString& projectDir) {
+    QDir dir(projectDir);
+    if (!dir.exists("images")) {
+        dir.mkdir("images");
+    }
+    QDir imgDir(dir.filePath("images"));
+    
+    FitsIO writer;
+    for (const auto& name : m_workspace.elementNames()) {
+        WorkspaceElement elem = m_workspace.getElement(name);
+        if (std::holds_alternative<GrayscaleImagePtr>(elem)) {
+            auto img = std::get<GrayscaleImagePtr>(elem);
+            if (img) {
+                QString absPath = imgDir.absoluteFilePath(QString::fromStdString(name) + ".fits");
+                try {
+                    writer.writeImage(absPath.toStdString(), img);
+                } catch (const std::exception& e) {
+                    qWarning() << "[MainWindow::saveWorkspaceSingleImages] Error saving grayscale image:" << e.what();
+                }
+            }
+        } else if (std::holds_alternative<RGBImagePtr>(elem)) {
+            auto img = std::get<RGBImagePtr>(elem);
+            if (img) {
+                QString absPath = imgDir.absoluteFilePath(QString::fromStdString(name) + ".fits");
+                try {
+                    writer.writeImage(absPath.toStdString(), img);
+                } catch (const std::exception& e) {
+                    qWarning() << "[MainWindow::saveWorkspaceSingleImages] Error saving RGB image:" << e.what();
+                }
+            }
+        }
+    }
 }
 
 void MainWindow::onNewProject() {
@@ -2288,20 +2343,43 @@ void MainWindow::onSaveProjectAs() {
 
 void MainWindow::loadBatchPaths(const QStringList& paths, const QString& name) {
     if (paths.isEmpty()) return;
+
+    QStringList existingPaths;
+    QStringList missingPaths;
+    for (const auto& p : paths) {
+        if (QFile::exists(p)) {
+            existingPaths << p;
+        } else {
+            missingPaths << p;
+        }
+    }
+
+    if (!missingPaths.isEmpty()) {
+        QMessageBox::warning(this, "Missing Files",
+                             QString("The following files in batch '%1' could not be found and will be skipped:\n\n%2")
+                             .arg(name)
+                             .arg(missingPaths.join("\n")));
+    }
+
+    if (existingPaths.isEmpty()) {
+        qWarning() << "[MainWindow::loadBatchPaths] Warning: All files in batch '" << name << "' are missing. Skipping batch loading.";
+        return;
+    }
+
     try {
-        FitsIO reader;
         std::vector<std::string> names, filepaths;
-        ImageBatch::LoaderFunc loader = [paths, &reader](int i) -> ImageVariant {
+        ImageBatch::LoaderFunc loader = [existingPaths](int i) -> ImageVariant {
+            FitsIO reader;
             return std::visit([](auto&& arg) -> ImageVariant { return arg; },
-                              reader.readImage(paths[i].toStdString()));
+                              reader.readImage(existingPaths[i].toStdString()));
         };
-        for (const auto& p : paths) {
+        for (const auto& p : existingPaths) {
             QFileInfo fi(p);
             names.push_back(fi.completeBaseName().toStdString());
             filepaths.push_back(p.toStdString());
         }
-        auto batch = std::make_shared<ImageBatch>(paths.size(), loader, names, filepaths);
-        QString wsName = name.isEmpty() ? QFileInfo(paths.first()).completeBaseName() : name;
+        auto batch = std::make_shared<ImageBatch>(existingPaths.size(), loader, names, filepaths);
+        QString wsName = name.isEmpty() ? QFileInfo(existingPaths.first()).completeBaseName() : name;
         addImageToWorkspace(wsName, batch);
     } catch (const std::exception& e) {
         qWarning() << "[MainWindow::loadBatchPaths] Error:" << e.what();
