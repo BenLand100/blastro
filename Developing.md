@@ -280,6 +280,27 @@ All `AlgorithmDialog` subclasses follow the layout conventions established by th
 - **Drizzle Algorithm**: A state-of-the-art Drizzle alignment interpolator mathematically projects input source pixels onto the target pixel grid with scale and drop-shrink parameters, producing an output structure that tracks both intensity (`value`) and pixel coverage (`weight`). This outputs a 6-plane master FITS containing RGB intensities and individual RGB weight maps.
 - **Advanced Interpolation**: Bilinear warping is supplemented with Bicubic, Lanczos-3, Lanczos-4, and Drizzle interpolators to preserve details (high-frequency star profiles) during warping. Standard separable precomputations on X and Y coordinate weights are implemented to optimize computation time.
 
+### 12. Algorithm vs. Automation UI Abstractions
+
+In BLastro, UIs are split conceptually based on their execution scope:
+- **Algorithm UIs** (`AlgorithmDialog` subclasses): Configure and run a specific, single, mathematically intensive operation on a specific element in the workspace (e.g. Alignment, Debayer, Stacking, Stretching). They execute directly against a target image or batch, usually mutating the target in-place (updating undo history) or producing a direct single output in the workspace registry.
+- **Automation UIs** (like `PreprocessingWizardDialog`): Configure, sequence, and execute pipelines or groupings of multiple algorithms (and potentially other automations). They map complex form options into generic string-based configuration key-value maps to schedule sequential background execution (e.g., `stage1` or `stage2` in `PreprocessingPipeline`). 
+- **Consistency Rule**: Both abstractions must expose matching configuration parameters for overlapping settings. For example, if `AlignDialog` exposes interpolation options and drop sizes, the Preprocessing Wizard's alignment control tab must expose those exact same parameters so that manual tests and scheduled automations behave identically.
+
+### 13. Project & Session Serialization
+
+BLastro provides full project saving/loading and session persistence:
+- **`ProjectSerializer`**: The central service that serializes workspace images, MDI sub-window geometry, and active tool states. It generates a central `project.json` file.
+- **Custom Dialog Serialization**: Persistent dialogs participate in serialization by overriding `serializeState()` and `restoreState()`. Custom widgets must serialize all user-configurable parameters (such as checkboxes, slider values, and paths) into a `QJsonObject` and restore them precisely during project/session loads.
+- **Wizard State Serialization**: Automation UIs (like the Preprocessing Wizard) serialize their settings separately via explicit functions (e.g., `serializeControlState()` / `restoreControlState()`) to preserve the state of the scheduled options across launches.
+- **Referenced File Management**: When saving projects, `ProjectSerializer` identifies all external paths in the active `WorkspaceRegistry` and provides helpers (`copyReferencesIntoProject()`) to copy external source FITS files directly into the project directory for portability.
+
+### 14. Astrometry & Star Matching
+
+For alignment and coordinates solves, BLastro incorporates astrometric modules:
+- **`PlatesolveAlgorithm`**: Integrates with external command-line platesolvers (ASTAP or solve-field) configured in `Preferences`. It outputs a temporary FITS file of the active view, runs the solver process asynchronously via `QProcess` with appropriate RA/Dec hints and field-of-view parameters, and parses the resulting `.wcs` file via `CCfits` to read the solved WCS coordinates (CRVAL, CROTA, CD matrix) and store them back in the image's `ImageMetadata`.
+- **`ConstellationMatcher`**: RANSAC-based alignment solver. It builds a database of triangles between the `k-nearest` stars (to ensure scale and rotation invariance). The triangles are indexed by side ratios and matched between the reference and target frame. RANSAC is then used to find the largest inlier set of matched stars and solve a 6-element affine transformation matrix mapping the target coordinate system to the reference coordinate system.
+
 ## Build Requirements
 
 - C++17 compliant compiler

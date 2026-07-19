@@ -1,16 +1,15 @@
-# TODO
+# BLastro Roadmap & TODO
 
-* PixelMath is doing something wrong - 15-30s on simple operations (needs to be fixed) and image names should take precedence
-* Test platesolving
-* Test OSC workflow
+## Staged & Upcoming Tasks
 
-## Core
+* **Color Calibration**: Implement manual color calibration (e.g. custom channel coefficients, background neutralization) and star-based calibration (requiring platesolved WCS data to perform stellar color indices lookup).
+* **Shutdown Stability**: Trace down and resolve the occasional segmentation fault occurring on application shutdown.
+* **Startup Visual Polish**: Smooth out startup window geometry transitions (preventing the visual layout "jump" when restoring last-session configuration).
 
-* Implement color calibration -- Something manual and something star based (needs platesolve + data!)
-* Proper drizzle implementation instead of the current interpolation hack
-* Implement a "Curves" tool to compliment the GHS / Stretching
+## Completed Milestones
 
- ## UI
-* There is an occasional segfault on program exit. Need to trace that down.
-* Double check all elements are being serialized and restored properly
-* Program open "jumps" from default to serialized -- smooth it out
+* [x] **PixelMath Optimization**: Reworked pixel loop using OpenMP and raw float pointer arithmetic to execute under 1 second (previously 15–30s).
+* [x] **Curves Tool**: Implemented interactive Spline-based Curves graph stretching to complement Histogram Transform and GHS.
+* [x] **Astrometry & Platesolving**: Integrated ASTAP and Solve-Field external solving and `.wcs` FITS keyword preservation.
+* [x] **Drizzle Warping and Stacking**: Implemented mathematically rigorous Drizzle forward-mapping alignment alongside backward-mapping (Bilinear, Bicubic, Lanczos) interpolators and NaN-safe Stacking.
+* [x] **UI Consistency**: Standardized alignment and drizzle mode/drop size options between the individual dialogs and the Preprocessing Wizard control panels.

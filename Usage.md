@@ -85,7 +85,7 @@ The **Preprocessing Wizard** calibrates, normalizes the background, detects star
   - **Keep Intermediate Files**: When checked, generated intermediate files (calibrated flats, calibrated/debayered lights, and aligned lights) are moved from temporary storage into structured subfolders (`flat_calib`, `light_calib`, `light_align`) inside your output directory. Raw bias/darks are stacked directly and temporary frames unregistered to conserve space.
 
 > [!TIP]
-> **OSC CFA Drizzle**: When processing OSC images, you can achieve superior sharpness by bypassing standard debayer interpolation. In the Preprocessing Wizard, set the **Debayer Method** to `sparse` and the **Alignment Interpolation** to `drizzle`. This uses a mathematically rigorous drizzle technique directly on the native Bayer pattern data, and outputs a 6-plane FITS master file containing both the RGB data and weight maps used during stacking rejection.
+> **OSC CFA Drizzle**: When processing OSC images, you can achieve superior sharpness by bypassing standard debayer interpolation. In the Preprocessing Wizard, set the **Debayer Method** to `sparse`, choose **Drizzle** as the **Alignment Mode**, and select your desired **Drizzle Scale** and **Drizzle Drop Size**. This uses a mathematically rigorous drizzle technique directly on the native Bayer pattern data, and outputs a 6-plane FITS master file containing both the RGB data and weight maps used during stacking rejection.
 
 ---
 
@@ -105,3 +105,24 @@ You can customize startup behavior via CLI flags:
 - **`--no-restore`**: Bypasses loading the last session for a clean startup workspace.
 - **`--project <path>`**: Automatically opens the specified project directory at startup.
 - **`--session <path>`**: Recovers layout/dialog configurations from a specific custom session JSON file.
+
+---
+
+## 8. Astrometry & Platesolving
+
+BLastro supports solving WCS (World Coordinate System) coordinates directly on images or frame batches:
+- **Solver Configuration**: In **Preferences** (General Settings tab), configure the binary executable paths for ASTAP or Solve-Field.
+- **Solving Settings**: Open the **Astrometry -> Platesolve...** dialog. Select the input image or batch.
+  - **Focal Length & Pixel Size**: Providing these fields allows the solver to estimate the image field of view (FOV) and pixel scale, speeding up solving.
+  - **RA / Dec Hints**: If you know the approximate coordinates of the center of the target field, entering them (in degrees) constrains the platesolver search radius for much faster results.
+- **Metadata Output**: Successfully solving a frame adds key WCS cards (e.g. `CRVAL1`, `CRVAL2`, `CROTA2`, or `CD` matrices) to the image metadata, which are preserved in subsequent processing steps (like alignment and stacking).
+
+---
+
+## 9. Curves & Spline Stretching
+
+The **Stretching Dialog** contains an interactive **Curves** tab that allows you to apply custom spline-based lookup adjustments to your images:
+- **Adding Control Points**: Left click anywhere on the grid graph to place a new control point. The curve adjusts smoothly to interpolate all active points.
+- **Adjusting Points**: Click and drag any existing control point to modify its input/output mapping.
+- **Deleting Points**: Double-click or right-click on an existing control point to remove it from the spline.
+- **Channel Selection**: Apply curves globally to all channels (RGB/K) or to individual Red, Green, or Blue channels independently.
