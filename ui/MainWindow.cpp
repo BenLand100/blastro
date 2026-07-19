@@ -1084,6 +1084,8 @@ void MainWindow::executeAlgorithmSlot(const std::string& name, const std::map<st
             QMessageBox::critical(this, QString("%1 Error").arg(QString::fromStdString(name)),
                                  QString("Error during execution:\n%1").arg(errorMsg));
         }
+
+        onCLIActionFinished();
     });
 
     // Start execution!
@@ -1475,7 +1477,7 @@ void MainWindow::testProcessOnImage(const QString& pluginPath, const QString& im
     QFileInfo info(imagePath);
     if (!info.exists()) {
         qCritical() << "[MainWindow] Image file does not exist:" << imagePath;
-        std::_Exit(1);
+        if (m_exitAfterLoad) QCoreApplication::exit(1);
         return;
     }
 
@@ -1492,7 +1494,7 @@ void MainWindow::testProcessOnImage(const QString& pluginPath, const QString& im
         addImageToWorkspace("TestImage", elem);
     } catch (const std::exception& e) {
         qCritical() << "[MainWindow] Failed to load image:" << e.what();
-        std::_Exit(1);
+        if (m_exitAfterLoad) QCoreApplication::exit(1);
         return;
     }
 
@@ -1501,14 +1503,14 @@ void MainWindow::testProcessOnImage(const QString& pluginPath, const QString& im
 
     if (!m_pclBridge->loadModule(pluginPath)) {
         qCritical() << "[MainWindow] Failed to load PCL module:" << pluginPath;
-        std::_Exit(1);
+        if (m_exitAfterLoad) QCoreApplication::exit(1);
         return;
     }
 
     auto processes = m_pclBridge->registeredProcesses();
     if (processes.empty()) {
         qCritical() << "[MainWindow] No registered processes found in loaded module.";
-        std::_Exit(1);
+        if (m_exitAfterLoad) QCoreApplication::exit(1);
         return;
     }
 
@@ -1529,7 +1531,7 @@ void MainWindow::testProcessOnImage(const QString& pluginPath, const QString& im
 
     if (buffers.empty()) {
         qCritical() << "[MainWindow] No image buffers found in loaded image.";
-        std::_Exit(1);
+        if (m_exitAfterLoad) QCoreApplication::exit(1);
         return;
     }
 
@@ -1594,10 +1596,10 @@ void MainWindow::testProcessOnImage(const QString& pluginPath, const QString& im
             qWarning() << "[MainWindow] Failed to save denoised image.";
         }
         
-        std::_Exit(0);
+        if (m_exitAfterLoad) QCoreApplication::exit(0);
     } else {
         qCritical() << "[MainWindow] Process execution failed!";
-        std::_Exit(1);
+        if (m_exitAfterLoad) QCoreApplication::exit(1);
     }
 }
 
@@ -1768,7 +1770,7 @@ void MainWindow::testRegisterOnCube(const QString& cubePath, int refFrameIdx, co
     QFileInfo info(cubePath);
     if (!info.exists()) {
         qCritical() << "[MainWindow] FITS cube file does not exist:" << cubePath;
-        QCoreApplication::exit(1);
+        if (m_exitAfterLoad) QCoreApplication::exit(1);
         return;
     }
 
@@ -1778,7 +1780,7 @@ void MainWindow::testRegisterOnCube(const QString& cubePath, int refFrameIdx, co
         batch = reader.readBatch({cubePath.toStdString()});
     } catch (const std::exception& e) {
         qCritical() << "[MainWindow] Failed to load FITS cube as batch:" << e.what();
-        QCoreApplication::exit(1);
+        if (m_exitAfterLoad) QCoreApplication::exit(1);
         return;
     }
 
@@ -1855,7 +1857,7 @@ void MainWindow::testRegisterOnCube(const QString& cubePath, int refFrameIdx, co
         
         if (registeredCount == 0) {
             qCritical() << "[MainWindow] No frames registered successfully! Aborting alignment.";
-            QCoreApplication::exit(1);
+            if (m_exitAfterLoad) QCoreApplication::exit(1);
             return;
         }
 
@@ -1953,14 +1955,14 @@ void MainWindow::testRegisterOnCube(const QString& cubePath, int refFrameIdx, co
                 }
             }
             
-            QCoreApplication::exit(0);
+            if (m_exitAfterLoad) QCoreApplication::exit(0);
         } else {
             qCritical() << "[MainWindow] Failed to save stacked master.";
-            QCoreApplication::exit(1);
+            if (m_exitAfterLoad) QCoreApplication::exit(1);
         }
     } catch (const std::exception& e) {
         qCritical() << "[MainWindow] Exception during pipeline execution:" << e.what();
-        QCoreApplication::exit(1);
+        if (m_exitAfterLoad) QCoreApplication::exit(1);
     }
 }
 
@@ -2209,12 +2211,58 @@ QString MainWindow::defaultSessionPath() {
 }
 
 void MainWindow::applyStartupOptions(const StartupOptions& opts) {
+    m_exitAfterLoad = opts.exitAfterLoad;
+    if (opts.fullscreen) {
+        showFullScreen();
+    }
+
     if (!opts.projectPath.isEmpty()) {
         openProject(opts.projectPath);
     } else if (!opts.sessionPath.isEmpty()) {
         ProjectSerializer::loadSession(opts.sessionPath, m_workspaceArea, buildDialogSet(), this);
     } else if (!opts.noRestore) {
         ProjectSerializer::loadSession(defaultSessionPath(), m_workspaceArea, buildDialogSet(), this);
+    }
+
+    int imageCounter = 1;
+    for (const QString& imgPath : opts.imagesToLoad) {
+        loadImageDirectly(imgPath, QString("Image%1").arg(imageCounter++));
+    }
+
+    if (!opts.runAlgoName.isEmpty()) {
+        m_pendingCLIAction = true;
+        std::map<std::string, std::string> configMap;
+        if (!opts.algoOptsStr.isEmpty()) {
+            QStringList pairs = opts.algoOptsStr.split(',', Qt::SkipEmptyParts);
+            for (const QString& pair : pairs) {
+                QStringList kv = pair.split('=', Qt::KeepEmptyParts);
+                if (kv.size() >= 2) {
+                    configMap[kv[0].toStdString()] = kv[1].toStdString();
+                }
+            }
+        }
+        executeAlgorithmSlot(opts.runAlgoName.toStdString(), configMap);
+    } else if (!opts.runPclPath.isEmpty()) {
+        m_pendingCLIAction = true;
+        QString imagePath;
+        if (!opts.imagesToLoad.isEmpty()) imagePath = opts.imagesToLoad.first();
+        testProcessOnImage(opts.runPclPath, imagePath);
+        onCLIActionFinished();
+    } else if (!opts.testRegisterCube.isEmpty()) {
+        m_pendingCLIAction = true;
+        testRegisterOnCube(opts.testRegisterCube, opts.refIdx, opts.method);
+        onCLIActionFinished();
+    }
+
+    if (m_exitAfterLoad && !m_pendingCLIAction) {
+        QTimer::singleShot(0, qApp, &QApplication::quit);
+    }
+}
+
+void MainWindow::onCLIActionFinished() {
+    m_pendingCLIAction = false;
+    if (m_exitAfterLoad) {
+        QTimer::singleShot(0, qApp, &QApplication::quit);
     }
 }
 

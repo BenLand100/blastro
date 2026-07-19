@@ -102,9 +102,18 @@ class PreprocessingWizardDialog;
 
 /// Options parsed from the command line and passed to MainWindow::applyStartupOptions().
 struct StartupOptions {
-    bool noRestore  = false;   ///< --no-restore : skip loading last_session.json
-    QString projectPath;       ///< --project <path> : open this project on launch
-    QString sessionPath;       ///< --session <path> : load this specific session file
+    bool noRestore = false;
+    QString projectPath;
+    QString sessionPath;
+    bool exitAfterLoad = false;
+    bool fullscreen = false;
+    QString runPclPath;
+    QString runAlgoName;
+    QString algoOptsStr;
+    QString testRegisterCube;
+    int refIdx = 0;
+    QString method = "centroid";
+    QStringList imagesToLoad;
 };
 
 class MainWindow : public QMainWindow {
@@ -177,6 +186,7 @@ private slots:
     void restoreProcessConsole();
     void onRenameElement(const QString& oldName, const QString& newName);
     void onOpenPreferences();
+    void onCLIActionFinished();
 
     void ensurePCLBridge();
     void setProcessingState(bool processing);
@@ -217,6 +227,8 @@ private:
     QProgressBar* m_progressBar = nullptr;
     void showStatusMessage(const QString& message, int timeout = 0);
     bool m_algorithmRunning = false;
+    bool m_exitAfterLoad = false;
+    bool m_pendingCLIAction = false;
 
     std::unique_ptr<PCLBridge> m_pclBridge;
     std::unordered_map<QString, QMdiSubWindow*> m_openPCLInterfaces;
