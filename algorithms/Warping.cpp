@@ -237,6 +237,107 @@ GrayscaleImagePtr Warping::warpGrayscale(GrayscaleImagePtr src,
     return std::make_shared<GrayscaleImage>(outBuffer);
 }
 
+std::pair<GrayscaleImagePtr, GrayscaleImagePtr> Warping::warpDrizzleGrayscale(
+    GrayscaleImagePtr src,
+    const std::array<double, 6>& transform,
+    double drizzleScale,
+    double dropShrink) {
+    if (!src) return {nullptr, nullptr};
+
+    int w_in = src->width();
+    int h_in = src->height();
+
+    int w_out = std::round(w_in * drizzleScale);
+    int h_out = std::round(h_in * drizzleScale);
+
+    auto dataBuffer = std::make_shared<ImageBuffer>(w_out, h_out);
+    auto weightBuffer = std::make_shared<ImageBuffer>(w_out, h_out);
+    float* outData = dataBuffer->data();
+    float* outWeight = weightBuffer->data();
+    const float* inData = src->buffer()->data();
+
+    // Initialize with 0
+    std::fill(outData, outData + w_out * h_out, 0.0f);
+    std::fill(outWeight, outWeight + w_out * h_out, 0.0f);
+
+    double a = transform[0];
+    double b = transform[1];
+    double tx = transform[2];
+    double c = transform[3];
+    double d = transform[4];
+    double ty = transform[5];
+
+    // Forward map each input pixel to the output grid
+    #pragma omp parallel for
+    for (int y_in = 0; y_in < h_in; ++y_in) {
+        for (int x_in = 0; x_in < w_in; ++x_in) {
+            float val = inData[y_in * w_in + x_in];
+            if (std::isnan(val)) continue;
+
+            // Map the center of the input pixel
+            double x_mapped = a * x_in + b * y_in + tx;
+            double y_mapped = c * x_in + d * y_in + ty;
+
+            // Scale to output grid
+            x_mapped *= drizzleScale;
+            y_mapped *= drizzleScale;
+
+            // Compute the size of the drop in the output space
+            // Assuming affine matrix has roughly uniform scaling, but technically
+            // an input pixel maps to a parallelogram. For simplicity and standard drizzle,
+            // we approximate it as a square drop on the output grid.
+            // A 1x1 input pixel has size `drizzleScale` in the output grid (ignoring scale from alignment transform itself).
+            // Actually, the alignment transform could scale the image.
+            double dropSizeX = drizzleScale * dropShrink;
+            double dropSizeY = drizzleScale * dropShrink;
+            
+            // For a more robust mapping considering the transform scaling:
+            double scaleX = std::sqrt(a*a + c*c) * drizzleScale;
+            double scaleY = std::sqrt(b*b + d*d) * drizzleScale;
+            dropSizeX = scaleX * dropShrink;
+            dropSizeY = scaleY * dropShrink;
+
+            double halfDropX = dropSizeX * 0.5;
+            double halfDropY = dropSizeY * 0.5;
+
+            double x_min = x_mapped - halfDropX;
+            double x_max = x_mapped + halfDropX;
+            double y_min = y_mapped - halfDropY;
+            double y_max = y_mapped + halfDropY;
+
+            int px_min = std::max(0, static_cast<int>(std::floor(x_min)));
+            int px_max = std::min(w_out - 1, static_cast<int>(std::floor(x_max)));
+            int py_min = std::max(0, static_cast<int>(std::floor(y_min)));
+            int py_max = std::min(h_out - 1, static_cast<int>(std::floor(y_max)));
+
+            // Compute overlaps for each output pixel the drop touches
+            for (int py = py_min; py <= py_max; ++py) {
+                double out_y_min = py;
+                double out_y_max = py + 1.0;
+                double overlapY = std::max(0.0, std::min(y_max, out_y_max) - std::max(y_min, out_y_min));
+                if (overlapY <= 0.0) continue;
+
+                for (int px = px_min; px <= px_max; ++px) {
+                    double out_x_min = px;
+                    double out_x_max = px + 1.0;
+                    double overlapX = std::max(0.0, std::min(x_max, out_x_max) - std::max(x_min, out_x_min));
+                    
+                    double overlapArea = overlapX * overlapY;
+                    if (overlapArea > 0.0) {
+                        long idx_out = py * w_out + px;
+                        #pragma omp atomic
+                        outData[idx_out] += static_cast<float>(val * overlapArea);
+                        #pragma omp atomic
+                        outWeight[idx_out] += static_cast<float>(overlapArea);
+                    }
+                }
+            }
+        }
+    }
+
+    return {std::make_shared<GrayscaleImage>(dataBuffer), std::make_shared<GrayscaleImage>(weightBuffer)};
+}
+
 RGBImagePtr Warping::warpRGB(RGBImagePtr src,
                              const std::array<double, 6>& transform,
                              double drizzleScale,

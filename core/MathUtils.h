@@ -58,5 +58,19 @@ namespace MathUtils {
                                double tol = 1e-5,
                                int maxIter = 1000);
 
+    // Monotone Cubic Spline (Fritsch-Carlson)
+    struct MonotoneCubicSpline {
+        std::vector<double> x;
+        std::vector<double> y;
+        std::vector<double> m;
+
+        MonotoneCubicSpline() = default;
+        MonotoneCubicSpline(const std::vector<double>& x_in, const std::vector<double>& y_in);
+        double evaluate(double x_val) const;
+    };
+
+    // Computes a 1D Look-Up Table (size 65536) for fast curve evaluation
+    std::vector<float> computeCurvesLUT(const std::vector<double>& x_in, const std::vector<double>& y_in);
+
 } // namespace MathUtils
 } // namespace blastro

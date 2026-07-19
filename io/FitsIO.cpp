@@ -588,6 +588,107 @@ bool FitsIO::writeBatch(const std::string& filepath, ImageBatchPtr batch) {
     }
 }
 
+bool FitsIO::writeDrizzleImage(const std::string& filepath, GrayscaleImagePtr data, GrayscaleImagePtr weight) {
+    try {
+        std::string writePath = "!" + filepath;
+        
+        if (!data || !weight) return false;
+        
+        long width = data->width();
+        long height = data->height();
+        
+        if (weight->width() != width || weight->height() != height) {
+            return false;
+        }
+
+        long numAxes = 3;
+        std::vector<long> naxes = { width, height, 2 };
+
+        std::unique_ptr<CCfits::FITS> pOutfile(new CCfits::FITS(writePath, FLOAT_IMG, numAxes, naxes.data()));
+        CCfits::PHDU& phdu = pOutfile->pHDU();
+
+        writeMetadata(phdu, data->metadata());
+        phdu.addKey("DRIZZLED", 1, "Image contains Drizzle Data and Weight planes");
+
+        long planeSize = width * height;
+        std::valarray<float> arrayData(planeSize * 2);
+
+        auto dataBuf = data->buffer();
+        auto weightBuf = weight->buffer();
+        
+        for (int y = 0; y < height; ++y) {
+            for (int x = 0; x < width; ++x) {
+                arrayData[y * width + x] = dataBuf->pixel(x, y);
+                arrayData[planeSize + y * width + x] = weightBuf->pixel(x, y);
+            }
+        }
+
+        phdu.write(1, planeSize * 2, arrayData);
+        return true;
+    } catch (CCfits::FitsException& ex) {
+        std::cerr << "FITS write drizzle error: " << ex.message() << std::endl;
+        return false;
+    }
+}
+
+bool FitsIO::writeDrizzleRGBImage(const std::string& filepath, 
+                                  GrayscaleImagePtr rData, GrayscaleImagePtr rWeight,
+                                  GrayscaleImagePtr gData, GrayscaleImagePtr gWeight,
+                                  GrayscaleImagePtr bData, GrayscaleImagePtr bWeight) {
+    try {
+        std::string writePath = "!" + filepath;
+        
+        if (!rData || !rWeight || !gData || !gWeight || !bData || !bWeight) return false;
+        
+        long width = rData->width();
+        long height = rData->height();
+        
+        if (rWeight->width() != width || rWeight->height() != height ||
+            gData->width() != width || gData->height() != height ||
+            gWeight->width() != width || gWeight->height() != height ||
+            bData->width() != width || bData->height() != height ||
+            bWeight->width() != width || bWeight->height() != height) {
+            return false;
+        }
+
+        long numAxes = 3;
+        std::vector<long> naxes = { width, height, 6 };
+
+        std::unique_ptr<CCfits::FITS> pOutfile(new CCfits::FITS(writePath, FLOAT_IMG, numAxes, naxes.data()));
+        CCfits::PHDU& phdu = pOutfile->pHDU();
+
+        writeMetadata(phdu, rData->metadata());
+        phdu.addKey("DRIZZLED", 1, "Image contains Drizzle Data and Weight planes");
+
+        long planeSize = width * height;
+        std::valarray<float> arrayData(planeSize * 6);
+
+        auto rDataBuf = rData->buffer();
+        auto rWeightBuf = rWeight->buffer();
+        auto gDataBuf = gData->buffer();
+        auto gWeightBuf = gWeight->buffer();
+        auto bDataBuf = bData->buffer();
+        auto bWeightBuf = bWeight->buffer();
+        
+        for (int y = 0; y < height; ++y) {
+            for (int x = 0; x < width; ++x) {
+                arrayData[y * width + x] = rDataBuf->pixel(x, y);
+                arrayData[planeSize + y * width + x] = rWeightBuf->pixel(x, y);
+                arrayData[2 * planeSize + y * width + x] = gDataBuf->pixel(x, y);
+                arrayData[3 * planeSize + y * width + x] = gWeightBuf->pixel(x, y);
+                arrayData[4 * planeSize + y * width + x] = bDataBuf->pixel(x, y);
+                arrayData[5 * planeSize + y * width + x] = bWeightBuf->pixel(x, y);
+            }
+        }
+
+        phdu.write(1, planeSize * 6, arrayData);
+        return true;
+    } catch (CCfits::FitsException& ex) {
+        std::cerr << "FITS write drizzle RGB error: " << ex.message() << std::endl;
+        return false;
+    }
+}
+
 void FitsIO::clearCache() {
     m_readCache.clear();
 }

@@ -63,11 +63,11 @@ static ImageVariant cropImagePatch(const ImageVariant& image, int xStart, int yS
     }
 }
 
-static ImageVariant loadPatch(ImageBatchPtr batch, int idx, int xStart, int yStart, int patchW, int patchH, FitsIO& fits) {
+static ImageVariant loadPatch(ImageBatchPtr batch, int idx, int xStart, int yStart, int patchW, int patchH, FitsIO& fits, int planeIndex = 0) {
     std::string filepath = batch->frameFilepath(idx);
     if (!filepath.empty()) {
         try {
-            return fits.readImagePatch(filepath, xStart, yStart, patchW, patchH, idx);
+            return fits.readImagePatch(filepath, xStart, yStart, patchW, patchH, planeIndex);
         } catch (const std::exception& e) {
             Logger::warning("Stacking", QString("Failed to read patch from disk for %1: %2. Falling back to in-memory crop.")
                             .arg(QString::fromStdString(filepath)).arg(e.what()));
@@ -78,6 +78,7 @@ static ImageVariant loadPatch(ImageBatchPtr batch, int idx, int xStart, int ySta
 }
 
 static GrayscaleImagePtr stackChannels(const std::vector<GrayscaleImagePtr>& channels,
+                                       const std::vector<GrayscaleImagePtr>& weightChannels,
                                        const std::vector<double>& coeffA,
                                        const std::vector<double>& coeffB,
                                        const std::string& method,
@@ -98,8 +99,14 @@ static GrayscaleImagePtr stackChannels(const std::vector<GrayscaleImagePtr>& cha
     float* outData = outBuffer->data();
 
     std::vector<const float*> rawDataPointers(numFrames);
+    std::vector<const float*> rawWeightPointers(numFrames);
+    bool hasWeights = !weightChannels.empty();
+    
     for (int f = 0; f < numFrames; ++f) {
         rawDataPointers[f] = channels[f]->buffer()->data();
+        if (hasWeights) {
+            rawWeightPointers[f] = weightChannels[f]->buffer()->data();
+        }
     }
 
     int progressStep = std::max(1, numPixels / 20);
@@ -108,9 +115,13 @@ static GrayscaleImagePtr stackChannels(const std::vector<GrayscaleImagePtr>& cha
     #pragma omp parallel shared(cancelled)
     {
         std::vector<float> threadPixelValues(numFrames);
+        std::vector<float> threadPixelWeights(numFrames);
         std::vector<float> threadActiveValues(numFrames);
-        std::vector<float> filtered;
-        filtered.reserve(numFrames);
+        std::vector<float> threadActiveWeights(numFrames);
+        std::vector<float> filteredValues;
+        std::vector<float> filteredWeights;
+        filteredValues.reserve(numFrames);
+        filteredWeights.reserve(numFrames);
 
         #pragma omp for schedule(static)
         for (int p = 0; p < numPixels; ++p) {
@@ -132,14 +143,20 @@ static GrayscaleImagePtr stackChannels(const std::vector<GrayscaleImagePtr>& cha
             int n = 0;
             for (int f = 0; f < numFrames; ++f) {
                 float val = rawDataPointers[f][p];
-                if (!std::isnan(val)) {
-                    threadPixelValues[n++] = static_cast<float>(val * coeffA[f] + coeffB[f]);
+                float weight = hasWeights ? rawWeightPointers[f][p] : 1.0f;
+                if (!std::isnan(val) && weight > 0.0f) {
+                    float normalizedVal = hasWeights ? (val / weight) : val;
+                    threadPixelValues[n] = static_cast<float>(normalizedVal * coeffA[f] + coeffB[f]);
+                    threadPixelWeights[n] = weight;
+                    n++;
                 }
             }
 
             threadActiveValues.resize(n);
+            threadActiveWeights.resize(n);
             for (int i = 0; i < n; ++i) {
                 threadActiveValues[i] = threadPixelValues[i];
+                threadActiveWeights[i] = threadPixelWeights[i];
             }
 
             if (rejection == "quantile" && n > 1) {
@@ -173,16 +190,20 @@ static GrayscaleImagePtr stackChannels(const std::vector<GrayscaleImagePtr>& cha
                     double highBound = mean + sigmaHigh * stddev;
 
                     if (rejection == "sigma") {
-                        filtered.clear();
-                        for (float val : threadActiveValues) {
+                        filteredValues.clear();
+                        filteredWeights.clear();
+                        for (size_t i = 0; i < threadActiveValues.size(); ++i) {
+                            float val = threadActiveValues[i];
                             if (val >= lowBound && val <= highBound) {
-                                filtered.push_back(val);
+                                filteredValues.push_back(val);
+                                filteredWeights.push_back(threadActiveWeights[i]);
                             }
                         }
-                        if (filtered.empty()) {
+                        if (filteredValues.empty()) {
                             break;
                         }
-                        threadActiveValues = filtered;
+                        threadActiveValues = filteredValues;
+                        threadActiveWeights = filteredWeights;
                     } else {
                         for (int i = 0; i < currSize; ++i) {
                             if (threadActiveValues[i] < lowBound) {
@@ -202,9 +223,19 @@ static GrayscaleImagePtr stackChannels(const std::vector<GrayscaleImagePtr>& cha
             }
 
             if (method == "average") {
-                double sum = 0.0;
-                for (float val : threadActiveValues) sum += val;
-                outData[p] = static_cast<float>(sum / m);
+                if (hasWeights) {
+                    double sumData = 0.0;
+                    double sumWeight = 0.0;
+                    for (size_t i = 0; i < threadActiveValues.size(); ++i) {
+                        sumData += threadActiveValues[i] * threadActiveWeights[i];
+                        sumWeight += threadActiveWeights[i];
+                    }
+                    outData[p] = static_cast<float>(sumWeight > 0.0 ? sumData / sumWeight : std::numeric_limits<float>::quiet_NaN());
+                } else {
+                    double sum = 0.0;
+                    for (float val : threadActiveValues) sum += val;
+                    outData[p] = static_cast<float>(sum / m);
+                }
             } else if (method == "median") {
                 std::sort(threadActiveValues.begin(), threadActiveValues.end());
                 if (m % 2 == 1) {
@@ -466,6 +497,16 @@ void StackingAlgorithm::execute(WorkspaceRegistry& workspace,
                     std::vector<GrayscaleImagePtr> rPatches(numSelected);
                     std::vector<GrayscaleImagePtr> gPatches(numSelected);
                     std::vector<GrayscaleImagePtr> bPatches(numSelected);
+                    
+                    std::vector<GrayscaleImagePtr> rWeightPatches;
+                    std::vector<GrayscaleImagePtr> gWeightPatches;
+                    std::vector<GrayscaleImagePtr> bWeightPatches;
+                    bool isDrizzled = coalesced.fitsKeywords.count("DRIZZLED") > 0;
+                    if (isDrizzled) {
+                        rWeightPatches.resize(numSelected);
+                        gWeightPatches.resize(numSelected);
+                        bWeightPatches.resize(numSelected);
+                    }
 
                     std::string errorMsg;
                     #pragma omp parallel
@@ -476,14 +517,32 @@ void StackingAlgorithm::execute(WorkspaceRegistry& workspace,
                             if (!errorMsg.empty()) continue;
                             try {
                                 int idx = selectedIndices[i];
-                                ImageVariant patchVar = loadPatch(batch, idx, xStart, yStart, patchW, patchH, threadFits);
-                                if (!std::holds_alternative<RGBImagePtr>(patchVar)) {
-                                    throw std::runtime_error("Expected RGB patch from frame");
+                                
+                                if (isDrizzled) {
+                                    // Load 6 planes
+                                    auto rData = std::get<GrayscaleImagePtr>(loadPatch(batch, idx, xStart, yStart, patchW, patchH, threadFits, 0));
+                                    auto rWeight = std::get<GrayscaleImagePtr>(loadPatch(batch, idx, xStart, yStart, patchW, patchH, threadFits, 1));
+                                    auto gData = std::get<GrayscaleImagePtr>(loadPatch(batch, idx, xStart, yStart, patchW, patchH, threadFits, 2));
+                                    auto gWeight = std::get<GrayscaleImagePtr>(loadPatch(batch, idx, xStart, yStart, patchW, patchH, threadFits, 3));
+                                    auto bData = std::get<GrayscaleImagePtr>(loadPatch(batch, idx, xStart, yStart, patchW, patchH, threadFits, 4));
+                                    auto bWeight = std::get<GrayscaleImagePtr>(loadPatch(batch, idx, xStart, yStart, patchW, patchH, threadFits, 5));
+                                    
+                                    rPatches[i] = rData;
+                                    rWeightPatches[i] = rWeight;
+                                    gPatches[i] = gData;
+                                    gWeightPatches[i] = gWeight;
+                                    bPatches[i] = bData;
+                                    bWeightPatches[i] = bWeight;
+                                } else {
+                                    ImageVariant patchVar = loadPatch(batch, idx, xStart, yStart, patchW, patchH, threadFits, 0);
+                                    if (!std::holds_alternative<RGBImagePtr>(patchVar)) {
+                                        throw std::runtime_error("Expected RGB patch from frame");
+                                    }
+                                    auto rgbPatch = std::get<RGBImagePtr>(patchVar);
+                                    rPatches[i] = rgbPatch->r();
+                                    gPatches[i] = rgbPatch->g();
+                                    bPatches[i] = rgbPatch->b();
                                 }
-                                auto rgbPatch = std::get<RGBImagePtr>(patchVar);
-                                rPatches[i] = rgbPatch->r();
-                                gPatches[i] = rgbPatch->g();
-                                bPatches[i] = rgbPatch->b();
                             } catch (const std::exception& e) {
                                 #pragma omp critical
                                 {
@@ -499,9 +558,9 @@ void StackingAlgorithm::execute(WorkspaceRegistry& workspace,
                         throw std::runtime_error(errorMsg);
                     }
 
-                    auto stackedR = stackChannels(rPatches, coeffAR, coeffBR, method, rejection, sigmaLow, sigmaHigh, quantileLow, quantileHigh, nullptr);
-                    auto stackedG = stackChannels(gPatches, coeffAG, coeffBG, method, rejection, sigmaLow, sigmaHigh, quantileLow, quantileHigh, nullptr);
-                    auto stackedB = stackChannels(bPatches, coeffAB, coeffBB, method, rejection, sigmaLow, sigmaHigh, quantileLow, quantileHigh, nullptr);
+                    auto stackedR = stackChannels(rPatches, rWeightPatches, coeffAR, coeffBR, method, rejection, sigmaLow, sigmaHigh, quantileLow, quantileHigh, nullptr);
+                    auto stackedG = stackChannels(gPatches, gWeightPatches, coeffAG, coeffBG, method, rejection, sigmaLow, sigmaHigh, quantileLow, quantileHigh, nullptr);
+                    auto stackedB = stackChannels(bPatches, bWeightPatches, coeffAB, coeffBB, method, rejection, sigmaLow, sigmaHigh, quantileLow, quantileHigh, nullptr);
 
                     auto stackedRGBPatch = std::make_shared<RGBImage>(stackedR, stackedG, stackedB);
                     if (!fits.writeImagePatch(tempOutPath, stackedRGBPatch, xStart, yStart)) {
@@ -509,6 +568,11 @@ void StackingAlgorithm::execute(WorkspaceRegistry& workspace,
                     }
                 } else {
                     std::vector<GrayscaleImagePtr> patches(numSelected);
+                    std::vector<GrayscaleImagePtr> weightPatches;
+                    bool isDrizzled = coalesced.fitsKeywords.count("DRIZZLED") > 0;
+                    if (isDrizzled) {
+                        weightPatches.resize(numSelected);
+                    }
 
                     std::string errorMsg;
                     #pragma omp parallel
@@ -519,11 +583,16 @@ void StackingAlgorithm::execute(WorkspaceRegistry& workspace,
                             if (!errorMsg.empty()) continue;
                             try {
                                 int idx = selectedIndices[i];
-                                ImageVariant patchVar = loadPatch(batch, idx, xStart, yStart, patchW, patchH, threadFits);
+                                ImageVariant patchVar = loadPatch(batch, idx, xStart, yStart, patchW, patchH, threadFits, 0);
                                 if (!std::holds_alternative<GrayscaleImagePtr>(patchVar)) {
                                     throw std::runtime_error("Expected Grayscale patch from frame");
                                 }
                                 patches[i] = std::get<GrayscaleImagePtr>(patchVar);
+                                
+                                if (isDrizzled) {
+                                    ImageVariant weightVar = loadPatch(batch, idx, xStart, yStart, patchW, patchH, threadFits, 1);
+                                    weightPatches[i] = std::get<GrayscaleImagePtr>(weightVar);
+                                }
                             } catch (const std::exception& e) {
                                 #pragma omp critical
                                 {
@@ -539,7 +608,7 @@ void StackingAlgorithm::execute(WorkspaceRegistry& workspace,
                         throw std::runtime_error(errorMsg);
                     }
 
-                    auto stackedPatch = stackChannels(patches, coeffAG, coeffBG, method, rejection, sigmaLow, sigmaHigh, quantileLow, quantileHigh, nullptr);
+                    auto stackedPatch = stackChannels(patches, weightPatches, coeffAG, coeffBG, method, rejection, sigmaLow, sigmaHigh, quantileLow, quantileHigh, nullptr);
                     if (!fits.writeImagePatch(tempOutPath, stackedPatch, xStart, yStart)) {
                         throw std::runtime_error("Failed to write stacked patch to " + tempOutPath);
                     }
@@ -563,48 +632,85 @@ void StackingAlgorithm::execute(WorkspaceRegistry& workspace,
                         .arg(QString::fromStdString(outputName)));
     } else {
         if (isRGB) {
-            std::vector<GrayscaleImagePtr> rChannels;
-            std::vector<GrayscaleImagePtr> gChannels;
-            std::vector<GrayscaleImagePtr> bChannels;
+                    std::vector<GrayscaleImagePtr> rChannels;
+                    std::vector<GrayscaleImagePtr> gChannels;
+                    std::vector<GrayscaleImagePtr> bChannels;
+                    rChannels.reserve(numSelected);
+                    gChannels.reserve(numSelected);
+                    bChannels.reserve(numSelected);
+                    
+                    std::vector<GrayscaleImagePtr> rWeightChannels;
+                    std::vector<GrayscaleImagePtr> gWeightChannels;
+                    std::vector<GrayscaleImagePtr> bWeightChannels;
+                    bool isDrizzled = coalesced.fitsKeywords.count("DRIZZLED") > 0;
+                    if (isDrizzled) {
+                        rWeightChannels.reserve(numSelected);
+                        gWeightChannels.reserve(numSelected);
+                        bWeightChannels.reserve(numSelected);
+                    }
 
-            rChannels.reserve(numSelected);
-            gChannels.reserve(numSelected);
-            bChannels.reserve(numSelected);
+                    for (int idx : selectedIndices) {
+                        std::string filepath = batch->frameFilepath(idx);
+                        FitsIO fits;
+                        
+                        if (!filepath.empty() && isDrizzled) {
+                            rChannels.push_back(std::get<GrayscaleImagePtr>(fits.readImagePatch(filepath, 0, 0, width, height, 0)));
+                            rWeightChannels.push_back(std::get<GrayscaleImagePtr>(fits.readImagePatch(filepath, 0, 0, width, height, 1)));
+                            gChannels.push_back(std::get<GrayscaleImagePtr>(fits.readImagePatch(filepath, 0, 0, width, height, 2)));
+                            gWeightChannels.push_back(std::get<GrayscaleImagePtr>(fits.readImagePatch(filepath, 0, 0, width, height, 3)));
+                            bChannels.push_back(std::get<GrayscaleImagePtr>(fits.readImagePatch(filepath, 0, 0, width, height, 4)));
+                            bWeightChannels.push_back(std::get<GrayscaleImagePtr>(fits.readImagePatch(filepath, 0, 0, width, height, 5)));
+                        } else {
+                            ImageVariant frame = batch->getImage(idx);
+                            if (!std::holds_alternative<RGBImagePtr>(frame)) {
+                                throw std::runtime_error("Inconsistent batch: mixed RGB and Grayscale frames");
+                            }
+                            auto rgb = std::get<RGBImagePtr>(frame);
+                            rChannels.push_back(rgb->r());
+                            gChannels.push_back(rgb->g());
+                            bChannels.push_back(rgb->b());
+                        }
+                    }
 
-            for (int idx : selectedIndices) {
-                ImageVariant frame = batch->getImage(idx);
-                if (!std::holds_alternative<RGBImagePtr>(frame)) {
-                    throw std::runtime_error("Inconsistent batch: mixed RGB and Grayscale frames");
-                }
-                auto rgb = std::get<RGBImagePtr>(frame);
-                rChannels.push_back(rgb->r());
-                gChannels.push_back(rgb->g());
-                bChannels.push_back(rgb->b());
-            }
+                    auto stackedR = stackChannels(rChannels, rWeightChannels, coeffAR, coeffBR, method, rejection, sigmaLow, sigmaHigh, quantileLow, quantileHigh,
+                                                  [progress](int p) { if (progress) progress(p / 3); });
+                    auto stackedG = stackChannels(gChannels, gWeightChannels, coeffAG, coeffBG, method, rejection, sigmaLow, sigmaHigh, quantileLow, quantileHigh,
+                                                  [progress](int p) { if (progress) progress(33 + p / 3); });
+                    auto stackedB = stackChannels(bChannels, bWeightChannels, coeffAB, coeffBB, method, rejection, sigmaLow, sigmaHigh, quantileLow, quantileHigh,
+                                                  [progress](int p) { if (progress) progress(66 + p / 3); });
 
-            auto stackedR = stackChannels(rChannels, coeffAR, coeffBR, method, rejection, sigmaLow, sigmaHigh, quantileLow, quantileHigh,
-                                          [progress](int p) { if (progress) progress(p / 3); });
-            auto stackedG = stackChannels(gChannels, coeffAG, coeffBG, method, rejection, sigmaLow, sigmaHigh, quantileLow, quantileHigh,
-                                          [progress](int p) { if (progress) progress(33 + p / 3); });
-            auto stackedB = stackChannels(bChannels, coeffAB, coeffBB, method, rejection, sigmaLow, sigmaHigh, quantileLow, quantileHigh,
-                                          [progress](int p) { if (progress) progress(66 + p / 3); });
-
-            auto stackedRGB = std::make_shared<RGBImage>(stackedR, stackedG, stackedB);
-            stackedRGB->setMetadata(coalesced);
-            workspace.registerElement(outputName, stackedRGB);
+                    auto stackedRGB = std::make_shared<RGBImage>(stackedR, stackedG, stackedB);
+                    stackedRGB->setMetadata(coalesced);
+                    workspace.registerElement(outputName, stackedRGB);
         } else {
             std::vector<GrayscaleImagePtr> channels;
             channels.reserve(numSelected);
+            std::vector<GrayscaleImagePtr> weightChannels;
+            bool isDrizzled = coalesced.fitsKeywords.count("DRIZZLED") > 0;
+            if (isDrizzled) {
+                weightChannels.reserve(numSelected);
+            }
 
             for (int idx : selectedIndices) {
-                ImageVariant frame = batch->getImage(idx);
+                std::string filepath = batch->frameFilepath(idx);
+                FitsIO fits;
+                
+                ImageVariant frame;
+                if (!filepath.empty() && isDrizzled) {
+                    frame = fits.readImagePatch(filepath, 0, 0, width, height, 0);
+                    ImageVariant weightVar = fits.readImagePatch(filepath, 0, 0, width, height, 1);
+                    weightChannels.push_back(std::get<GrayscaleImagePtr>(weightVar));
+                } else {
+                    frame = batch->getImage(idx);
+                }
+                
                 if (!std::holds_alternative<GrayscaleImagePtr>(frame)) {
                     throw std::runtime_error("Inconsistent batch: mixed RGB and Grayscale frames");
                 }
                 channels.push_back(std::get<GrayscaleImagePtr>(frame));
             }
 
-            auto stackedGray = stackChannels(channels, coeffAG, coeffBG, method, rejection, sigmaLow, sigmaHigh, quantileLow, quantileHigh, progress);
+            auto stackedGray = stackChannels(channels, weightChannels, coeffAG, coeffBG, method, rejection, sigmaLow, sigmaHigh, quantileLow, quantileHigh, progress);
             stackedGray->setMetadata(coalesced);
             workspace.registerElement(outputName, stackedGray);
         }

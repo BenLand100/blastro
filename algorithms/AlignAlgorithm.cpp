@@ -224,14 +224,86 @@ void AlignAlgorithm::execute(WorkspaceRegistry& workspace,
         // Perform warping (backward-mapping interpolation, applying drizzle)
         if (std::holds_alternative<GrayscaleImagePtr>(frame)) {
             auto gray = std::get<GrayscaleImagePtr>(frame);
-            auto warped = Warping::warpGrayscale(gray, targetTransform, drizzleScale, interpolation);
-            warped->setMetadata(gray->metadata());
-            alignedFrame = warped;
+            if (interpolation == "drizzle") {
+                double dropShrink = config.count("drop_shrink") ? std::stod(config.at("drop_shrink")) : 1.0;
+                auto drizzleResult = Warping::warpDrizzleGrayscale(gray, targetTransform, drizzleScale, dropShrink);
+                auto dataImg = drizzleResult.first;
+                auto weightImg = drizzleResult.second;
+                if (dataImg && weightImg) {
+                    dataImg->setMetadata(gray->metadata());
+                    weightImg->setMetadata(gray->metadata());
+                    
+                    std::string origPath = batch->frameFilepath(i);
+                    std::string outFilename = TempDirectory::getIntermediateFileName(origPath, "_aligned", i);
+                    std::string fullOutPath = tempDir + "/" + outFilename;
+
+                    FitsIO writer;
+                    if (!writer.writeDrizzleImage(fullOutPath, dataImg, weightImg)) {
+                        throw std::runtime_error("Failed to write temporary aligned drizzle frame to " + fullOutPath);
+                    }
+                    
+                    names[i] = batch->frameName(i) + "_aligned";
+                    filepaths[i] = fullOutPath;
+                    
+                    FrameMetadata finalMeta = meta;
+                    finalMeta.dx = targetDx;
+                    finalMeta.dy = targetDy;
+                    finalMeta.theta = targetTheta;
+                    finalMeta.transform = targetTransform;
+                    finalMetadata[i] = finalMeta;
+
+                    if (evictCache) {
+                        batch->clearCache(i);
+                    }
+                    continue;
+                }
+            } else {
+                auto warped = Warping::warpGrayscale(gray, targetTransform, drizzleScale, interpolation);
+                warped->setMetadata(gray->metadata());
+                alignedFrame = warped;
+            }
         } else if (std::holds_alternative<RGBImagePtr>(frame)) {
             auto rgb = std::get<RGBImagePtr>(frame);
-            auto warped = Warping::warpRGB(rgb, targetTransform, drizzleScale, interpolation);
-            warped->setMetadata(rgb->metadata());
-            alignedFrame = warped;
+            if (interpolation == "drizzle") {
+                double dropShrink = config.count("drop_shrink") ? std::stod(config.at("drop_shrink")) : 1.0;
+                
+                auto rResult = Warping::warpDrizzleGrayscale(rgb->r(), targetTransform, drizzleScale, dropShrink);
+                auto gResult = Warping::warpDrizzleGrayscale(rgb->g(), targetTransform, drizzleScale, dropShrink);
+                auto bResult = Warping::warpDrizzleGrayscale(rgb->b(), targetTransform, drizzleScale, dropShrink);
+                
+                if (rResult.first && gResult.first && bResult.first) {
+                    std::string origPath = batch->frameFilepath(i);
+                    std::string outFilename = TempDirectory::getIntermediateFileName(origPath, "_aligned", i);
+                    std::string fullOutPath = tempDir + "/" + outFilename;
+
+                    FitsIO writer;
+                    if (!writer.writeDrizzleRGBImage(fullOutPath, 
+                            rResult.first, rResult.second,
+                            gResult.first, gResult.second,
+                            bResult.first, bResult.second)) {
+                        throw std::runtime_error("Failed to write temporary aligned RGB drizzle frame to " + fullOutPath);
+                    }
+                    
+                    names[i] = batch->frameName(i) + "_aligned";
+                    filepaths[i] = fullOutPath;
+                    
+                    FrameMetadata finalMeta = meta;
+                    finalMeta.dx = targetDx;
+                    finalMeta.dy = targetDy;
+                    finalMeta.theta = targetTheta;
+                    finalMeta.transform = targetTransform;
+                    finalMetadata[i] = finalMeta;
+
+                    if (evictCache) {
+                        batch->clearCache(i);
+                    }
+                    continue;
+                }
+            } else {
+                auto warped = Warping::warpRGB(rgb, targetTransform, drizzleScale, interpolation);
+                warped->setMetadata(rgb->metadata());
+                alignedFrame = warped;
+            }
         }
 
         // Save aligned frame to a temporary FITS file

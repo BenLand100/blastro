@@ -68,7 +68,38 @@ static RGBImagePtr debayerFrame(GrayscaleImagePtr src, const std::string& patter
         bOffsetX = 0; bOffsetY = 1;
     }
 
-    if (method == "superpixel") {
+    if (method == "sparse") {
+        auto outRGB = std::make_shared<RGBImage>(w, h);
+        outRGB->setMetadata(src->metadata());
+        float* rData = outRGB->r()->buffer()->data();
+        float* gData = outRGB->g()->buffer()->data();
+        float* bData = outRGB->b()->buffer()->data();
+
+        // Initialize all channels to NaN
+        std::fill(rData, rData + w * h, std::numeric_limits<float>::quiet_NaN());
+        std::fill(gData, gData + w * h, std::numeric_limits<float>::quiet_NaN());
+        std::fill(bData, bData + w * h, std::numeric_limits<float>::quiet_NaN());
+
+        #pragma omp parallel for collapse(2)
+        for (int y = 0; y < h; ++y) {
+            for (int x = 0; x < w; ++x) {
+                int pxMode = x % 2;
+                int pyMode = y % 2;
+
+                int outIdx = y * w + x;
+                float val = inData[outIdx];
+
+                if (pxMode == rOffsetX && pyMode == rOffsetY) {
+                    rData[outIdx] = val;
+                } else if (pxMode == bOffsetX && pyMode == bOffsetY) {
+                    bData[outIdx] = val;
+                } else if ((pxMode == g1OffsetX && pyMode == g1OffsetY) || (pxMode == g2OffsetX && pyMode == g2OffsetY)) {
+                    gData[outIdx] = val;
+                }
+            }
+        }
+        return outRGB;
+    } else if (method == "superpixel") {
         // Superpixel method: halves resolution
         int outW = w / 2;
         int outH = h / 2;

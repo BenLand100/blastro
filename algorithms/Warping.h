@@ -39,6 +39,14 @@ public:
                                const std::array<double, 6>& transform,
                                double drizzleScale = 1.0,
                                const std::string& interpolation = "bilinear");
+
+    // Drizzle forward-mapping
+    // Returns a pair: {Data Image, Weight Image}
+    static std::pair<GrayscaleImagePtr, GrayscaleImagePtr> warpDrizzleGrayscale(
+        GrayscaleImagePtr src,
+        const std::array<double, 6>& transform,
+        double drizzleScale = 1.0,
+        double dropShrink = 1.0);
 };
 
 } // namespace blastro

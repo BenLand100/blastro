@@ -1867,6 +1867,49 @@ void testPixelMathNamingAndExecution() {
     std::cout << "[+] PixelMath Naming and Execution Test PASSED." << std::endl << std::endl;
 }
 
+void testPixelMathRGBMode() {
+    std::cout << "Running PixelMath RGB Mode Test..." << std::endl;
+    WorkspaceRegistry workspace;
+
+    // Create Grayscale image "KImage"
+    auto imgK = std::make_shared<GrayscaleImage>(2, 2);
+    for (int i = 0; i < 4; ++i) imgK->buffer()->data()[i] = 0.5f;
+    workspace.registerElement("KImage", imgK);
+
+    // Create RGB image "CImage"
+    auto imgC = std::make_shared<RGBImage>(2, 2);
+    for (int i = 0; i < 4; ++i) {
+        imgC->r()->buffer()->data()[i] = 0.2f;
+        imgC->g()->buffer()->data()[i] = 0.4f;
+        imgC->b()->buffer()->data()[i] = 0.8f;
+    }
+    workspace.registerElement("CImage", imgC);
+
+    // Execute PixelMath in RGB space
+    std::map<std::string, std::string> pmConfig = {
+        {"color_space", "RGB"},
+        {"expr_r", "CImage_r + KImage"},
+        {"expr_g", "CImage_g * 2.0"},
+        {"expr_b", "CImage_b - 0.1"},
+        {"output_name", "pm_rgb_out"},
+        {"threads", "1"}
+    };
+
+    PixelMathAlgorithm pmAlg;
+    pmAlg.execute(workspace, pmConfig);
+
+    assert(workspace.contains("pm_rgb_out"));
+    auto pmOutputElem = workspace.getElement("pm_rgb_out");
+    assert(std::holds_alternative<RGBImagePtr>(pmOutputElem));
+    auto pmOut = std::get<RGBImagePtr>(pmOutputElem);
+
+    assert(approxEqual(pmOut->r()->buffer()->pixel(0, 0), 0.7f, 1e-4));
+    assert(approxEqual(pmOut->g()->buffer()->pixel(0, 0), 0.8f, 1e-4));
+    assert(approxEqual(pmOut->b()->buffer()->pixel(0, 0), 0.7f, 1e-4));
+
+    std::cout << "[+] PixelMath RGB Mode Test PASSED." << std::endl << std::endl;
+}
+
 int main() {
     std::cout << "========================================" << std::endl;
     std::cout << "Starting Blastro Algorithm Unit Tests..." << std::endl;
@@ -1885,6 +1928,7 @@ int main() {
     testMutualStackAlignment();
     testPlatesolvingAndMetadataPreservation();
     testPixelMathNamingAndExecution();
+    testPixelMathRGBMode();
 
     std::cout << "========================================" << std::endl;
     std::cout << "All Blastro Algorithm Unit Tests PASSED!" << std::endl;

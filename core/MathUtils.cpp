@@ -426,5 +426,82 @@ NelderMeadResult nelderMead(std::function<double(const std::vector<double>&)> f,
     return res;
 }
 
+MonotoneCubicSpline::MonotoneCubicSpline(const std::vector<double>& x_in, const std::vector<double>& y_in) {
+    if (x_in.size() != y_in.size() || x_in.empty()) {
+        return;
+    }
+    x = x_in;
+    y = y_in;
+    int n = x.size();
+    m.resize(n, 0.0);
+
+    if (n == 1) {
+        return;
+    }
+    if (n == 2) {
+        m[0] = m[1] = (y[1] - y[0]) / (x[1] - x[0]);
+        return;
+    }
+
+    std::vector<double> secant(n - 1);
+    for (int i = 0; i < n - 1; ++i) {
+        secant[i] = (y[i + 1] - y[i]) / (x[i + 1] - x[i]);
+    }
+
+    m[0] = secant[0];
+    m[n - 1] = secant[n - 2];
+    for (int i = 1; i < n - 1; ++i) {
+        if (secant[i - 1] * secant[i] <= 0.0) {
+            m[i] = 0.0;
+        } else {
+            // Harmonic mean of secants
+            double w1 = 2 * (x[i + 1] - x[i]) + (x[i] - x[i - 1]);
+            double w2 = (x[i + 1] - x[i]) + 2 * (x[i] - x[i - 1]);
+            if (w1 + w2 == 0.0) m[i] = 0.0;
+            else m[i] = (w1 + w2) / (w1 / secant[i - 1] + w2 / secant[i]);
+        }
+    }
+}
+
+double MonotoneCubicSpline::evaluate(double x_val) const {
+    if (x.empty()) return 0.0;
+    if (x.size() == 1) return y[0];
+    if (x_val <= x.front()) return y.front();
+    if (x_val >= x.back()) return y.back();
+
+    auto it = std::lower_bound(x.begin(), x.end(), x_val);
+    int i = std::distance(x.begin(), it) - 1;
+    if (i < 0) i = 0;
+
+    double h = x[i + 1] - x[i];
+    if (h == 0.0) return y[i];
+
+    double t = (x_val - x[i]) / h;
+    double t2 = t * t;
+    double t3 = t2 * t;
+
+    double h00 = 2 * t3 - 3 * t2 + 1;
+    double h10 = t3 - 2 * t2 + t;
+    double h01 = -2 * t3 + 3 * t2;
+    double h11 = t3 - t2;
+
+    return h00 * y[i] + h10 * h * m[i] + h01 * y[i + 1] + h11 * h * m[i + 1];
+}
+
+std::vector<float> computeCurvesLUT(const std::vector<double>& x_in, const std::vector<double>& y_in) {
+    MonotoneCubicSpline spline(x_in, y_in);
+    int lutSize = 65536;
+    std::vector<float> lut(lutSize);
+    if (x_in.empty()) {
+        for (int i = 0; i < lutSize; ++i) lut[i] = static_cast<float>(i) / (lutSize - 1);
+        return lut;
+    }
+    for (int i = 0; i < lutSize; ++i) {
+        double x_val = static_cast<double>(i) / (lutSize - 1);
+        lut[i] = std::clamp(static_cast<float>(spline.evaluate(x_val)), 0.0f, 1.0f);
+    }
+    return lut;
+}
+
 } // namespace MathUtils
 } // namespace blastro

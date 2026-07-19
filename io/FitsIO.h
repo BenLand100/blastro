@@ -60,6 +60,11 @@ public:
     // ImageWriter interface
     bool writeImage(const std::string& filepath, const ImageVariant& image) override;
     bool writeBatch(const std::string& filepath, ImageBatchPtr batch);
+    bool writeDrizzleImage(const std::string& filepath, GrayscaleImagePtr data, GrayscaleImagePtr weight);
+    bool writeDrizzleRGBImage(const std::string& filepath, 
+                              GrayscaleImagePtr rData, GrayscaleImagePtr rWeight,
+                              GrayscaleImagePtr gData, GrayscaleImagePtr gWeight,
+                              GrayscaleImagePtr bData, GrayscaleImagePtr bWeight);
 
 private:
     std::map<std::string, std::shared_ptr<CCfits::FITS>> m_readCache;
