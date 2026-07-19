@@ -2036,6 +2036,99 @@ void testDrizzleReadWrite() {
     QDir(QString::fromStdString(tempDir)).removeRecursively();
 }
 
+void testPreprocessingPostprocessing() {
+    std::cout << "Running Preprocessing Pipeline Postprocessing Test..." << std::endl;
+
+    std::string tempDir = TempDirectory::createTempDir("postprocess_test");
+    WorkspaceRegistry workspace;
+
+    auto img1 = std::make_shared<GrayscaleImage>(64, 64);
+    auto img2 = std::make_shared<GrayscaleImage>(64, 64);
+
+    img1->buffer()->data()[0] = -0.25f;
+    img1->buffer()->data()[1] = 1.50f;
+    img1->buffer()->data()[2] = 0.50f;
+    img1->metadata().fitsKeywords["CRVAL1"] = "188.736";
+    img1->metadata().fitsKeywords["CRVAL2"] = "45.241";
+    img1->metadata().fitsKeywords["FOCALLEN"] = "850.0";
+    img1->metadata().fitsKeywords["XPIXSZ"] = "3.76";
+
+    img2->buffer()->data()[0] = 0.10f;
+    img2->buffer()->data()[1] = 0.80f;
+
+    std::string fits1 = tempDir + "/light_001.fits";
+    std::string fits2 = tempDir + "/light_002.fits";
+    FitsIO fits;
+    fits.writeImage(fits1, ImageVariant{img1});
+    fits.writeImage(fits2, ImageVariant{img2});
+
+    FitsHeaderInfo sampledInfo;
+    bool readOk = FitsIO::readHeaderInfo(fits1, sampledInfo);
+    assert(readOk && "readHeaderInfo failed on written FITS");
+    assert(sampledInfo.hasRaDec && std::abs(sampledInfo.raHint - 188.736) < 0.001 && std::abs(sampledInfo.decHint - 45.241) < 0.001);
+    assert(std::abs(sampledInfo.focalLength - 850.0) < 0.1);
+    assert(std::abs(sampledInfo.pixelSize - 3.76) < 0.01);
+
+    std::vector<std::string> paths = {fits1, fits2};
+    auto batch = fits.readBatch(paths);
+    FrameMetadata meta1 = batch->frameMetadata(0);
+    meta1.registered = true;
+    batch->setFrameMetadata(0, meta1);
+    FrameMetadata meta2 = batch->frameMetadata(1);
+    meta2.registered = true;
+    batch->setFrameMetadata(1, meta2);
+
+    workspace.registerElement("preprocessed_lights_L", batch);
+
+    std::map<std::string, std::string> config = {
+        {"stage", "align_stack"},
+        {"registered_light_batch_name", "preprocessed_lights_L"},
+        {"out_dir", tempDir},
+        {"run_bge", "false"},
+        {"align_mutually", "false"},
+        {"light_scale_additive", "false"},
+        {"light_scale_multiplicative", "false"},
+        {"correct_pedestal", "true"},
+        {"clamp_max", "true"},
+        {"platesolve_stacks", "false"}
+    };
+
+    auto steps = PreprocessingPipeline::getPlannedSteps(config);
+    bool foundPostprocessStep = false;
+    for (const auto& step : steps) {
+        if (step == "Stack (Postprocess) L") {
+            foundPostprocessStep = true;
+        }
+    }
+    assert(foundPostprocessStep && "Planned steps missing 'Stack (Postprocess) L'");
+
+    PreprocessingPipeline pipeline;
+    pipeline.execute(workspace, config);
+
+    assert(workspace.contains("preprocessed_lights_L_stacked") && "Master stacked image not found");
+    auto masterVar = workspace.getElement("preprocessed_lights_L_stacked");
+    assert(std::holds_alternative<GrayscaleImagePtr>(masterVar) && "Master image is not GrayscaleImage");
+    auto masterImg = std::get<GrayscaleImagePtr>(masterVar);
+
+    float* data = masterImg->buffer()->data();
+    int numPixels = masterImg->width() * masterImg->height();
+    float minVal = std::numeric_limits<float>::max();
+    float maxVal = -std::numeric_limits<float>::max();
+    for (int i = 0; i < numPixels; ++i) {
+        if (!std::isnan(data[i])) {
+            if (data[i] < minVal) minVal = data[i];
+            if (data[i] > maxVal) maxVal = data[i];
+        }
+    }
+
+    std::cout << "  Postprocessed master min: " << minVal << ", max: " << maxVal << std::endl;
+    assert(minVal >= 0.0f && "Pedestal correction failed: minimum is negative!");
+    assert(maxVal <= 1.0f && "Max clamping failed: maximum exceeds 1.0!");
+
+    std::cout << "[+] Preprocessing Pipeline Postprocessing Test PASSED." << std::endl << std::endl;
+    QDir(QString::fromStdString(tempDir)).removeRecursively();
+}
+
 int main() {
     std::cout << "========================================" << std::endl;
     std::cout << "Starting Blastro Algorithm Unit Tests..." << std::endl;
@@ -2058,6 +2151,7 @@ int main() {
     testPixelMathDimensionMismatch();
     testPixelMathPrecedence();
     testDrizzleReadWrite();
+    testPreprocessingPostprocessing();
 
     std::cout << "========================================" << std::endl;
     std::cout << "All Blastro Algorithm Unit Tests PASSED!" << std::endl;

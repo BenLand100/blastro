@@ -127,6 +127,16 @@ PreprocessingWizardDialog::PreprocessingWizardDialog(WorkspaceRegistry& workspac
       m_bgeMaxStructureSpin(new QDoubleSpinBox(this)),
       m_lightScaleAdditiveChk(new QCheckBox(this)),
       m_lightScaleMultiplicativeChk(new QCheckBox(this)),
+      // Postprocessing
+      m_correctPedestalChk(new QCheckBox("Correct Pedestal (Remove Negative Values)", this)),
+      m_clampMaxChk(new QCheckBox("Clamp Maximum Values to 1.0", this)),
+      m_platesolveStacksChk(new QCheckBox("Platesolve Stacks", this)),
+      m_platesolveSolverCombo(new QComboBox(this)),
+      m_platesolveBlindChk(new QCheckBox("Blind Solve", this)),
+      m_platesolveRaSpin(new QDoubleSpinBox(this)),
+      m_platesolveDecSpin(new QDoubleSpinBox(this)),
+      m_platesolveFocalLengthSpin(new QDoubleSpinBox(this)),
+      m_platesolvePixelSizeSpin(new QDoubleSpinBox(this)),
       // Other
       m_previewTree(new QTreeWidget(this)),
       m_processTree(new QTreeWidget(this)),
@@ -632,6 +642,94 @@ PreprocessingWizardDialog::PreprocessingWizardDialog(WorkspaceRegistry& workspac
         form->addRow("Multiplicative Normalization:", m_lightScaleMultiplicativeChk);
     }
 
+    controlLayout->addSpacing(4);
+
+    // ── Section 8: Postprocessing Settings (collapsed by default) ─────────────
+    {
+        auto [hdr, body, form] = makeSectionHeader("Postprocessing Settings", false);
+        controlLayout->addWidget(hdr);
+        controlLayout->addWidget(body);
+
+        m_correctPedestalChk->setChecked(false);
+        form->addRow("", m_correctPedestalChk);
+
+        m_clampMaxChk->setChecked(false);
+        form->addRow("", m_clampMaxChk);
+
+        m_platesolveStacksChk->setChecked(false);
+        form->addRow("", m_platesolveStacksChk);
+
+        m_platesolveSolverCombo->addItem("ASTAP", "astap");
+        m_platesolveSolverCombo->addItem("solve-field (Astrometry.net)", "solve-field");
+        form->addRow("Solver Engine:", m_platesolveSolverCombo);
+
+        m_platesolveBlindChk->setChecked(true);
+        form->addRow("", m_platesolveBlindChk);
+
+        m_platesolveRaSpin->setRange(0.0, 360.0);
+        m_platesolveRaSpin->setValue(0.0);
+        m_platesolveRaSpin->setSuffix(" deg");
+        m_platesolveRaSpin->setEnabled(false);
+        form->addRow("RA Hint:", m_platesolveRaSpin);
+
+        m_platesolveDecSpin->setRange(-90.0, 90.0);
+        m_platesolveDecSpin->setValue(0.0);
+        m_platesolveDecSpin->setSuffix(" deg");
+        m_platesolveDecSpin->setEnabled(false);
+        form->addRow("DEC Hint:", m_platesolveDecSpin);
+
+        connect(m_platesolveBlindChk, &QCheckBox::toggled, this, [this](bool checked) {
+            m_platesolveRaSpin->setEnabled(!checked && m_platesolveStacksChk->isChecked());
+            m_platesolveDecSpin->setEnabled(!checked && m_platesolveStacksChk->isChecked());
+        });
+
+        m_platesolveFocalLengthSpin->setRange(0.0, 100000.0);
+        m_platesolveFocalLengthSpin->setValue(0.0);
+        m_platesolveFocalLengthSpin->setSuffix(" mm (0 for auto)");
+        form->addRow("Focal Length:", m_platesolveFocalLengthSpin);
+
+        m_platesolvePixelSizeSpin->setRange(0.0, 100.0);
+        m_platesolvePixelSizeSpin->setValue(0.0);
+        m_platesolvePixelSizeSpin->setSuffix(" um (0 for auto)");
+        form->addRow("Pixel Size:", m_platesolvePixelSizeSpin);
+
+        auto updatePlatesolveEnabled = [this]() {
+            bool checked = m_platesolveStacksChk->isChecked();
+            m_platesolveSolverCombo->setEnabled(checked);
+            m_platesolveBlindChk->setEnabled(checked);
+            m_platesolveRaSpin->setEnabled(checked && !m_platesolveBlindChk->isChecked());
+            m_platesolveDecSpin->setEnabled(checked && !m_platesolveBlindChk->isChecked());
+            m_platesolveFocalLengthSpin->setEnabled(checked);
+            m_platesolvePixelSizeSpin->setEnabled(checked);
+        };
+        updatePlatesolveEnabled();
+        connect(m_platesolveStacksChk, &QCheckBox::toggled, this, [updatePlatesolveEnabled](bool) {
+            updatePlatesolveEnabled();
+        });
+
+        auto markRaDecManual = [this]() {
+            if (!m_isAutoUpdatingHints) {
+                m_raManuallyEdited = true;
+                m_decManuallyEdited = true;
+            }
+        };
+        connect(m_platesolveRaSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this, markRaDecManual);
+        connect(m_platesolveDecSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this, markRaDecManual);
+        connect(m_platesolveBlindChk, &QCheckBox::toggled, this, markRaDecManual);
+
+        connect(m_platesolveFocalLengthSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this, [this](double val) {
+            if (!m_isAutoUpdatingHints && val > 0.0) {
+                m_focalLengthManuallyEdited = true;
+            }
+        });
+
+        connect(m_platesolvePixelSizeSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this, [this](double val) {
+            if (!m_isAutoUpdatingHints && val > 0.0) {
+                m_pixelSizeManuallyEdited = true;
+            }
+        });
+    }
+
     controlLayout->addStretch(1);
     controlScroll->setWidget(controlScrollContent);
     controlTabOuterLayout->addWidget(controlScroll);
@@ -876,7 +974,58 @@ void PreprocessingWizardDialog::addFilesList(const QStringList& filepaths) {
     m_filesTable->setSortingEnabled(true);
     m_filesTable->resizeColumnsToContents();
 
+    sampleLightFrameHints();
     updatePreview();
+}
+
+void PreprocessingWizardDialog::sampleLightFrameHints(const std::vector<QString>& newLightPaths) {
+    std::vector<QString> lightPathsToSample = newLightPaths;
+    if (lightPathsToSample.empty()) {
+        for (const auto& f : m_stagedFiles) {
+            if (f.imageType == "Light") {
+                lightPathsToSample.push_back(f.filepath);
+            }
+        }
+    }
+
+    if (lightPathsToSample.empty()) return;
+
+    size_t sampleCount = std::min<size_t>(5, lightPathsToSample.size());
+    for (size_t i = 0; i < sampleCount; ++i) {
+        FitsHeaderInfo info;
+        if (!FitsIO::readHeaderInfo(lightPathsToSample[i].toStdString(), info)) {
+            continue;
+        }
+
+        // RA / DEC hint
+        bool canUpdateRaDec = !m_raManuallyEdited && (m_platesolveBlindChk->isChecked() || m_autoUpdatedRaDec || (m_platesolveRaSpin->value() == 0.0 && m_platesolveDecSpin->value() == 0.0));
+        if (canUpdateRaDec && info.hasRaDec) {
+            m_isAutoUpdatingHints = true;
+            m_platesolveRaSpin->setValue(info.raHint);
+            m_platesolveDecSpin->setValue(info.decHint);
+            m_platesolveBlindChk->setChecked(false);
+            m_autoUpdatedRaDec = true;
+            m_isAutoUpdatingHints = false;
+        }
+
+        // Focal Length hint
+        bool canUpdateFocalLength = !m_focalLengthManuallyEdited && (m_autoUpdatedFocalLength || m_platesolveFocalLengthSpin->value() == 0.0);
+        if (canUpdateFocalLength && info.focalLength > 0.0) {
+            m_isAutoUpdatingHints = true;
+            m_platesolveFocalLengthSpin->setValue(info.focalLength);
+            m_autoUpdatedFocalLength = true;
+            m_isAutoUpdatingHints = false;
+        }
+
+        // Pixel Size hint
+        bool canUpdatePixelSize = !m_pixelSizeManuallyEdited && (m_autoUpdatedPixelSize || m_platesolvePixelSizeSpin->value() == 0.0);
+        if (canUpdatePixelSize && info.pixelSize > 0.0) {
+            m_isAutoUpdatingHints = true;
+            m_platesolvePixelSizeSpin->setValue(info.pixelSize);
+            m_autoUpdatedPixelSize = true;
+            m_isAutoUpdatingHints = false;
+        }
+    }
 }
 
 void PreprocessingWizardDialog::onRemoveSelected() {
@@ -1699,6 +1848,17 @@ void PreprocessingWizardDialog::onResumeStacking() {
     config["scale_additive"]     = m_lightScaleAdditiveChk->isChecked() ? "true" : "false";
     config["scale_multiplicative"] = m_lightScaleMultiplicativeChk->isChecked() ? "true" : "false";
 
+    // Postprocessing settings
+    config["correct_pedestal"] = m_correctPedestalChk->isChecked() ? "true" : "false";
+    config["clamp_max"] = m_clampMaxChk->isChecked() ? "true" : "false";
+    config["platesolve_stacks"] = m_platesolveStacksChk->isChecked() ? "true" : "false";
+    config["platesolve_solver"] = m_platesolveSolverCombo->currentData().toString().toStdString();
+    config["platesolve_blind"] = m_platesolveBlindChk->isChecked() ? "true" : "false";
+    config["platesolve_ra_hint"] = QString::number(m_platesolveRaSpin->value()).toStdString();
+    config["platesolve_dec_hint"] = QString::number(m_platesolveDecSpin->value()).toStdString();
+    config["platesolve_focal_length"] = QString::number(m_platesolveFocalLengthSpin->value()).toStdString();
+    config["platesolve_pixel_size"] = QString::number(m_platesolvePixelSizeSpin->value()).toStdString();
+
     m_progressBar->setRange(0, 0);
 
     // Disable other tabs and main window controls to keep Process Console responsive
@@ -2014,7 +2174,11 @@ int PreprocessingWizardDialog::getTabIndex(const QString& label) const {
 }
 
 static QString getStageFromStepName(const std::string& stepName) {
-    if (stepName.rfind("Stack ", 0) == 0 &&
+    if (stepName.rfind("Stack (Postprocess)", 0) == 0) {
+        return "Stack (Postprocess)";
+    } else if (stepName.rfind("Stack (Platesolve)", 0) == 0) {
+        return "Stack (Platesolve)";
+    } else if (stepName.rfind("Stack ", 0) == 0 &&
         (stepName.find("master_bias") != std::string::npos ||
          stepName.find("master_dark") != std::string::npos ||
          stepName.find("master_flat") != std::string::npos)) {
@@ -2078,6 +2242,17 @@ void PreprocessingWizardDialog::updateStepsPlan(const std::string& dummyStage) {
     m_stage1StepCount = stage1Steps.size();
 
     config["stage"] = "align_stack";
+    config["run_bge"] = m_runBgeChk->isChecked() ? "true" : "false";
+    config["correct_pedestal"] = m_correctPedestalChk->isChecked() ? "true" : "false";
+    config["clamp_max"] = m_clampMaxChk->isChecked() ? "true" : "false";
+    config["platesolve_stacks"] = m_platesolveStacksChk->isChecked() ? "true" : "false";
+    config["platesolve_solver"] = m_platesolveSolverCombo->currentData().toString().toStdString();
+    config["platesolve_blind"] = m_platesolveBlindChk->isChecked() ? "true" : "false";
+    config["platesolve_ra_hint"] = QString::number(m_platesolveRaSpin->value()).toStdString();
+    config["platesolve_dec_hint"] = QString::number(m_platesolveDecSpin->value()).toStdString();
+    config["platesolve_focal_length"] = QString::number(m_platesolveFocalLengthSpin->value()).toStdString();
+    config["platesolve_pixel_size"] = QString::number(m_platesolvePixelSizeSpin->value()).toStdString();
+
     std::string alignMethod = m_alignMethodCombo->currentData().toString().toStdString();
     if (alignMethod == "drizzle") {
         config["interpolation_method"] = "drizzle";
@@ -2379,10 +2554,24 @@ QJsonObject PreprocessingWizardDialog::serializeControlState() const {
     // Scaling Normalizations
     obj["scale_additive"] = m_lightScaleAdditiveChk->isChecked();
     obj["scale_multiplicative"] = m_lightScaleMultiplicativeChk->isChecked();
+    // Postprocessing
+    obj["correct_pedestal"] = m_correctPedestalChk->isChecked();
+    obj["clamp_max"] = m_clampMaxChk->isChecked();
+    obj["platesolve_stacks"] = m_platesolveStacksChk->isChecked();
+    obj["platesolve_solver"] = m_platesolveSolverCombo->currentData().toString();
+    obj["platesolve_blind"] = m_platesolveBlindChk->isChecked();
+    obj["platesolve_ra_hint"] = m_platesolveRaSpin->value();
+    obj["platesolve_dec_hint"] = m_platesolveDecSpin->value();
+    obj["platesolve_focal_length"] = m_platesolveFocalLengthSpin->value();
+    obj["platesolve_pixel_size"] = m_platesolvePixelSizeSpin->value();
+    obj["auto_updated_radec"] = m_autoUpdatedRaDec;
+    obj["auto_updated_focal_length"] = m_autoUpdatedFocalLength;
+    obj["auto_updated_pixel_size"] = m_autoUpdatedPixelSize;
     return obj;
 }
 
 void PreprocessingWizardDialog::restoreControlState(const QJsonObject& obj) {
+    m_isAutoUpdatingHints = true;
     auto setCombo = [](QComboBox* combo, const QString& data) {
         int idx = combo->findData(data);
         if (idx >= 0) combo->setCurrentIndex(idx);
@@ -2445,6 +2634,19 @@ void PreprocessingWizardDialog::restoreControlState(const QJsonObject& obj) {
     if (obj.contains("bge_max_structure")) m_bgeMaxStructureSpin->setValue(obj["bge_max_structure"].toDouble());
     if (obj.contains("scale_additive")) m_lightScaleAdditiveChk->setChecked(obj["scale_additive"].toBool());
     if (obj.contains("scale_multiplicative")) m_lightScaleMultiplicativeChk->setChecked(obj["scale_multiplicative"].toBool());
+    if (obj.contains("correct_pedestal")) m_correctPedestalChk->setChecked(obj["correct_pedestal"].toBool());
+    if (obj.contains("clamp_max")) m_clampMaxChk->setChecked(obj["clamp_max"].toBool());
+    if (obj.contains("platesolve_stacks")) m_platesolveStacksChk->setChecked(obj["platesolve_stacks"].toBool());
+    if (obj.contains("platesolve_solver")) setCombo(m_platesolveSolverCombo, obj["platesolve_solver"].toString());
+    if (obj.contains("platesolve_blind")) m_platesolveBlindChk->setChecked(obj["platesolve_blind"].toBool());
+    if (obj.contains("platesolve_ra_hint")) m_platesolveRaSpin->setValue(obj["platesolve_ra_hint"].toDouble());
+    if (obj.contains("platesolve_dec_hint")) m_platesolveDecSpin->setValue(obj["platesolve_dec_hint"].toDouble());
+    if (obj.contains("platesolve_focal_length")) m_platesolveFocalLengthSpin->setValue(obj["platesolve_focal_length"].toDouble());
+    if (obj.contains("platesolve_pixel_size")) m_platesolvePixelSizeSpin->setValue(obj["platesolve_pixel_size"].toDouble());
+    if (obj.contains("auto_updated_radec")) m_autoUpdatedRaDec = obj["auto_updated_radec"].toBool();
+    if (obj.contains("auto_updated_focal_length")) m_autoUpdatedFocalLength = obj["auto_updated_focal_length"].toBool();
+    if (obj.contains("auto_updated_pixel_size")) m_autoUpdatedPixelSize = obj["auto_updated_pixel_size"].toBool();
+    m_isAutoUpdatingHints = false;
 }
 
 void PreprocessingWizardDialog::onAlignMethodChanged(int index) {

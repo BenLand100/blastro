@@ -24,6 +24,7 @@
 #include "StarFindingAlgorithm.h"
 #include "BackgroundExtractionAlgorithm.h"
 #include "AlignAlgorithm.h"
+#include "PlatesolveAlgorithm.h"
 #include "core/Logger.h"
 #include "core/TempDirectory.h"
 #include "core/MathUtils.h"
@@ -196,7 +197,7 @@ void PreprocessingPipeline::execute(WorkspaceRegistry& workspace,
     int currentStepIndex = 0;
     QElapsedTimer stepTimer;
 
-    auto runStep = [&](Algorithm& alg, const std::map<std::string, std::string>& algConfig) {
+    auto runStep = [&](Algorithm& alg, const std::map<std::string, std::string>& algConfig, std::function<void()> postOp = nullptr) {
         if (m_cancelCallback && m_cancelCallback()) {
             throw std::runtime_error("Preprocessing cancelled by user.");
         }
@@ -215,6 +216,10 @@ void PreprocessingPipeline::execute(WorkspaceRegistry& workspace,
                 }
             });
             
+            if (postOp) {
+                postOp();
+            }
+
             if (m_stepCallback) {
                 m_stepCallback(currentStepIndex, 100, stepTimer.elapsed() / 1000.0, true, true, false);
             }
@@ -365,14 +370,12 @@ void PreprocessingPipeline::execute(WorkspaceRegistry& workspace,
                         {"scale_multiplicative", config.count("bias_dark_scale_multiplicative") ? config.at("bias_dark_scale_multiplicative") : "false"},
                         {"quantile_low", "0.2"},
                         {"quantile_high", "0.2"}
+                    }, [&]() {
+                        workspace.unregisterElement(tempBatchName);
+                        masterBiasNames[key] = masterName;
+                        auto masterElem = workspace.getElement(masterName);
+                        fits.writeImage(masterPath, std::holds_alternative<GrayscaleImagePtr>(masterElem) ? ImageVariant{std::get<GrayscaleImagePtr>(masterElem)} : ImageVariant{std::get<RGBImagePtr>(masterElem)});
                     });
-
-                    workspace.unregisterElement(tempBatchName);
-                    masterBiasNames[key] = masterName;
-
-                    // Write Master Bias to disk
-                    auto masterElem = workspace.getElement(masterName);
-                    fits.writeImage(masterPath, std::holds_alternative<GrayscaleImagePtr>(masterElem) ? ImageVariant{std::get<GrayscaleImagePtr>(masterElem)} : ImageVariant{std::get<RGBImagePtr>(masterElem)});
                 }
             }
         }
@@ -417,13 +420,12 @@ void PreprocessingPipeline::execute(WorkspaceRegistry& workspace,
                         {"scale_multiplicative", config.count("bias_dark_scale_multiplicative") ? config.at("bias_dark_scale_multiplicative") : "false"},
                         {"quantile_low", "0.2"},
                         {"quantile_high", "0.2"}
+                    }, [&]() {
+                        workspace.unregisterElement(tempBatchName);
+                        masterDarkNames[key] = masterName;
+                        auto masterElem = workspace.getElement(masterName);
+                        fits.writeImage(masterPath, std::holds_alternative<GrayscaleImagePtr>(masterElem) ? ImageVariant{std::get<GrayscaleImagePtr>(masterElem)} : ImageVariant{std::get<RGBImagePtr>(masterElem)});
                     });
-
-                    workspace.unregisterElement(tempBatchName);
-                    masterDarkNames[key] = masterName;
-
-                    auto masterElem = workspace.getElement(masterName);
-                    fits.writeImage(masterPath, std::holds_alternative<GrayscaleImagePtr>(masterElem) ? ImageVariant{std::get<GrayscaleImagePtr>(masterElem)} : ImageVariant{std::get<RGBImagePtr>(masterElem)});
                 }
             }
         }
@@ -499,97 +501,42 @@ void PreprocessingPipeline::execute(WorkspaceRegistry& workspace,
                     }
 
                     // 1. Calibrate Flats
-                    if (m_stepCallback) {
-                        m_stepCallback(currentStepIndex, 0, 0.0, false, false, false);
-                    }
-                    stepTimer.start();
-                    try {
-                        CalibrationAlgorithm calibrator;
-                        calibrator.execute(workspace, {
-                            {"input_name", tempBatchName},
-                            {"output_name", calibBatchName},
-                            {"bias_name", finalBias},
-                            {"dark_name", finalDark},
-                            {"flat_name", ""} // No flat for flats
-                        }, [this, &stepTimer, &progress, currentStepIndex, totalSteps](int pct) {
-                            if (m_stepCallback) {
-                                m_stepCallback(currentStepIndex, pct, stepTimer.elapsed() / 1000.0, false, false, false);
-                            }
-                            if (progress) {
-                                progress((currentStepIndex * 100 + pct) / totalSteps);
-                            }
-                        });
-
-                        if (m_stepCallback) {
-                            m_stepCallback(currentStepIndex, 100, stepTimer.elapsed() / 1000.0, true, true, false);
-                        }
-                        if (progress) {
-                            progress((currentStepIndex + 1) * 100 / totalSteps);
-                        }
+                    CalibrationAlgorithm calibrator;
+                    runStep(calibrator, {
+                        {"input_name", tempBatchName},
+                        {"output_name", calibBatchName},
+                        {"bias_name", finalBias},
+                        {"dark_name", finalDark},
+                        {"flat_name", ""} // No flat for flats
+                    }, [&]() {
                         if (keepIntermediate) {
                             relocateBatchFiles(workspace, calibBatchName, "flat_calib", outDir, true);
                         }
-                        currentStepIndex++;
-                    } catch (...) {
-                        if (m_stepCallback) {
-                            m_stepCallback(currentStepIndex, 100, stepTimer.elapsed() / 1000.0, true, false, false);
-                        }
-                        throw;
-                    }
-
-                    if (m_cancelCallback && m_cancelCallback()) {
-                        throw std::runtime_error("Preprocessing cancelled by user.");
-                    }
+                    });
 
                     // 2. Stack Flats
-                    if (m_stepCallback) {
-                        m_stepCallback(currentStepIndex, 0, 0.0, false, false, false);
-                    }
-                    stepTimer.start();
-                    try {
-                        StackingAlgorithm stacker;
-                        stacker.execute(workspace, {
-                            {"input_name", calibBatchName},
-                            {"output_name", masterName},
-                            {"method", config.count("flat_stack_method") ? config.at("flat_stack_method") : "average"},
-                            {"rejection", config.count("flat_rejection") ? config.at("flat_rejection") : "sigmaclip"},
-                            {"sigma_low", config.count("flat_sigma_low") ? config.at("flat_sigma_low") : "3.0"},
-                            {"sigma_high", config.count("flat_sigma_high") ? config.at("flat_sigma_high") : "3.0"},
-                            {"scale_additive", config.count("flat_scale_additive") ? config.at("flat_scale_additive") : "false"},
-                            {"scale_multiplicative", config.count("flat_scale_multiplicative") ? config.at("flat_scale_multiplicative") : "false"},
-                            {"quantile_low", "0.2"},
-                            {"quantile_high", "0.2"}
-                        }, [this, &stepTimer, &progress, currentStepIndex, totalSteps](int pct) {
-                            if (m_stepCallback) {
-                                m_stepCallback(currentStepIndex, pct, stepTimer.elapsed() / 1000.0, false, false, false);
-                            }
-                            if (progress) {
-                                progress((currentStepIndex * 100 + pct) / totalSteps);
-                            }
-                        });
-
-                        if (m_stepCallback) {
-                            m_stepCallback(currentStepIndex, 100, stepTimer.elapsed() / 1000.0, true, true, false);
+                    StackingAlgorithm stacker;
+                    runStep(stacker, {
+                        {"input_name", calibBatchName},
+                        {"output_name", masterName},
+                        {"method", config.count("flat_stack_method") ? config.at("flat_stack_method") : "average"},
+                        {"rejection", config.count("flat_rejection") ? config.at("flat_rejection") : "sigmaclip"},
+                        {"sigma_low", config.count("flat_sigma_low") ? config.at("flat_sigma_low") : "3.0"},
+                        {"sigma_high", config.count("flat_sigma_high") ? config.at("flat_sigma_high") : "3.0"},
+                        {"scale_additive", config.count("flat_scale_additive") ? config.at("flat_scale_additive") : "false"},
+                        {"scale_multiplicative", config.count("flat_scale_multiplicative") ? config.at("flat_scale_multiplicative") : "false"},
+                        {"quantile_low", "0.2"},
+                        {"quantile_high", "0.2"}
+                    }, [&]() {
+                        workspace.unregisterElement(tempBatchName);
+                        if (!keepIntermediate) {
+                            workspace.unregisterElement(calibBatchName);
                         }
-                        if (progress) {
-                            progress((currentStepIndex + 1) * 100 / totalSteps);
-                        }
-                        currentStepIndex++;
-                    } catch (...) {
-                        if (m_stepCallback) {
-                            m_stepCallback(currentStepIndex, 100, stepTimer.elapsed() / 1000.0, true, false, false);
-                        }
-                        throw;
-                    }
 
-                    workspace.unregisterElement(tempBatchName);
-                    if (!keepIntermediate) {
-                        workspace.unregisterElement(calibBatchName);
-                    }
-
-                    auto masterElem = workspace.getElement(masterName);
-                    masterFlatNames[key] = masterName;
-                    fits.writeImage(masterPath, std::holds_alternative<GrayscaleImagePtr>(masterElem) ? ImageVariant{std::get<GrayscaleImagePtr>(masterElem)} : ImageVariant{std::get<RGBImagePtr>(masterElem)});
+                        auto masterElem = workspace.getElement(masterName);
+                        masterFlatNames[key] = masterName;
+                        fits.writeImage(masterPath, std::holds_alternative<GrayscaleImagePtr>(masterElem) ? ImageVariant{std::get<GrayscaleImagePtr>(masterElem)} : ImageVariant{std::get<RGBImagePtr>(masterElem)});
+                    });
                 }
             }
         }
@@ -664,12 +611,12 @@ void PreprocessingPipeline::execute(WorkspaceRegistry& workspace,
                     {"bias_name", finalBias},
                     {"dark_name", finalDark},
                     {"flat_name", flatMaster}
+                }, [&]() {
+                    workspace.unregisterElement(tempBatchName);
+                    if (keepIntermediate) {
+                        relocateBatchFiles(workspace, calibBatchName, "light_calib", outDir, true);
+                    }
                 });
-
-                workspace.unregisterElement(tempBatchName);
-                if (keepIntermediate) {
-                    relocateBatchFiles(workspace, calibBatchName, "light_calib", outDir, true);
-                }
 
                 std::string registerInputName = calibBatchName;
 
@@ -684,12 +631,13 @@ void PreprocessingPipeline::execute(WorkspaceRegistry& workspace,
                         {"pattern", bayerPattern},
                         {"method", debayerMethod},
                         {"green_equalize", config.count("green_equalize") ? config.at("green_equalize") : "false"}
+                    }, [&]() {
+                        if (keepIntermediate) {
+                            relocateBatchFiles(workspace, debayerBatchName, "light_calib", outDir, true);
+                        } else {
+                            workspace.unregisterElement(calibBatchName);
+                        }
                     });
-                    if (keepIntermediate) {
-                        relocateBatchFiles(workspace, debayerBatchName, "light_calib", outDir, true);
-                    } else {
-                        workspace.unregisterElement(calibBatchName);
-                    }
                     registerInputName = debayerBatchName;
                 }
 
@@ -1010,10 +958,10 @@ void PreprocessingPipeline::execute(WorkspaceRegistry& workspace,
                 };
                 
                 Logger::info("Preprocessing", QString("Running Background Normalization on batch '%1'...").arg(QString::fromStdString(name)));
-                runStep(bge, bgeConfig);
-                
-                currentBatchNames[k] = bgeBatchName;
-                batchRegs[k].name = bgeBatchName;
+                runStep(bge, bgeConfig, [&]() {
+                    currentBatchNames[k] = bgeBatchName;
+                    batchRegs[k].name = bgeBatchName;
+                });
             }
         }
 
@@ -1045,13 +993,12 @@ void PreprocessingPipeline::execute(WorkspaceRegistry& workspace,
                 alignConfig["ref_theta"] = std::to_string(globalRefTheta);
             }
 
-
             AlignAlgorithm aligner;
-            runStep(aligner, alignConfig);
-
-            if (keepIntermediate) {
-                relocateBatchFiles(workspace, alignedBatchName, "light_align", outDir, true);
-            }
+            runStep(aligner, alignConfig, [&]() {
+                if (keepIntermediate) {
+                    relocateBatchFiles(workspace, alignedBatchName, "light_align", outDir, true);
+                }
+            });
 
             std::string finalMasterName = origName + "_stacked";
             if (workspace.contains(finalMasterName)) {
@@ -1069,6 +1016,10 @@ void PreprocessingPipeline::execute(WorkspaceRegistry& workspace,
             
             bool scaleAdditive = config.count("light_scale_additive") ? (config.at("light_scale_additive") == "true") : true;
             bool scaleMultiplicative = config.count("light_scale_multiplicative") ? (config.at("light_scale_multiplicative") == "true") : true;
+            bool correctPedestal = config.count("correct_pedestal") ? (config.at("correct_pedestal") == "true") : false;
+            bool clampMax = config.count("clamp_max") ? (config.at("clamp_max") == "true") : false;
+            bool platesolveStacks = config.count("platesolve_stacks") ? (config.at("platesolve_stacks") == "true") : false;
+            bool saveInStacking = !correctPedestal && !clampMax && !platesolveStacks;
 
             StackingAlgorithm stacker;
             runStep(stacker, {
@@ -1083,19 +1034,128 @@ void PreprocessingPipeline::execute(WorkspaceRegistry& workspace,
                 {"weight_method", config.count("light_weight_method") ? config.at("light_weight_method") : "none"},
                 {"scale_additive", scaleAdditive ? "true" : "false"},
                 {"scale_multiplicative", scaleMultiplicative ? "true" : "false"}
+            }, [&]() {
+                if (!keepIntermediate) {
+                    workspace.unregisterElement(alignedBatchName);
+                }
+                if (runBGE && !keepIntermediate) {
+                    workspace.unregisterElement(name);
+                }
+                if (saveInStacking) {
+                    auto masterElem = workspace.getElement(finalMasterName);
+                    std::string finalOutPath = outDir + "/" + finalMasterName + ".fits";
+                    fits.writeImage(finalOutPath, std::holds_alternative<GrayscaleImagePtr>(masterElem) ? ImageVariant{std::get<GrayscaleImagePtr>(masterElem)} : ImageVariant{std::get<RGBImagePtr>(masterElem)});
+                    Logger::info("Preprocessing", QString("Saved final stacked master light to: %1").arg(QString::fromStdString(finalOutPath)));
+                }
             });
 
-            if (!keepIntermediate) {
-                workspace.unregisterElement(alignedBatchName);
-            }
-            if (runBGE && !keepIntermediate) {
-                workspace.unregisterElement(name);
+            if (correctPedestal || clampMax) {
+                if (m_cancelCallback && m_cancelCallback()) {
+                    throw std::runtime_error("Preprocessing cancelled by user.");
+                }
+                if (m_stepCallback) {
+                    m_stepCallback(currentStepIndex, 0, 0.0, false, false, false);
+                }
+                stepTimer.start();
+                try {
+                    auto masterElem = workspace.getElement(finalMasterName);
+                    std::vector<ImageBuffer*> buffers;
+                    if (std::holds_alternative<GrayscaleImagePtr>(masterElem)) {
+                        buffers.push_back(std::get<GrayscaleImagePtr>(masterElem)->buffer().get());
+                    } else if (std::holds_alternative<RGBImagePtr>(masterElem)) {
+                        auto rgb = std::get<RGBImagePtr>(masterElem);
+                        buffers.push_back(rgb->r()->buffer().get());
+                        buffers.push_back(rgb->g()->buffer().get());
+                        buffers.push_back(rgb->b()->buffer().get());
+                    }
+
+                    if (correctPedestal) {
+                        float globalMin = std::numeric_limits<float>::max();
+                        for (auto* buf : buffers) {
+                            float* data = buf->data();
+                            int n = buf->width() * buf->height();
+                            for (int i = 0; i < n; ++i) {
+                                float val = data[i];
+                                if (!std::isnan(val) && val < globalMin) {
+                                    globalMin = val;
+                                }
+                            }
+                        }
+
+                        if (globalMin < 0.0f) {
+                            float addOffset = -globalMin;
+                            Logger::info("Preprocessing", QString("Correcting pedestal for '%1': adding %2 (negative minimum offset)")
+                                         .arg(QString::fromStdString(finalMasterName)).arg(addOffset));
+                            for (auto* buf : buffers) {
+                                float* data = buf->data();
+                                int n = buf->width() * buf->height();
+                                #pragma omp parallel for
+                                for (int i = 0; i < n; ++i) {
+                                    if (!std::isnan(data[i])) {
+                                        data[i] += addOffset;
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    if (clampMax) {
+                        Logger::info("Preprocessing", QString("Clamping maximum values to 1.0 for '%1'")
+                                     .arg(QString::fromStdString(finalMasterName)));
+                        for (auto* buf : buffers) {
+                            float* data = buf->data();
+                            int n = buf->width() * buf->height();
+                            #pragma omp parallel for
+                            for (int i = 0; i < n; ++i) {
+                                if (!std::isnan(data[i]) && data[i] > 1.0f) {
+                                    data[i] = 1.0f;
+                                }
+                            }
+                        }
+                    }
+
+                    if (!platesolveStacks) {
+                        std::string finalOutPath = outDir + "/" + finalMasterName + ".fits";
+                        fits.writeImage(finalOutPath, std::holds_alternative<GrayscaleImagePtr>(masterElem) ? ImageVariant{std::get<GrayscaleImagePtr>(masterElem)} : ImageVariant{std::get<RGBImagePtr>(masterElem)});
+                        Logger::info("Preprocessing", QString("Saved final stacked master light to: %1").arg(QString::fromStdString(finalOutPath)));
+                    }
+
+                    if (m_stepCallback) {
+                        m_stepCallback(currentStepIndex, 100, stepTimer.elapsed() / 1000.0, true, true, false);
+                    }
+                    if (progress) {
+                        progress((currentStepIndex + 1) * 100 / totalSteps);
+                    }
+                    currentStepIndex++;
+                } catch (...) {
+                    if (m_stepCallback) {
+                        m_stepCallback(currentStepIndex, 100, stepTimer.elapsed() / 1000.0, true, false, false);
+                    }
+                    throw;
+                }
             }
 
-            auto masterElem = workspace.getElement(finalMasterName);
-            std::string finalOutPath = outDir + "/" + finalMasterName + ".fits";
-            fits.writeImage(finalOutPath, std::holds_alternative<GrayscaleImagePtr>(masterElem) ? ImageVariant{std::get<GrayscaleImagePtr>(masterElem)} : ImageVariant{std::get<RGBImagePtr>(masterElem)});
-            Logger::info("Preprocessing", QString("Saved final stacked master light to: %1").arg(QString::fromStdString(finalOutPath)));
+            if (platesolveStacks) {
+                Logger::info("Preprocessing", QString("Platesolving stacked master '%1'...").arg(QString::fromStdString(finalMasterName)));
+                bool blindSolve = config.count("platesolve_blind") ? (config.at("platesolve_blind") == "true") : true;
+                std::string raHint = blindSolve ? "-1.0" : (config.count("platesolve_ra_hint") ? config.at("platesolve_ra_hint") : "-1.0");
+                std::string decHint = blindSolve ? "-99.0" : (config.count("platesolve_dec_hint") ? config.at("platesolve_dec_hint") : "-99.0");
+
+                PlatesolveAlgorithm solverAlg;
+                runStep(solverAlg, {
+                    {"input_name", finalMasterName},
+                    {"solver", config.count("platesolve_solver") ? config.at("platesolve_solver") : "astap"},
+                    {"ra_hint", raHint},
+                    {"dec_hint", decHint},
+                    {"focal_length", config.count("platesolve_focal_length") ? config.at("platesolve_focal_length") : "0.0"},
+                    {"pixel_size", config.count("platesolve_pixel_size") ? config.at("platesolve_pixel_size") : "0.0"}
+                }, [&]() {
+                    auto masterElem = workspace.getElement(finalMasterName);
+                    std::string finalOutPath = outDir + "/" + finalMasterName + ".fits";
+                    fits.writeImage(finalOutPath, std::holds_alternative<GrayscaleImagePtr>(masterElem) ? ImageVariant{std::get<GrayscaleImagePtr>(masterElem)} : ImageVariant{std::get<RGBImagePtr>(masterElem)});
+                    Logger::info("Preprocessing", QString("Saved final stacked master light to: %1").arg(QString::fromStdString(finalOutPath)));
+                });
+            }
         }
     }
 }
@@ -1247,10 +1307,20 @@ std::vector<std::string> PreprocessingPipeline::getPlannedSteps(const std::map<s
             }
         }
 
-        // 3. Align and Stack per filter
+        // 3. Align, Stack, Postprocess, and Platesolve per filter
+        bool correctPedestal = config.count("correct_pedestal") ? (config.at("correct_pedestal") == "true") : false;
+        bool clampMax = config.count("clamp_max") ? (config.at("clamp_max") == "true") : false;
+        bool platesolveStacks = config.count("platesolve_stacks") ? (config.at("platesolve_stacks") == "true") : false;
+
         for (const auto& filter : filters) {
             steps.push_back("Align " + filter + " Frames");
             steps.push_back("Stack " + filter + " Frames");
+            if (correctPedestal || clampMax) {
+                steps.push_back("Stack (Postprocess) " + filter);
+            }
+            if (platesolveStacks) {
+                steps.push_back("Stack (Platesolve) " + filter);
+            }
         }
     }
 
@@ -1277,6 +1347,11 @@ void PreprocessingPipeline::relocateBatchFiles(WorkspaceRegistry& workspace,
         if (oldPath.empty()) continue;
         
         QFileInfo oldInfo(QString::fromStdString(oldPath));
+        if (oldInfo.absolutePath() == targetDir.absolutePath()) {
+            processedOldPaths.insert(oldPath);
+            continue;
+        }
+
         QString newPath = targetDir.absoluteFilePath(oldInfo.fileName());
         std::string newPathStr = newPath.toStdString();
         
@@ -1288,14 +1363,17 @@ void PreprocessingPipeline::relocateBatchFiles(WorkspaceRegistry& workspace,
         processedOldPaths.insert(oldPath);
         
         if (moveInsteadOfCopy) {
-            if (QFile::exists(newPath)) {
-                QFile::remove(newPath);
-            }
             if (QFile::rename(QString::fromStdString(oldPath), newPath)) {
                 batch->setFrameFilepath(i, newPathStr);
                 batch->setFrameLoader(i, [newPathStr]() { FitsIO reader; return reader.readImage(newPathStr); });
             } else {
-                if (QFile::copy(QString::fromStdString(oldPath), newPath)) {
+                if (QFile::exists(newPath)) {
+                    QFile::remove(newPath);
+                }
+                if (QFile::rename(QString::fromStdString(oldPath), newPath)) {
+                    batch->setFrameFilepath(i, newPathStr);
+                    batch->setFrameLoader(i, [newPathStr]() { FitsIO reader; return reader.readImage(newPathStr); });
+                } else if (QFile::copy(QString::fromStdString(oldPath), newPath)) {
                     QFile::remove(QString::fromStdString(oldPath));
                     batch->setFrameFilepath(i, newPathStr);
                     batch->setFrameLoader(i, [newPathStr]() { FitsIO reader; return reader.readImage(newPathStr); });

@@ -1,6 +1,6 @@
 # TODO
 
-* Sanity check calibration - dim images tend to end up with very broad background histograms, expecting narrower. 
+* Double check pixel rejection when dithering (satellite trail in lion nebula data)
 * Test OSC workflow
  
 ## Core

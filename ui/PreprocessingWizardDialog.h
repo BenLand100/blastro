@@ -171,6 +171,17 @@ private:
     QCheckBox* m_lightScaleAdditiveChk;
     QCheckBox* m_lightScaleMultiplicativeChk;
 
+    // Control Tab — Postprocessing section
+    QCheckBox* m_correctPedestalChk;
+    QCheckBox* m_clampMaxChk;
+    QCheckBox* m_platesolveStacksChk;
+    QComboBox* m_platesolveSolverCombo;
+    QCheckBox* m_platesolveBlindChk;
+    QDoubleSpinBox* m_platesolveRaSpin;
+    QDoubleSpinBox* m_platesolveDecSpin;
+    QDoubleSpinBox* m_platesolveFocalLengthSpin;
+    QDoubleSpinBox* m_platesolvePixelSizeSpin;
+
     // Groups & Process Tabs
     QTreeWidget* m_previewTree;
     QTreeWidget* m_processTree;
@@ -217,6 +228,18 @@ private:
 
     std::pair<double, double> getAbsoluteRangeForBatch(ImageBatchPtr batch, const std::string& metric);
     std::map<std::string, std::pair<double, double>> m_filterRanges;
+
+    // Platesolve Hint Auto-Sampling & Manual Override Tracking State
+    bool m_raManuallyEdited = false;
+    bool m_decManuallyEdited = false;
+    bool m_focalLengthManuallyEdited = false;
+    bool m_pixelSizeManuallyEdited = false;
+    bool m_autoUpdatedRaDec = false;
+    bool m_autoUpdatedFocalLength = false;
+    bool m_autoUpdatedPixelSize = false;
+    bool m_isAutoUpdatingHints = false;
+
+    void sampleLightFrameHints(const std::vector<QString>& newLightPaths = {});
 protected:
     void resizeEvent(QResizeEvent* event) override;
     void changeEvent(QEvent* event) override;
