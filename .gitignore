@@ -57,3 +57,6 @@ install_manifest.txt
 /plugins/
 /lib/
 
+
+test_project/
+process/
