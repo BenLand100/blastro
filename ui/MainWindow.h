@@ -209,6 +209,7 @@ private:
     QString m_projectPath;  ///< Directory of the currently open project (empty = none)
     QLabel* m_statusReadout = nullptr;
     QLabel* m_statusLabel = nullptr;
+    QLabel* m_targetLabel = nullptr;
     ImageView* m_connectedImageView = nullptr;
     WorkspaceImageWindow* m_connectedImageWindow = nullptr;
     QProgressBar* m_progressBar = nullptr;

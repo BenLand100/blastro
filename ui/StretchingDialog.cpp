@@ -1607,7 +1607,12 @@ void blastro::StretchingDialog::clearPreview() {
     if (m_previewTimer) {
         m_previewTimer->stop();
     }
-    if (auto win = getActiveImageWindow()) {
+    // Use the tracked window directly so we don't lose the target when the dialog gains focus
+    if (m_currentTrackedSub) {
+        if (auto* win = qobject_cast<WorkspaceImageWindow*>(m_currentTrackedSub->widget())) {
+            win->restoreOriginalImage();
+        }
+    } else if (auto win = getActiveImageWindow()) {
         win->restoreOriginalImage();
     }
 }

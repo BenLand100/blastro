@@ -459,7 +459,15 @@ void BackgroundExtractionDialog::onClearPointsClicked() {
     win->imageView()->setBgeControlPoints({});
 }
 
-void BackgroundExtractionDialog::onSubWindowActivated(QMdiSubWindow*) {
+void BackgroundExtractionDialog::onSubWindowActivated(QMdiSubWindow* sub) {
+    if (sub) {
+        if (auto* win = qobject_cast<WorkspaceImageWindow*>(sub->widget())) {
+            // Only track image windows (not the dialog itself or the log window)
+            if (!win->hasPreviewActive() || m_currentTrackedSub == sub) {
+                m_currentTrackedSub = sub;
+            }
+        }
+    }
     updateBgeModes();
 }
 
@@ -593,22 +601,18 @@ void BackgroundExtractionDialog::clearPreview() {
     if (m_updatePreviewBtn) {
         m_updatePreviewBtn->setEnabled(false);
     }
-    if (auto win = getActiveImageWindow()) {
+    // Use tracked window directly so we don't lose the target when the dialog gains focus
+    if (m_currentTrackedSub) {
+        if (auto* win = qobject_cast<WorkspaceImageWindow*>(m_currentTrackedSub->widget())) {
+            win->restoreOriginalImage();
+        }
+    } else if (auto win = getActiveImageWindow()) {
         win->restoreOriginalImage();
     }
 }
 
 QMdiSubWindow* BackgroundExtractionDialog::getTargetWindow() const {
-    auto win = getActiveImageWindow();
-    if (!win) return nullptr;
-    QWidget* p = win->parentWidget();
-    while (p) {
-        if (auto sub = qobject_cast<QMdiSubWindow*>(p)) {
-            return sub;
-        }
-        p = p->parentWidget();
-    }
-    return nullptr;
+    return m_currentTrackedSub;
 }
 
 } // namespace blastro

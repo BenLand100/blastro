@@ -95,8 +95,14 @@ WorkspaceImageWindow* AlgorithmDialog::getActiveImageWindow() const {
         QString activeName = wa->getActiveImageName();
         if (!activeName.isEmpty()) {
             auto win = wa->getImageWindow(activeName);
-            if (win && win->hasPreviewActive() && !hasActivePreview()) {
-                return nullptr;
+            if (win && win->hasPreviewActive()) {
+                // Allow access if this dialog owns the preview (i.e. the tracked target window
+                // is this win), or if this dialog itself has an active preview.
+                QMdiSubWindow* targetSub = getTargetWindow();
+                bool isOwnTarget = targetSub && (qobject_cast<WorkspaceImageWindow*>(targetSub->widget()) == win);
+                if (!hasActivePreview() && !isOwnTarget) {
+                    return nullptr;
+                }
             }
             return win;
         }

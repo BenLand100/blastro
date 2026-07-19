@@ -21,6 +21,7 @@
 #include "WorkspaceImageWindow.h"
 #include <QMdiArea>
 #include <QMdiSubWindow>
+#include <QPointer>
 #include <QSlider>
 #include <QSpinBox>
 #include <QDoubleSpinBox>
@@ -83,6 +84,8 @@ private:
     // Advanced Preferences
     double m_huberDelta = 5.0;
     int m_threads = -1;
+
+    QPointer<QMdiSubWindow> m_currentTrackedSub;
 };
 
 } // namespace blastro

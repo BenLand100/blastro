@@ -90,8 +90,18 @@ MainWindow::MainWindow(QWidget* parent)
     );
 
     // Initialize status bar
+    // Right side: pixel coordinate readout (permanent = right-aligned)
     m_statusReadout = new QLabel(this);
     m_statusReadout->setStyleSheet("color: #aaa; font-family: monospace; font-size: 11px; margin-right: 10px;");
+
+    // Center: Target indicator label
+    m_targetLabel = new QLabel(this);
+    m_targetLabel->setStyleSheet("color: #00d2ff; font-family: monospace; font-size: 11px; font-weight: bold; margin-right: 10px;");
+    m_targetLabel->setAlignment(Qt::AlignCenter);
+    m_targetLabel->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+
+    // Add permanently: the target label fills the middle, the readout goes to the right
+    statusBar()->addPermanentWidget(m_targetLabel, 1);
     statusBar()->addPermanentWidget(m_statusReadout);
     statusBar()->setStyleSheet("QStatusBar { background-color: #202020; color: #aaa; border-top: 1px solid #333; font-size: 11px; }");
 
@@ -1096,6 +1106,9 @@ void MainWindow::onSubWindowActivated(QMdiSubWindow* window) {
         if (m_statusReadout) {
             m_statusReadout->clear();
         }
+        if (m_targetLabel) {
+            m_targetLabel->clear();
+        }
     } else {
         // Get the widget inside the subwindow
         QWidget* widget = window->widget();
@@ -1108,6 +1121,10 @@ void MainWindow::onSubWindowActivated(QMdiSubWindow* window) {
                 connect(m_connectedImageView, &ImageView::mousePosChanged, this, &MainWindow::updateStatusReadout);
                 connect(m_connectedImageView, &ImageView::bgeControlPointsVisibilityChanged, this, &MainWindow::updateImageMenuState);
             }
+
+            if (m_targetLabel) {
+                m_targetLabel->setText(QString("Target: %1").arg(wsWindow->name()));
+            }
             
             WorkspaceElement elem = wsWindow->element();
             if (std::holds_alternative<GrayscaleImagePtr>(elem) || std::holds_alternative<RGBImagePtr>(elem)) {
@@ -1117,6 +1134,9 @@ void MainWindow::onSubWindowActivated(QMdiSubWindow* window) {
                 hasActiveBatch = true;
             }
         }
+        // Note: when a non-image subwindow (dialog, log) gains focus,
+        // we intentionally preserve the target label so users can see which
+        // image they are targeting while using tool dialogs.
     }
     
     // update save menu enable, etc.
