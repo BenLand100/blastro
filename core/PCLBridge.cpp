@@ -202,6 +202,17 @@ static std::unordered_map<process_handle,
     g_processParameters;
 static PCLImageMock *g_activeImage = nullptr;
 static PCLBridge *g_pclBridgeInstance = nullptr;
+static QString g_activeExecutingProcessId;
+
+struct ProcessExecutionGuard {
+  ProcessExecutionGuard(const QString &processId) {
+    g_activeExecutingProcessId = processId;
+  }
+  ~ProcessExecutionGuard() {
+    g_activeExecutingProcessId.clear();
+  }
+};
+
 static std::unordered_set<PCLImageMock *> g_heapImages;
 static std::unordered_map<image_handle, PCLImageMock *> g_attachedImages;
 
@@ -527,8 +538,10 @@ static void writeConsoleBuffer(const QString &str, bool appendNewline) {
   bool lineStateChanged = false;
 
   QString channel = "PCL";
-  if (g_pclBridgeInstance && g_pclBridgeInstance->moduleDescription() &&
-      g_pclBridgeInstance->moduleDescription()->name) {
+  if (!g_activeExecutingProcessId.isEmpty()) {
+    channel = g_activeExecutingProcessId;
+  } else if (g_pclBridgeInstance && g_pclBridgeInstance->moduleDescription() &&
+             g_pclBridgeInstance->moduleDescription()->name) {
     channel = QString::fromUtf8(g_pclBridgeInstance->moduleDescription()->name);
   }
 
@@ -3228,6 +3241,48 @@ void PCLBridge::preloadLibraries(const QString &libDir) {
   }
   qInfo() << "[PCL Bridge] Scanning and preloading libraries from:" << libDir;
 
+  // Track canonical paths to avoid dlopening the same physical library multiple times via symlinks/aliases
+  QSet<QString> loadedCanonicalPaths;
+
+  // 1. Explicitly pre-load TensorFlow runtime if available in libDir
+  QString tfFrameworkPath = dir.filePath("libtensorflow_framework.so.2");
+  if (!QFile::exists(tfFrameworkPath)) {
+    tfFrameworkPath = dir.filePath("libtensorflow_framework.so");
+  }
+  QString tfPath = dir.filePath("libtensorflow.so.2");
+  if (!QFile::exists(tfPath)) {
+    tfPath = dir.filePath("libtensorflow.so");
+  }
+
+  if (QFile::exists(tfFrameworkPath)) {
+    QFileInfo fi(tfFrameworkPath);
+    QString canonical = fi.canonicalFilePath();
+    if (!canonical.isEmpty() && !loadedCanonicalPaths.contains(canonical)) {
+      qDebug() << "[PCL Bridge] Pre-loading TensorFlow framework from:" << tfFrameworkPath;
+      void *handle = dlopen(tfFrameworkPath.toUtf8().constData(), RTLD_LAZY | RTLD_GLOBAL);
+      if (handle) {
+        loadedCanonicalPaths.insert(canonical);
+      } else {
+        qWarning() << "[PCL Bridge] Failed to pre-load tensorflow framework:" << dlerror();
+      }
+    }
+  }
+
+  if (QFile::exists(tfPath)) {
+    QFileInfo fi(tfPath);
+    QString canonical = fi.canonicalFilePath();
+    if (!canonical.isEmpty() && !loadedCanonicalPaths.contains(canonical)) {
+      qDebug() << "[PCL Bridge] Pre-loading TensorFlow from:" << tfPath;
+      void *handle = dlopen(tfPath.toUtf8().constData(), RTLD_LAZY | RTLD_GLOBAL);
+      if (handle) {
+        loadedCanonicalPaths.insert(canonical);
+      } else {
+        qWarning() << "[PCL Bridge] Failed to pre-load tensorflow:" << dlerror();
+      }
+    }
+  }
+
+  // 2. Pre-load remaining helper shared libraries, skipping symlinks, TensorFlow duplicates, and internal CUDA sub-libraries
   QStringList filters;
   filters << "*.so" << "*.so.*";
 
@@ -3235,16 +3290,31 @@ void PCLBridge::preloadLibraries(const QString &libDir) {
   while (it.hasNext()) {
     QString libPath = it.next();
     QFileInfo fi(libPath);
-    if (fi.isSymLink() && !QFile::exists(fi.symLinkTarget())) {
+
+    // Skip symlinks to avoid duplicate dlopen calls on versioned aliases
+    if (fi.isSymLink()) {
+      continue;
+    }
+
+    QString canonical = fi.canonicalFilePath();
+    if (canonical.isEmpty() || loadedCanonicalPaths.contains(canonical)) {
+      continue;
+    }
+
+    QString fileName = fi.fileName();
+    // Skip internal CUDA / cuDNN / ONNX provider sub-libraries that cause out-of-order initialization crashes
+    if (fileName.startsWith("libcudnn_") || fileName.startsWith("libcublas") ||
+        fileName.startsWith("libnccl") || fileName.startsWith("libnv") ||
+        fileName.startsWith("libtensorflow") || fileName.startsWith("libonnxruntime_providers_")) {
       continue;
     }
 
     qDebug() << "[PCL Bridge] Pre-loading library:" << libPath;
-    void *handle =
-        dlopen(libPath.toUtf8().constData(), RTLD_LAZY | RTLD_GLOBAL);
-    if (!handle) {
-      qDebug() << "[PCL Bridge] Note: Could not dlopen" << libPath << "-"
-               << dlerror();
+    void *handle = dlopen(libPath.toUtf8().constData(), RTLD_LAZY | RTLD_GLOBAL);
+    if (handle) {
+      loadedCanonicalPaths.insert(canonical);
+    } else {
+      qDebug() << "[PCL Bridge] Note: Could not dlopen" << libPath << "-" << dlerror();
     }
   }
 }
@@ -3517,6 +3587,8 @@ bool PCLBridge::executeProcess(const QString &processId,
     return false;
   }
 
+  ProcessExecutionGuard execGuard(processId);
+
   qDebug() << "[PCL Bridge] Creating process instance for:" << processId;
   process_handle hProcess = info.createFn(hMeta);
   if (!hProcess) {
@@ -3621,6 +3693,8 @@ bool PCLBridge::executeProcessInstance(const QString &processId, void *hProcess,
 
   meta_process_handle hMeta = idIt->second;
   const auto &info = g_processes[hMeta];
+
+  ProcessExecutionGuard execGuard(processId);
 
   // Build the mock image and view structures
   PCLImageMock imgMock;
