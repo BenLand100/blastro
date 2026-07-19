@@ -1,6 +1,11 @@
 /*
  * BLastro - Astronomical Image Processing Software
  * Copyright (C) 2026 Benjamin Land
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
  */
 
 #include "CurvesWidget.h"
@@ -15,9 +20,7 @@
 namespace blastro {
 
 CurvesWidget::CurvesWidget(QWidget* parent)
-    : QWidget(parent) {
-    setMouseTracking(true);
-    setStyleSheet("background-color: transparent; border: none;");
+    : HistogramBaseWidget(parent) {
     // Default identity curve: input → output, LUT maps i/65535 → i/65535
     constexpr int lutSize = 65536;
     for (int i = 0; i < 6; ++i) {
@@ -25,36 +28,6 @@ CurvesWidget::CurvesWidget(QWidget* parent)
         m_luts[i].resize(lutSize);
         for (int j = 0; j < lutSize; ++j)
             m_luts[i][j] = static_cast<float>(j) / (lutSize - 1);
-    }
-}
-
-void CurvesWidget::setHistograms(const std::vector<std::vector<int>>& hists) {
-    m_histograms = hists;
-    m_cacheDirty = true;
-    update();
-}
-
-void CurvesWidget::setChannelsLinked(bool linked) {
-    m_channelsLinked = linked;
-    update();
-}
-
-void CurvesWidget::setActive(bool active) {
-    m_active = active;
-    update();
-}
-
-void CurvesWidget::setActiveChannel(int channel) {
-    m_activeChannel = channel;
-    m_cacheDirty = true;
-    update();
-}
-
-void CurvesWidget::setSingleChannelColor(const QColor& color) {
-    if (m_singleChannelColor != color) {
-        m_singleChannelColor = color;
-        m_cacheDirty = true;
-        update();
     }
 }
 
@@ -87,16 +60,6 @@ void CurvesWidget::rebuildLut(int channel) {
     py.reserve(pts.size());
     for (const auto& pt : pts) { px.push_back(pt.x()); py.push_back(pt.y()); }
     m_luts[channel] = MathUtils::computeCurvesLUT(px, py);
-}
-
-double CurvesWidget::valueToX(double val) const {
-    return val * width();
-}
-
-double CurvesWidget::xToValue(double x) const {
-    double w = width();
-    if (w <= 0.0) return 0.0;
-    return x / w;
 }
 
 double CurvesWidget::valueToY(double val) const {
@@ -144,98 +107,20 @@ void CurvesWidget::paintEvent(QPaintEvent* event) {
         QPainter bgPainter(&m_cachedBackground);
         bgPainter.setRenderHint(QPainter::Antialiasing, true);
 
-        bgPainter.setPen(QPen(QColor("#333333"), 1));
-        bgPainter.setBrush(QBrush(QColor("#1a1a1a")));
-        bgPainter.drawRoundedRect(QRectF(0.5, 0.5, w - 1.0, h - 1.0), 4.0, 4.0);
+        // Render base background, vertical grid and histograms
+        drawBaseBackground(bgPainter, w, h, lineWidth);
 
+        // Draw horizontal grid lines (which do not zoom/pan)
         bgPainter.setPen(QPen(QColor("#262626"), 1, Qt::DashLine));
         for (int i = 1; i < 10; ++i) {
             double val = static_cast<double>(i) / 10.0;
-            double x = valueToX(val);
             double y = valueToY(val);
-            if (x >= 0 && x <= w) bgPainter.drawLine(x, 1, x, h - 1);
             if (y >= 0 && y <= h) bgPainter.drawLine(1, y, w - 1, y);
         }
 
-        // Draw identity line
+        // Draw zoomed/panned identity line
         bgPainter.setPen(QPen(QColor("#333333"), 1, Qt::SolidLine));
-        bgPainter.drawLine(0, h, w, 0);
-
-        if (!m_histograms.empty()) {
-            for (size_t c = 0; c < m_histograms.size(); ++c) {
-                const auto& hist = m_histograms[c];
-                if (hist.empty()) continue;
-                
-                int numBins = hist.size();
-                std::vector<double> renderHist(numBins, 0.0);
-                for (int i = 0; i < numBins; ++i) {
-                    renderHist[i] = hist[i];
-                }
-
-                double maxVal = *std::max_element(renderHist.begin(), renderHist.end());
-                if (maxVal > 0.0) {
-                    double logMax = std::max(1e-6, std::log(maxVal + 0.8) - std::log(0.8));
-                    
-                    std::vector<double> yValues(w, h);
-                    std::vector<bool> validX(w, false);
-                    int minBinWindow = std::max(5, static_cast<int>(numBins / (w * 2.0))); 
-
-                    for (int x = 0; x < w; ++x) {
-                        double valCenter = xToValue(x);
-                        if (valCenter >= 0.0 && valCenter <= 1.0) {
-                            double valLeft = xToValue(x - 0.5);
-                            double valRight = xToValue(x + 0.5);
-                            int binStart = std::max(0, std::min(numBins - 1, static_cast<int>(valLeft * numBins)));
-                            int binEnd = std::max(0, std::min(numBins - 1, static_cast<int>(valRight * numBins)));
-                            if (binStart > binEnd) std::swap(binStart, binEnd);
-                            
-                            int centerBin = (binStart + binEnd) / 2;
-                            if (binEnd - binStart < minBinWindow) {
-                                binStart = std::max(0, centerBin - minBinWindow / 2);
-                                binEnd = std::min(numBins - 1, centerBin + minBinWindow / 2);
-                            }
-                            
-                            double maxInBin = 0.0;
-                            for (int b = binStart; b <= binEnd; ++b) {
-                                if (renderHist[b] > maxInBin) maxInBin = renderHist[b];
-                            }
-                            
-                            double logVal = std::max(0.0, std::log(maxInBin + 0.8) - std::log(0.8));
-                            yValues[x] = (h - 1.0) - (logVal / logMax) * (h - 7.0);
-                            validX[x] = true;
-                        }
-                    }
-
-                    QColor outline;
-                    if (m_histograms.size() == 1 || c == 0) {
-                        outline = m_singleChannelColor; outline.setAlpha(m_histograms.size() == 1 ? 200 : 80);
-                    } else if (c == 1) { // R
-                        QColor base("#cc3333");
-                        outline = base; outline.setAlpha(200);
-                    } else if (c == 2) { // G
-                        QColor base("#33aa33");
-                        outline = base; outline.setAlpha(200);
-                    } else if (c == 3) { // B
-                        QColor base("#3366cc");
-                        outline = base; outline.setAlpha(200);
-                    }
-
-                    QPen pen(outline, lineWidth);
-                    pen.setJoinStyle(Qt::RoundJoin);
-                    pen.setCapStyle(Qt::RoundCap);
-                    bgPainter.setPen(pen);
-                    QPolygonF polygon;
-                    for (int x = 0; x < w; ++x) {
-                        if (validX[x]) {
-                            polygon << QPointF(x, yValues[x]);
-                        }
-                    }
-                    if (!polygon.isEmpty()) {
-                        bgPainter.drawPolyline(polygon);
-                    }
-                }
-            }
-        }
+        bgPainter.drawLine(valueToX(0.0), valueToY(0.0), valueToX(1.0), valueToY(1.0));
         
         m_cacheDirty = false;
     }
@@ -251,12 +136,9 @@ void CurvesWidget::paintEvent(QPaintEvent* event) {
     };
 
     for (int c = 0; c < 6; ++c) {
-        if (m_channelsLinked && c != m_activeChannel) continue;
-
         const auto& points = m_points[c];
         bool channelIsDefault = isDefault(points);
 
-        // Draw if it is the active channel, or if it has a non-default stretch
         if (c == m_activeChannel || !channelIsDefault) {
             int act = c;
 
@@ -271,7 +153,6 @@ void CurvesWidget::paintEvent(QPaintEvent* event) {
 
             if (points.size() < 2) continue;
 
-            // Use the cached LUT — no spline recomputation here
             const auto& lut = m_luts[act];
 
             QPolygonF curvePolygon;
@@ -324,6 +205,11 @@ void CurvesWidget::resizeEvent(QResizeEvent* event) {
 }
 
 void CurvesWidget::mousePressEvent(QMouseEvent* event) {
+    if (event->button() == Qt::MiddleButton) {
+        HistogramBaseWidget::mousePressEvent(event);
+        return;
+    }
+
     if (!m_active || m_activeChannel < 0 || m_activeChannel >= 6) return;
 
     double dist;
@@ -349,14 +235,7 @@ void CurvesWidget::mousePressEvent(QMouseEvent* event) {
                 }
             }
             m_isDragging = true;
-            if (m_channelsLinked) {
-                for (int c = 0; c < 6; ++c) {
-                    if (c != m_activeChannel) m_points[c] = points;
-                }
-                for (int c = 0; c < 6; ++c) rebuildLut(c);
-            } else {
-                rebuildLut(m_activeChannel);
-            }
+            rebuildLut(m_activeChannel);
             emit curveChanged(m_activeChannel, points);
             update();
         }
@@ -365,14 +244,7 @@ void CurvesWidget::mousePressEvent(QMouseEvent* event) {
             auto& points = m_points[m_activeChannel];
             if (closestIdx > 0 && closestIdx < points.size() - 1) { // Can't delete ends
                 points.erase(points.begin() + closestIdx);
-                if (m_channelsLinked) {
-                    for (int c = 0; c < 6; ++c) {
-                        if (c != m_activeChannel) m_points[c] = points;
-                    }
-                    for (int c = 0; c < 6; ++c) rebuildLut(c);
-                } else {
-                    rebuildLut(m_activeChannel);
-                }
+                rebuildLut(m_activeChannel);
                 emit curveChanged(m_activeChannel, points);
                 update();
             }
@@ -381,6 +253,11 @@ void CurvesWidget::mousePressEvent(QMouseEvent* event) {
 }
 
 void CurvesWidget::mouseReleaseEvent(QMouseEvent* event) {
+    if (event->button() == Qt::MiddleButton || m_isScrolling) {
+        HistogramBaseWidget::mouseReleaseEvent(event);
+        return;
+    }
+
     if (event->button() == Qt::LeftButton) {
         m_isDragging = false;
         m_dragPointIndex = -1;
@@ -388,6 +265,11 @@ void CurvesWidget::mouseReleaseEvent(QMouseEvent* event) {
 }
 
 void CurvesWidget::mouseMoveEvent(QMouseEvent* event) {
+    if (m_isScrolling) {
+        HistogramBaseWidget::mouseMoveEvent(event);
+        return;
+    }
+
     if (!m_active || m_activeChannel < 0 || m_activeChannel >= 6) return;
 
     if (m_isDragging && m_dragPointIndex != -1) {
@@ -405,14 +287,7 @@ void CurvesWidget::mouseMoveEvent(QMouseEvent* event) {
 
         points[m_dragPointIndex] = QPointF(x, y);
 
-        if (m_channelsLinked) {
-            for (int c = 0; c < 6; ++c) {
-                if (c != m_activeChannel) m_points[c] = points;
-            }
-            for (int c = 0; c < 6; ++c) rebuildLut(c);
-        } else {
-            rebuildLut(m_activeChannel);
-        }
+        rebuildLut(m_activeChannel);
 
         emit curveChanged(m_activeChannel, points);
         update();

@@ -17,6 +17,7 @@
  */
 
 #include "CalibrationDialog.h"
+#include "WorkspaceImageWindow.h"
 #include <QJsonObject>
 #include <QVBoxLayout>
 #include <QFormLayout>
@@ -129,6 +130,10 @@ std::map<std::string, std::string> CalibrationDialog::getConfig() const {
 }
 
 void CalibrationDialog::refreshWorkspaceElements() {
+    QString activeName;
+    if (auto win = getActiveImageWindow()) {
+        activeName = win->name();
+    }
     QString curTarget = m_targetInputCombo->currentText();
     QString curBias = m_biasCombo->currentData().toString();
     QString curDark = m_darkCombo->currentData().toString();
@@ -167,9 +172,17 @@ void CalibrationDialog::refreshWorkspaceElements() {
     populateCalibrationCombo(m_darkCombo, curDark);
     populateCalibrationCombo(m_flatCombo, curFlat);
 
-    int idx = m_targetInputCombo->findText(curTarget);
+    int idx = -1;
+    if (!activeName.isEmpty()) {
+        idx = m_targetInputCombo->findText(activeName);
+    }
+    if (idx < 0 && !curTarget.isEmpty()) {
+        idx = m_targetInputCombo->findText(curTarget);
+    }
     if (idx >= 0) {
         m_targetInputCombo->setCurrentIndex(idx);
+    } else if (m_targetInputCombo->count() > 0) {
+        m_targetInputCombo->setCurrentIndex(0);
     }
 }
 

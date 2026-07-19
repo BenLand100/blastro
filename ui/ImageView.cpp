@@ -17,6 +17,7 @@
  */
 
 #include "ImageView.h"
+#include "algorithms/StretchingAlgorithm.h"
 #include <QScrollBar>
 #include <QMouseEvent>
 #include <QKeyEvent>
@@ -61,6 +62,10 @@ ImageView::ImageView(QWidget* parent)
 void ImageView::setImage(const ImageVariant& image, bool preserveStretch, bool preserveZoom) {
     clearCLAHE();
     m_currentImage = image;
+    m_previewImage = ImageVariant();
+    m_livePreviewLut.clear();
+    m_livePreviewSatLut.clear();
+    m_livePreviewLumLut.clear();
     m_hasSelection = false;
     m_selectionRect = QRect();
     emit selectionChanged();
@@ -329,6 +334,74 @@ void ImageView::setChannelsLinked(bool linked) {
     }
 }
 
+void ImageView::setPreviewImage(const ImageVariant& previewImage) {
+    m_previewImage = previewImage;
+    clearCLAHE();
+    updateView();
+}
+
+void ImageView::clearPreviewImage() {
+    m_previewImage = ImageVariant();
+    clearCLAHE();
+    updateView();
+}
+
+void ImageView::setLivePreview(const std::vector<std::vector<unsigned char>>& liveLut,
+                               const std::vector<unsigned char>& liveSatLut,
+                               const std::vector<unsigned char>& liveLumLut) {
+    m_livePreviewLut = liveLut;
+    m_livePreviewSatLut = liveSatLut;
+    m_livePreviewLumLut = liveLumLut;
+    updateView();
+}
+
+void ImageView::clearLivePreview() {
+    m_livePreviewLut.clear();
+    m_livePreviewSatLut.clear();
+    m_livePreviewLumLut.clear();
+    updateView();
+}
+
+bool ImageView::hasLivePreview() const {
+    return m_livePreviewLut.size() == 3 && !m_livePreviewLut[0].empty();
+}
+
+ImageVariant ImageView::activeImage() const {
+    if (hasPreviewImage()) return m_previewImage;
+    return m_currentImage;
+}
+
+void ImageView::applyLivePreviewToPixel(float& r, float& g, float& b) const {
+    if (!hasLivePreview()) return;
+    int idxR = qBound(0, static_cast<int>(r * 65535.0f), 65535);
+    int idxG = qBound(0, static_cast<int>(g * 65535.0f), 65535);
+    int idxB = qBound(0, static_cast<int>(b * 65535.0f), 65535);
+    r = m_livePreviewLut[0][idxR] / 255.0f;
+    g = m_livePreviewLut[1][idxG] / 255.0f;
+    b = m_livePreviewLut[2][idxB] / 255.0f;
+
+    // Apply luminance LUT and/or saturation LUT in HSL space
+    if (!m_livePreviewLumLut.empty() || !m_livePreviewSatLut.empty()) {
+        float h, s, l;
+        StretchingAlgorithm::rgbToHsl(r, g, b, h, s, l);
+        if (!m_livePreviewLumLut.empty()) {
+            int lumIdx = qBound(0, static_cast<int>(l * 65535.0f), 65535);
+            l = m_livePreviewLumLut[lumIdx] / 255.0f;
+        }
+        if (!m_livePreviewSatLut.empty()) {
+            int satIdx = qBound(0, static_cast<int>(s * 65535.0f), 65535);
+            s = m_livePreviewSatLut[satIdx] / 255.0f;
+        }
+        StretchingAlgorithm::hslToRgb(h, s, l, r, g, b);
+    }
+}
+
+float ImageView::applyLivePreviewToGrayscale(float val) const {
+    if (!hasLivePreview()) return val;
+    int idx = qBound(0, static_cast<int>(val * 65535.0f), 65535);
+    return m_livePreviewLut[0][idx] / 255.0f;
+}
+
 void ImageView::updateLUT() {
     m_lut.assign(3, std::vector<unsigned char>(65536));
     
@@ -348,14 +421,15 @@ void ImageView::updateLUT() {
 void ImageView::runAutostretch() {
     int width = 0;
     int height = 0;
+    ImageVariant actImg = activeImage();
 
-    if (std::holds_alternative<GrayscaleImagePtr>(m_currentImage)) {
-        auto img = std::get<GrayscaleImagePtr>(m_currentImage);
+    if (std::holds_alternative<GrayscaleImagePtr>(actImg)) {
+        auto img = std::get<GrayscaleImagePtr>(actImg);
         if (!img) return;
         width = img->width();
         height = img->height();
-    } else if (std::holds_alternative<RGBImagePtr>(m_currentImage)) {
-        auto img = std::get<RGBImagePtr>(m_currentImage);
+    } else if (std::holds_alternative<RGBImagePtr>(actImg)) {
+        auto img = std::get<RGBImagePtr>(actImg);
         if (!img) return;
         width = img->width();
         height = img->height();
@@ -401,7 +475,7 @@ void ImageView::runAutostretch() {
         outMedian = med;
     };
 
-    if (m_channelsLinked || std::holds_alternative<GrayscaleImagePtr>(m_currentImage)) {
+    if (m_channelsLinked || std::holds_alternative<GrayscaleImagePtr>(actImg)) {
         std::vector<float> samples;
         samples.reserve(totalPixels / sampleStep);
 
@@ -410,13 +484,15 @@ void ImageView::runAutostretch() {
                 int linearIdx = y * width + x;
                 if (linearIdx % sampleStep == 0) {
                     float val = 0.0f;
-                    if (std::holds_alternative<GrayscaleImagePtr>(m_currentImage)) {
-                        val = std::get<GrayscaleImagePtr>(m_currentImage)->buffer()->pixel(x, y);
+                    if (std::holds_alternative<GrayscaleImagePtr>(actImg)) {
+                        val = std::get<GrayscaleImagePtr>(actImg)->buffer()->pixel(x, y);
+                        val = applyLivePreviewToGrayscale(val);
                     } else {
-                        auto rgb = std::get<RGBImagePtr>(m_currentImage);
+                        auto rgb = std::get<RGBImagePtr>(actImg);
                         float r = rgb->r()->buffer()->pixel(x, y);
                         float g = rgb->g()->buffer()->pixel(x, y);
                         float b = rgb->b()->buffer()->pixel(x, y);
+                        applyLivePreviewToPixel(r, g, b);
                         val = (r + g + b) / 3.0f;
                     }
                     if (!std::isnan(val)) samples.push_back(val);
@@ -435,7 +511,7 @@ void ImageView::runAutostretch() {
         gSamples.reserve(totalPixels / sampleStep);
         bSamples.reserve(totalPixels / sampleStep);
 
-        auto rgb = std::get<RGBImagePtr>(m_currentImage);
+        auto rgb = std::get<RGBImagePtr>(actImg);
         for (int y = 0; y < height; ++y) {
             for (int x = 0; x < width; ++x) {
                 int linearIdx = y * width + x;
@@ -443,6 +519,7 @@ void ImageView::runAutostretch() {
                     float r = rgb->r()->buffer()->pixel(x, y);
                     float g = rgb->g()->buffer()->pixel(x, y);
                     float b = rgb->b()->buffer()->pixel(x, y);
+                    applyLivePreviewToPixel(r, g, b);
                     if (!std::isnan(r)) rSamples.push_back(r);
                     if (!std::isnan(g)) gSamples.push_back(g);
                     if (!std::isnan(b)) bSamples.push_back(b);
@@ -468,14 +545,16 @@ std::vector<std::vector<int>> ImageView::getHistogram(int bins) const {
     if (m_updatesSuspended) return hists;
     
     int width = 0, height = 0;
-    if (std::holds_alternative<GrayscaleImagePtr>(m_currentImage)) {
-        auto img = std::get<GrayscaleImagePtr>(m_currentImage);
+    ImageVariant actImg = activeImage();
+
+    if (std::holds_alternative<GrayscaleImagePtr>(actImg)) {
+        auto img = std::get<GrayscaleImagePtr>(actImg);
         if (!img) return hists;
         width = img->width();
         height = img->height();
         hists.push_back(std::vector<int>(bins, 0));
-    } else if (std::holds_alternative<RGBImagePtr>(m_currentImage)) {
-        auto img = std::get<RGBImagePtr>(m_currentImage);
+    } else if (std::holds_alternative<RGBImagePtr>(actImg)) {
+        auto img = std::get<RGBImagePtr>(actImg);
         if (!img) return hists;
         width = img->width();
         height = img->height();
@@ -491,17 +570,19 @@ std::vector<std::vector<int>> ImageView::getHistogram(int bins) const {
         for (int x = 0; x < width; ++x) {
             int linearIdx = y * width + x;
             if (linearIdx % sampleStep == 0) {
-                if (std::holds_alternative<GrayscaleImagePtr>(m_currentImage)) {
-                    float val = std::get<GrayscaleImagePtr>(m_currentImage)->buffer()->pixel(x, y);
+                if (std::holds_alternative<GrayscaleImagePtr>(actImg)) {
+                    float val = std::get<GrayscaleImagePtr>(actImg)->buffer()->pixel(x, y);
+                    val = applyLivePreviewToGrayscale(val);
                     if (!std::isnan(val)) {
                         int bin = std::max(0, std::min(bins - 1, static_cast<int>(val * (bins - 1))));
                         hists[0][bin]++;
                     }
                 } else {
-                    auto rgb = std::get<RGBImagePtr>(m_currentImage);
+                    auto rgb = std::get<RGBImagePtr>(actImg);
                     float r = rgb->r()->buffer()->pixel(x, y);
                     float g = rgb->g()->buffer()->pixel(x, y);
                     float b = rgb->b()->buffer()->pixel(x, y);
+                    applyLivePreviewToPixel(r, g, b);
                     
                     if (!std::isnan(r) && !std::isnan(g) && !std::isnan(b)) {
                         int binR = std::max(0, std::min(bins - 1, static_cast<int>(r * (bins - 1))));
@@ -538,11 +619,12 @@ void ImageView::resetZoom() {
 
 bool ImageView::fitToWindow() {
     int imgW = 0, imgH = 0;
-    if (std::holds_alternative<GrayscaleImagePtr>(m_currentImage)) {
-        auto img = std::get<GrayscaleImagePtr>(m_currentImage);
+    ImageVariant actImg = activeImage();
+    if (std::holds_alternative<GrayscaleImagePtr>(actImg)) {
+        auto img = std::get<GrayscaleImagePtr>(actImg);
         if (img) { imgW = img->width(); imgH = img->height(); }
-    } else if (std::holds_alternative<RGBImagePtr>(m_currentImage)) {
-        auto img = std::get<RGBImagePtr>(m_currentImage);
+    } else if (std::holds_alternative<RGBImagePtr>(actImg)) {
+        auto img = std::get<RGBImagePtr>(actImg);
         if (img) { imgW = img->width(); imgH = img->height(); }
     }
     
@@ -867,15 +949,16 @@ void ImageView::mouseMoveEvent(QMouseEvent* event) {
     const float* bufB = nullptr;
     bool isRGB = false;
 
-    if (std::holds_alternative<GrayscaleImagePtr>(m_currentImage)) {
-        auto img = std::get<GrayscaleImagePtr>(m_currentImage);
+    ImageVariant actImg = activeImage();
+    if (std::holds_alternative<GrayscaleImagePtr>(actImg)) {
+        auto img = std::get<GrayscaleImagePtr>(actImg);
         if (img && img->buffer()) {
             imgW = img->width();
             imgH = img->height();
             bufGray = img->buffer()->data();
         }
-    } else if (std::holds_alternative<RGBImagePtr>(m_currentImage)) {
-        auto img = std::get<RGBImagePtr>(m_currentImage);
+    } else if (std::holds_alternative<RGBImagePtr>(actImg)) {
+        auto img = std::get<RGBImagePtr>(actImg);
         if (img && img->r() && img->g() && img->b()) {
             imgW = img->width();
             imgH = img->height();
@@ -966,8 +1049,9 @@ void ImageView::drawBackground(QPainter* painter, const QRectF& rect) {
     const float* bufB = nullptr;
     bool isRGB = false;
 
-    if (std::holds_alternative<GrayscaleImagePtr>(m_currentImage)) {
-        auto img = std::get<GrayscaleImagePtr>(m_currentImage);
+    ImageVariant actImg = activeImage();
+    if (std::holds_alternative<GrayscaleImagePtr>(actImg)) {
+        auto img = std::get<GrayscaleImagePtr>(actImg);
         if (img && img->buffer()) {
             imgW = img->width();
             imgH = img->height();
@@ -1015,8 +1099,8 @@ void ImageView::drawBackground(QPainter* painter, const QRectF& rect) {
                 bufGray = img->buffer()->data();
             }
         }
-    } else if (std::holds_alternative<RGBImagePtr>(m_currentImage)) {
-        auto img = std::get<RGBImagePtr>(m_currentImage);
+    } else if (std::holds_alternative<RGBImagePtr>(actImg)) {
+        auto img = std::get<RGBImagePtr>(actImg);
         if (img && img->r() && img->g() && img->b()) {
             imgW = img->width();
             imgH = img->height();
@@ -1172,16 +1256,55 @@ void ImageView::drawBackground(QPainter* painter, const QRectF& rect) {
                     float g = bufG[idx];
                     float b = bufB[idx];
 
+                    bool hasPreview = hasLivePreview();
                     if (m_displayMode == LocalHist) {
                         int rVal = qBound(0, static_cast<int>(r * 255.0f), 255);
                         int gVal = qBound(0, static_cast<int>(g * 255.0f), 255);
                         int bVal = qBound(0, static_cast<int>(b * 255.0f), 255);
                         line[vx] = qRgb(rVal, gVal, bVal);
-                    } else if (m_displayMode != Normal) {
-                        int idxR = qBound(0, static_cast<int>(r * 65535.0f), 65535);
-                        int idxG = qBound(0, static_cast<int>(g * 65535.0f), 65535);
-                        int idxB = qBound(0, static_cast<int>(b * 65535.0f), 65535);
-                        line[vx] = qRgb(m_lut[0][idxR], m_lut[1][idxG], m_lut[2][idxB]);
+                    } else if (m_displayMode != Normal || hasPreview) {
+                        float pr = r;
+                        float pg = g;
+                        float pb = b;
+
+                        if (hasPreview) {
+                            int idxR = qBound(0, static_cast<int>(pr * 65535.0f), 65535);
+                            int idxG = qBound(0, static_cast<int>(pg * 65535.0f), 65535);
+                            int idxB = qBound(0, static_cast<int>(pb * 65535.0f), 65535);
+                            pr = m_livePreviewLut[0][idxR] / 255.0f;
+                            pg = m_livePreviewLut[1][idxG] / 255.0f;
+                            pb = m_livePreviewLut[2][idxB] / 255.0f;
+
+                            if (!m_livePreviewLumLut.empty() || !m_livePreviewSatLut.empty()) {
+                                float h_val, s_val, l_val;
+                                StretchingAlgorithm::rgbToHsl(pr, pg, pb, h_val, s_val, l_val);
+                                if (!m_livePreviewLumLut.empty()) {
+                                    int lumIdx = qBound(0, static_cast<int>(l_val * 65535.0f), 65535);
+                                    l_val = m_livePreviewLumLut[lumIdx] / 255.0f;
+                                }
+                                if (!m_livePreviewSatLut.empty()) {
+                                    int satIdx = qBound(0, static_cast<int>(s_val * 65535.0f), 65535);
+                                    s_val = m_livePreviewSatLut[satIdx] / 255.0f;
+                                }
+                                StretchingAlgorithm::hslToRgb(h_val, s_val, l_val, pr, pg, pb);
+                            }
+                        }
+
+                        unsigned char rOut, gOut, bOut;
+                        if (m_displayMode != Normal) {
+                            int idxR = qBound(0, static_cast<int>(pr * 65535.0f), 65535);
+                            int idxG = qBound(0, static_cast<int>(pg * 65535.0f), 65535);
+                            int idxB = qBound(0, static_cast<int>(pb * 65535.0f), 65535);
+                            rOut = m_lut[0][idxR];
+                            gOut = m_lut[1][idxG];
+                            bOut = m_lut[2][idxB];
+                        } else {
+                            rOut = static_cast<unsigned char>(qBound(0.0f, pr * 255.0f, 255.0f));
+                            gOut = static_cast<unsigned char>(qBound(0.0f, pg * 255.0f, 255.0f));
+                            bOut = static_cast<unsigned char>(qBound(0.0f, pb * 255.0f, 255.0f));
+                        }
+
+                        line[vx] = qRgb(rOut, gOut, bOut);
                     } else {
                         int rVal = qBound(0, static_cast<int>(r * 255.0f), 255);
                         int gVal = qBound(0, static_cast<int>(g * 255.0f), 255);
@@ -1190,13 +1313,26 @@ void ImageView::drawBackground(QPainter* painter, const QRectF& rect) {
                     }
                 } else {
                     float val = bufGray[idx];
+                    bool hasPreview = hasLivePreview();
 
                     if (m_displayMode == LocalHist) {
                         int grayVal = qBound(0, static_cast<int>(val * 255.0f), 255);
                         line[vx] = qRgb(grayVal, grayVal, grayVal);
-                    } else if (m_displayMode != Normal) {
-                        int idxLut = qBound(0, static_cast<int>(val * 65535.0f), 65535);
-                        line[vx] = qRgb(m_lut[0][idxLut], m_lut[0][idxLut], m_lut[0][idxLut]);
+                    } else if (m_displayMode != Normal || hasPreview) {
+                        float pval = val;
+                        if (hasPreview) {
+                            int idxLut = qBound(0, static_cast<int>(pval * 65535.0f), 65535);
+                            pval = m_livePreviewLut[0][idxLut] / 255.0f;
+                        }
+
+                        unsigned char grayOut;
+                        if (m_displayMode != Normal) {
+                            int idxLut = qBound(0, static_cast<int>(pval * 65535.0f), 65535);
+                            grayOut = m_lut[0][idxLut];
+                        } else {
+                            grayOut = static_cast<unsigned char>(qBound(0.0f, pval * 255.0f, 255.0f));
+                        }
+                        line[vx] = qRgb(grayOut, grayOut, grayOut);
                     } else {
                         int grayVal = qBound(0, static_cast<int>(val * 255.0f), 255);
                         line[vx] = qRgb(grayVal, grayVal, grayVal);
@@ -1276,12 +1412,13 @@ void ImageView::setShowBgeControlPoints(bool show, bool manual) {
 }
 
 std::vector<std::pair<double, double>> ImageView::getBgeControlPoints() const {
-    if (std::holds_alternative<GrayscaleImagePtr>(m_currentImage)) {
-        if (auto img = std::get<GrayscaleImagePtr>(m_currentImage)) {
+    ImageVariant actImg = activeImage();
+    if (std::holds_alternative<GrayscaleImagePtr>(actImg)) {
+        if (auto img = std::get<GrayscaleImagePtr>(actImg)) {
             if (img->buffer()) return img->buffer()->bgeControlPoints();
         }
-    } else if (std::holds_alternative<RGBImagePtr>(m_currentImage)) {
-        if (auto img = std::get<RGBImagePtr>(m_currentImage)) {
+    } else if (std::holds_alternative<RGBImagePtr>(actImg)) {
+        if (auto img = std::get<RGBImagePtr>(actImg)) {
             if (img->r() && img->r()->buffer()) return img->r()->buffer()->bgeControlPoints();
         }
     }
@@ -1289,12 +1426,13 @@ std::vector<std::pair<double, double>> ImageView::getBgeControlPoints() const {
 }
 
 void ImageView::setBgeControlPoints(const std::vector<std::pair<double, double>>& pts) {
-    if (std::holds_alternative<GrayscaleImagePtr>(m_currentImage)) {
-        if (auto img = std::get<GrayscaleImagePtr>(m_currentImage)) {
+    ImageVariant actImg = activeImage();
+    if (std::holds_alternative<GrayscaleImagePtr>(actImg)) {
+        if (auto img = std::get<GrayscaleImagePtr>(actImg)) {
             if (img->buffer()) img->buffer()->setBgeControlPoints(pts);
         }
-    } else if (std::holds_alternative<RGBImagePtr>(m_currentImage)) {
-        if (auto img = std::get<RGBImagePtr>(m_currentImage)) {
+    } else if (std::holds_alternative<RGBImagePtr>(actImg)) {
+        if (auto img = std::get<RGBImagePtr>(actImg)) {
             if (img->r() && img->r()->buffer()) img->r()->buffer()->setBgeControlPoints(pts);
             if (img->g() && img->g()->buffer()) img->g()->buffer()->setBgeControlPoints(pts);
             if (img->b() && img->b()->buffer()) img->b()->buffer()->setBgeControlPoints(pts);
@@ -1442,11 +1580,12 @@ void ImageView::clearSelection() {
 }
 
 QSize ImageView::currentImageSize() const {
-    if (std::holds_alternative<GrayscaleImagePtr>(m_currentImage)) {
-        auto img = std::get<GrayscaleImagePtr>(m_currentImage);
+    ImageVariant actImg = activeImage();
+    if (std::holds_alternative<GrayscaleImagePtr>(actImg)) {
+        auto img = std::get<GrayscaleImagePtr>(actImg);
         if (img) return QSize(img->width(), img->height());
-    } else if (std::holds_alternative<RGBImagePtr>(m_currentImage)) {
-        auto img = std::get<RGBImagePtr>(m_currentImage);
+    } else if (std::holds_alternative<RGBImagePtr>(actImg)) {
+        auto img = std::get<RGBImagePtr>(actImg);
         if (img) return QSize(img->width(), img->height());
     }
     return QSize(0, 0);

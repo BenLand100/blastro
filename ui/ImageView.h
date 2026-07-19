@@ -38,7 +38,8 @@ public:
         Normal,
         Stretch,
         Autostretch,
-        LocalHist
+        LocalHist,
+        CustomLUT
     };
 
     enum ChannelMode {
@@ -77,6 +78,15 @@ public:
     const std::array<double, 3>& midpoints() const { return m_midpoint; }
     void setStretchParams(double b, double w, double m, int channel = 0);
     void setStretchParams(const std::array<double, 3>& b, const std::array<double, 3>& w, const std::array<double, 3>& m);
+    void setPreviewImage(const ImageVariant& previewImage);
+    void clearPreviewImage();
+    bool hasPreviewImage() const { return m_previewImage.index() != 0 && std::get<0>(m_previewImage) != nullptr; }
+
+    void setLivePreview(const std::vector<std::vector<unsigned char>>& liveLut,
+                        const std::vector<unsigned char>& liveSatLut = std::vector<unsigned char>(),
+                        const std::vector<unsigned char>& liveLumLut = std::vector<unsigned char>());
+    void clearLivePreview();
+    bool hasLivePreview() const;
     
     bool channelsLinked() const { return m_channelsLinked; }
     void setChannelsLinked(bool linked);
@@ -137,6 +147,9 @@ private:
     void updateLUT();
     float applyMTF(float v, float B, float W, float M);
     void clearCLAHE();
+    ImageVariant activeImage() const;
+    void applyLivePreviewToPixel(float& r, float& g, float& b) const;
+    float applyLivePreviewToGrayscale(float val) const;
 
     enum ResizeHandle {
         HandleNone,
@@ -173,6 +186,10 @@ private:
     std::array<double, 3> m_midpoint = {0.5, 0.5, 0.5};
     bool m_channelsLinked = true;
     std::vector<std::vector<unsigned char>> m_lut;
+    ImageVariant m_previewImage;
+    std::vector<std::vector<unsigned char>> m_livePreviewLut;
+    std::vector<unsigned char> m_livePreviewSatLut;
+    std::vector<unsigned char> m_livePreviewLumLut;
 
     // CLAHE cache
     mutable std::vector<float> m_claheGray;

@@ -9,26 +9,17 @@
  */
 
 #pragma once
-#include <QWidget>
-#include <QPixmap>
-#include <vector>
-#include <array>
+#include "HistogramBaseWidget.h"
 #include <QPointF>
+#include <array>
 
 namespace blastro {
 
-class CurvesWidget : public QWidget {
+class CurvesWidget : public HistogramBaseWidget {
     Q_OBJECT
 public:
     explicit CurvesWidget(QWidget* parent = nullptr);
     ~CurvesWidget() override = default;
-
-    void setHistograms(const std::vector<std::vector<int>>& histos);
-
-    void setChannelsLinked(bool linked);
-    void setActive(bool active);
-    void setActiveChannel(int channel); // 0=K, 1=R, 2=G, 3=B, 4=L, 5=S
-    void setSingleChannelColor(const QColor& color);
 
     void setCurvePoints(int channel, const std::vector<QPointF>& points);
     std::vector<QPointF> getCurvePoints(int channel) const;
@@ -48,8 +39,6 @@ protected:
     void mouseMoveEvent(QMouseEvent* event) override;
 
 private:
-    double valueToX(double val) const;
-    double xToValue(double x) const;
     double valueToY(double val) const;
     double yToValue(double y) const;
     
@@ -57,12 +46,6 @@ private:
 
     // Rebuilds the LUT cache for the given channel from m_points[channel].
     void rebuildLut(int channel);
-
-    std::vector<std::vector<int>> m_histograms;
-    bool m_channelsLinked = true;
-    bool m_active = true;
-    int m_activeChannel = 0;
-    QColor m_singleChannelColor = QColor("#ffffff");
 
     // Curve points for K, R, G, B, L, S
     std::array<std::vector<QPointF>, 6> m_points;
@@ -72,9 +55,6 @@ private:
 
     int m_dragPointIndex = -1;
     bool m_isDragging = false;
-
-    QPixmap m_cachedBackground;
-    bool m_cacheDirty = true;
 };
 
 } // namespace blastro

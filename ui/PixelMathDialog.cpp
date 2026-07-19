@@ -17,6 +17,7 @@
  */
 
 #include "PixelMathDialog.h"
+#include "WorkspaceImageWindow.h"
 #include "algorithms/PixelMathAlgorithm.h"
 #include <QEvent>
 #include <QJsonObject>
@@ -231,15 +232,27 @@ void PixelMathDialog::onRunClicked() {
 }
 
 void PixelMathDialog::refreshWorkspaceElements() {
+    QString activeName;
+    if (auto win = getActiveImageWindow()) {
+        activeName = win->name();
+    }
     QString currentText = m_targetImageCombo->currentText();
     m_targetImageCombo->clear();
     auto keys = m_workspace.elementNames();
     for (const auto& name : keys) {
         m_targetImageCombo->addItem(QString::fromStdString(name));
     }
-    int idx = m_targetImageCombo->findText(currentText);
+    int idx = -1;
+    if (!activeName.isEmpty()) {
+        idx = m_targetImageCombo->findText(activeName);
+    }
+    if (idx < 0 && !currentText.isEmpty()) {
+        idx = m_targetImageCombo->findText(currentText);
+    }
     if (idx >= 0) {
         m_targetImageCombo->setCurrentIndex(idx);
+    } else if (m_targetImageCombo->count() > 0) {
+        m_targetImageCombo->setCurrentIndex(0);
     }
  
     if (m_infoLabel) {

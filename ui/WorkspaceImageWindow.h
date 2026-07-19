@@ -19,7 +19,7 @@
 #pragma once
 #include "core/WorkspaceRegistry.h"
 #include "ImageView.h"
-#include "HistogramWidget.h"
+#include "HtWidget.h"
 #include <QWidget>
 #include <QJsonObject>
 #include <QPushButton>
@@ -60,8 +60,13 @@ public:
     void restoreWindowState(const QJsonObject& obj);
 
     // Live Preview Support
-    bool hasPreviewActive() const { return m_hasPreviewActive; }
+    bool hasPreviewActive() const {
+        return m_imageView && (m_imageView->hasPreviewImage() || m_imageView->hasLivePreview());
+    }
     void setPreviewImage(const ImageVariant& previewImage);
+    void setLivePreview(const std::vector<std::vector<unsigned char>>& liveLut,
+                        const std::vector<unsigned char>& liveSatLut,
+                        const std::vector<unsigned char>& liveLumLut = std::vector<unsigned char>());
     void restoreOriginalImage();
     void commitPreviewImage(const ImageVariant& finalImage);
 
@@ -72,7 +77,7 @@ signals:
 
 private slots:
     void onModeButtonClicked(int id);
-    void onStretchParamsChangedInWidget(const std::array<double, 3>& b, const std::array<double, 3>& w, const std::array<double, 3>& m);
+    void onStretchParamsChangedInWidget(const std::array<double, 6>& b, const std::array<double, 6>& w, const std::array<double, 6>& m);
     void onStretchParamsChangedInView(const std::array<double, 3>& b, const std::array<double, 3>& w, const std::array<double, 3>& m);
     void onFrameChanged(int index);
     void onRenameClicked();
@@ -86,8 +91,6 @@ private:
     ImageView* m_imageView;
     QWidget* m_viewportWidget; // ImageView or BatchImageWidget
 
-    ImageVariant m_originalImageForPreview;
-    bool m_hasPreviewActive = false;
 
     // UI elements
     QWidget* m_headerBar;
@@ -113,7 +116,7 @@ private:
     QPushButton* m_bChanBtn;
     QPushButton* m_rgbChanBtn;
 
-    HistogramWidget* m_histogramWidget;
+    HtWidget* m_histogramWidget;
 
     struct UndoState {
         ImageVariant image;

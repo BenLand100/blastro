@@ -17,6 +17,7 @@
  */
 
 #include "DebayerDialog.h"
+#include "WorkspaceImageWindow.h"
 #include <QJsonObject>
 #include "core/Preferences.h"
 #include <QVBoxLayout>
@@ -180,15 +181,27 @@ std::map<std::string, std::string> DebayerDialog::getConfig() const {
 }
 
 void DebayerDialog::refreshWorkspaceElements() {
+    QString activeName;
+    if (auto win = getActiveImageWindow()) {
+        activeName = win->name();
+    }
     QString currentText = m_targetInputCombo->currentText();
     m_targetInputCombo->clear();
     auto keys = m_workspace.elementNames();
     for (const auto& name : keys) {
         m_targetInputCombo->addItem(QString::fromStdString(name));
     }
-    int idx = m_targetInputCombo->findText(currentText);
+    int idx = -1;
+    if (!activeName.isEmpty()) {
+        idx = m_targetInputCombo->findText(activeName);
+    }
+    if (idx < 0 && !currentText.isEmpty()) {
+        idx = m_targetInputCombo->findText(currentText);
+    }
     if (idx >= 0) {
         m_targetInputCombo->setCurrentIndex(idx);
+    } else if (m_targetInputCombo->count() > 0) {
+        m_targetInputCombo->setCurrentIndex(0);
     }
 }
 

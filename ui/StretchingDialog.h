@@ -34,7 +34,8 @@ class QStackedWidget;
 
 namespace blastro {
 
-class HistogramWidget;
+class HtWidget;
+class GhsWidget;
 class CurvesWidget;
 
 class StretchingDialog : public AlgorithmDialog {
@@ -60,9 +61,9 @@ private slots:
     void onApplyClicked();
     void onPrefsClicked();
     void onTabChanged(int index);
-    void onHtParamsChanged(const std::array<double, 3>& b, const std::array<double, 3>& w, const std::array<double, 3>& m);
-    void onGhsParamsChanged(const std::array<double, 3>& sp, const std::array<double, 3>& d);
-    void onGhsProtectionsChanged(const std::array<double, 3>& shadowProtect, const std::array<double, 3>& highlightProtect);
+    void onHtParamsChanged(const std::array<double, 6>& b, const std::array<double, 6>& w, const std::array<double, 6>& m);
+    void onGhsParamsChanged(const std::array<double, 6>& sp, const std::array<double, 6>& d);
+    void onGhsProtectionsChanged(const std::array<double, 6>& shadowProtect, const std::array<double, 6>& highlightProtect);
     void onCurveChanged(int channel, const std::vector<QPointF>& points);
     void onCopyLiveStretch();
     void onParameterChanged();
@@ -86,8 +87,9 @@ private:
 
     // Dialog layout components
     QTabWidget* m_tabWidget;
-    QStackedWidget* m_histogramContainer; // To swap between HistogramWidget and CurvesWidget
-    HistogramWidget* m_histogramWidget;
+    QStackedWidget* m_histogramContainer; // To swap between HtWidget, GhsWidget, and CurvesWidget
+    HtWidget* m_htWidget;
+    GhsWidget* m_ghsWidget;
     CurvesWidget* m_curvesWidget;
 
     // HT Tab parameters
@@ -127,6 +129,7 @@ private:
         S = 5
     };
     ActiveChannel m_activeChannel = ActiveChannel::K;
+    bool m_channelsLinked = true;
     
     QPointer<QMdiSubWindow> m_currentTrackedSub;
 

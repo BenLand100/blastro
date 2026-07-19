@@ -1133,6 +1133,11 @@ void MainWindow::onSubWindowActivated(QMdiSubWindow* window) {
                 hasActiveImage = true;
                 hasActiveBatch = true;
             }
+
+            // Refresh dialogs to update their target selection to the newly active image window
+            for (auto* dlg : findChildren<AlgorithmDialog*>()) {
+                dlg->refreshWorkspaceElements();
+            }
         }
         // Note: when a non-image subwindow (dialog, log) gains focus,
         // we intentionally preserve the target label so users can see which
@@ -1946,7 +1951,7 @@ void MainWindow::onUndo() {
     if (auto* wsWindow = qobject_cast<WorkspaceImageWindow*>(activeSub->widget())) {
         if (wsWindow->canUndo()) {
             wsWindow->undo();
-            QString activeName = wsWindow->windowTitle();
+            QString activeName = wsWindow->name();
             m_workspace.registerElement(activeName.toStdString(), wsWindow->element());
             for (auto* dlg : findChildren<AlgorithmDialog*>()) {
                 dlg->refreshWorkspaceElements();
@@ -1962,7 +1967,7 @@ void MainWindow::onRedo() {
     if (auto* wsWindow = qobject_cast<WorkspaceImageWindow*>(activeSub->widget())) {
         if (wsWindow->canRedo()) {
             wsWindow->redo();
-            QString activeName = wsWindow->windowTitle();
+            QString activeName = wsWindow->name();
             m_workspace.registerElement(activeName.toStdString(), wsWindow->element());
             for (auto* dlg : findChildren<AlgorithmDialog*>()) {
                 dlg->refreshWorkspaceElements();
@@ -2033,7 +2038,7 @@ void MainWindow::onRotate90CW() {
                 elemRotated = std::get<RGBImagePtr>(rotated);
             }
             wsWindow->setElement(elemRotated);
-            QString activeName = wsWindow->windowTitle();
+            QString activeName = wsWindow->name();
             m_workspace.registerElement(activeName.toStdString(), elemRotated);
             for (auto* dlg : findChildren<AlgorithmDialog*>()) {
                 dlg->refreshWorkspaceElements();
@@ -2059,7 +2064,7 @@ void MainWindow::onRotate90CCW() {
                 elemRotated = std::get<RGBImagePtr>(rotated);
             }
             wsWindow->setElement(elemRotated);
-            QString activeName = wsWindow->windowTitle();
+            QString activeName = wsWindow->name();
             m_workspace.registerElement(activeName.toStdString(), elemRotated);
             for (auto* dlg : findChildren<AlgorithmDialog*>()) {
                 dlg->refreshWorkspaceElements();
@@ -2088,7 +2093,7 @@ void MainWindow::onCrop() {
                     elemCropped = std::get<RGBImagePtr>(cropped);
                 }
                 wsWindow->setElement(elemCropped);
-                QString activeName = wsWindow->windowTitle();
+                QString activeName = wsWindow->name();
                 m_workspace.registerElement(activeName.toStdString(), elemCropped);
                 iv->clearSelection();
                 for (auto* dlg : findChildren<AlgorithmDialog*>()) {

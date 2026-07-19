@@ -46,7 +46,7 @@ WorkspaceImageWindow::WorkspaceImageWindow(const QString& name, const WorkspaceE
       m_bChanBtn(new QPushButton("B", this)),
       m_rgbChanBtn(new QPushButton("RGB", this)),
       m_linkedBtn(new QPushButton(QString::fromUtf8("\xF0\x9F\x94\x97"), this)), // 🔗
-      m_histogramWidget(new HistogramWidget(this)) {
+      m_histogramWidget(new HtWidget(this)) {
 
     // 1. Create viewport based on element type
     if (std::holds_alternative<GrayscaleImagePtr>(element) || std::holds_alternative<RGBImagePtr>(element)) {
@@ -292,7 +292,7 @@ WorkspaceImageWindow::WorkspaceImageWindow(const QString& name, const WorkspaceE
     connect(m_modeGroup, qOverload<int>(&QButtonGroup::idClicked), this, &WorkspaceImageWindow::onModeButtonClicked);
     
     // Bidirectional sync between HistogramWidget and ImageView
-    connect(m_histogramWidget, &HistogramWidget::stretchParamsChanged, this, &WorkspaceImageWindow::onStretchParamsChangedInWidget);
+    connect(m_histogramWidget, &HtWidget::stretchParamsChanged, this, &WorkspaceImageWindow::onStretchParamsChangedInWidget);
     connect(m_imageView, &ImageView::stretchParamsChanged, this, &WorkspaceImageWindow::onStretchParamsChangedInView);
 
     // Initialize histogram
@@ -310,9 +310,6 @@ ImageVariant WorkspaceImageWindow::currentImage() const {
 }
 
 ImageVariant WorkspaceImageWindow::originalImage() const {
-    if (m_hasPreviewActive) {
-        return m_originalImageForPreview;
-    }
     return currentImage();
 }
 
@@ -359,9 +356,20 @@ void WorkspaceImageWindow::onModeButtonClicked(int id) {
     }
 }
 
-void WorkspaceImageWindow::onStretchParamsChangedInWidget(const std::array<double, 3>& b, const std::array<double, 3>& w, const std::array<double, 3>& m) {
+void WorkspaceImageWindow::onStretchParamsChangedInWidget(const std::array<double, 6>& b, const std::array<double, 6>& w, const std::array<double, 6>& m) {
+    std::array<double, 3> b3, w3, m3;
+    if (m_imageView->channelsLinked()) {
+        b3.fill(b[0]);
+        w3.fill(w[0]);
+        m3.fill(m[0]);
+    } else {
+        b3 = { b[1], b[2], b[3] };
+        w3 = { w[1], w[2], w[3] };
+        m3 = { m[1], m[2], m[3] };
+    }
+
     m_imageView->blockSignals(true);
-    m_imageView->setStretchParams(b, w, m);
+    m_imageView->setStretchParams(b3, w3, m3);
     m_imageView->blockSignals(false);
 
     if (m_modeGroup->checkedId() == 0 || m_modeGroup->checkedId() == 2 || m_modeGroup->checkedId() == 3) {
@@ -374,8 +382,22 @@ void WorkspaceImageWindow::onStretchParamsChangedInWidget(const std::array<doubl
 }
 
 void WorkspaceImageWindow::onStretchParamsChangedInView(const std::array<double, 3>& b, const std::array<double, 3>& w, const std::array<double, 3>& m) {
+    auto make6 = [this](const std::array<double, 3>& val, double defVal) {
+        std::array<double, 6> arr;
+        if (m_imageView->channelsLinked()) {
+            arr = { val[0], defVal, defVal, defVal, defVal, defVal };
+        } else {
+            arr = { defVal, val[0], val[1], val[2], defVal, defVal };
+        }
+        return arr;
+    };
+
     m_histogramWidget->blockSignals(true);
-    m_histogramWidget->setStretchParams(b, w, m);
+    m_histogramWidget->setStretchParams(
+        make6(b, 0.0),
+        make6(w, 1.0),
+        make6(m, 0.5)
+    );
     m_histogramWidget->blockSignals(false);
 
     if (m_imageView->displayMode() == ImageView::Autostretch) {
@@ -428,9 +450,22 @@ void WorkspaceImageWindow::updateHistogram() {
     m_histogramWidget->setHistograms(m_imageView->getHistogram(65536));
     if (m_histogramWidget->isActive()) {
         m_histogramWidget->setChannelsLinked(m_imageView->channelsLinked());
-        m_histogramWidget->setStretchParams(m_imageView->blackpoints(), 
-                                            m_imageView->whitepoints(), 
-                                            m_imageView->midpoints());
+        
+        auto make6 = [this](const std::array<double, 3>& val, double defVal) {
+            std::array<double, 6> arr;
+            if (m_imageView->channelsLinked()) {
+                arr = { val[0], defVal, defVal, defVal, defVal, defVal };
+            } else {
+                arr = { defVal, val[0], val[1], val[2], defVal, defVal };
+            }
+            return arr;
+        };
+
+        m_histogramWidget->setStretchParams(
+            make6(m_imageView->blackpoints(), 0.0),
+            make6(m_imageView->whitepoints(), 1.0),
+            make6(m_imageView->midpoints(), 0.5)
+        );
     }
 }
 
@@ -506,7 +541,7 @@ void WorkspaceImageWindow::updateNameLabelText() {
     
     QFontMetrics fm(m_nameBtn->font());
     QString displayName = m_name;
-    if (m_hasPreviewActive) {
+    if (hasPreviewActive()) {
         displayName += " (Preview)";
     }
     QString elided = fm.elidedText(displayName, Qt::ElideMiddle, maxAllowedWidth);
@@ -558,30 +593,36 @@ void WorkspaceImageWindow::setUpdatesSuspended(bool suspended) {
 }
 
 void WorkspaceImageWindow::setPreviewImage(const ImageVariant& previewImage) {
-    if (!m_hasPreviewActive) {
-        m_originalImageForPreview = currentImage();
-        m_hasPreviewActive = true;
+    if (m_imageView) {
+        m_imageView->setPreviewImage(previewImage);
     }
-    m_imageView->setImage(previewImage, true, true);
     notifyImageUpdated();
     updateNameLabelText();
 }
 
-void WorkspaceImageWindow::restoreOriginalImage() {
-    if (m_hasPreviewActive) {
-        m_imageView->setImage(m_originalImageForPreview, true, true);
-        m_hasPreviewActive = false;
-        m_originalImageForPreview = ImageVariant();
-        notifyImageUpdated();
-        updateNameLabelText();
+void WorkspaceImageWindow::setLivePreview(const std::vector<std::vector<unsigned char>>& liveLut,
+                                          const std::vector<unsigned char>& liveSatLut,
+                                          const std::vector<unsigned char>& liveLumLut) {
+    if (m_imageView) {
+        m_imageView->setLivePreview(liveLut, liveSatLut, liveLumLut);
     }
+    updateNameLabelText();
+}
+
+void WorkspaceImageWindow::restoreOriginalImage() {
+    if (m_imageView) {
+        m_imageView->clearPreviewImage();
+        m_imageView->clearLivePreview();
+    }
+    notifyImageUpdated();
+    updateNameLabelText();
 }
 
 void WorkspaceImageWindow::commitPreviewImage(const ImageVariant& finalImage) {
-    if (m_hasPreviewActive) {
+    if (hasPreviewActive()) {
         // Save undo state using the unstretched original image before mutating it!
         UndoState state;
-        state.image = ImageOperations::cloneImageVariant(m_originalImageForPreview);
+        state.image = ImageOperations::cloneImageVariant(currentImage());
         m_undoStack.push_back(state);
         if (m_undoStack.size() > m_maxUndoDepth) {
             m_undoStack.erase(m_undoStack.begin());
@@ -590,16 +631,17 @@ void WorkspaceImageWindow::commitPreviewImage(const ImageVariant& finalImage) {
         emit undoRedoStateChanged();
 
         // Mutate the original image in-place
-        if (std::holds_alternative<GrayscaleImagePtr>(m_originalImageForPreview) &&
+        ImageVariant origImg = currentImage();
+        if (std::holds_alternative<GrayscaleImagePtr>(origImg) &&
             std::holds_alternative<GrayscaleImagePtr>(finalImage)) {
-            auto dst = std::get<GrayscaleImagePtr>(m_originalImageForPreview)->buffer();
+            auto dst = std::get<GrayscaleImagePtr>(origImg)->buffer();
             auto src = std::get<GrayscaleImagePtr>(finalImage)->buffer();
             if (dst->width() == src->width() && dst->height() == src->height()) {
                 std::copy(src->data(), src->data() + src->width() * src->height(), dst->data());
             }
-        } else if (std::holds_alternative<RGBImagePtr>(m_originalImageForPreview) &&
+        } else if (std::holds_alternative<RGBImagePtr>(origImg) &&
                    std::holds_alternative<RGBImagePtr>(finalImage)) {
-            auto dst = std::get<RGBImagePtr>(m_originalImageForPreview);
+            auto dst = std::get<RGBImagePtr>(origImg);
             auto src = std::get<RGBImagePtr>(finalImage);
             if (dst->width() == src->width() && dst->height() == src->height()) {
                 std::copy(src->r()->buffer()->data(), src->r()->buffer()->data() + src->width() * src->height(), dst->r()->buffer()->data());
@@ -608,10 +650,10 @@ void WorkspaceImageWindow::commitPreviewImage(const ImageVariant& finalImage) {
             }
         }
         
-        // Restore view pointer to the mutated original, keeping zoom
-        m_imageView->setImage(m_originalImageForPreview, true, true);
-        m_hasPreviewActive = false;
-        m_originalImageForPreview = ImageVariant();
+        if (m_imageView) {
+            m_imageView->clearPreviewImage();
+            m_imageView->clearLivePreview();
+        }
         notifyImageUpdated();
         updateNameLabelText();
     }

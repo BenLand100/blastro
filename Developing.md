@@ -69,13 +69,14 @@ To add a new processing algorithm:
 When adding algorithms that support interactive previewing, choose one of these two common recipes depending on the computational cost of the algorithm:
 
 1. **Recipe 1: Live Previews (Fast Algorithms)**
-   - **Use Case**: Extremely fast algorithms (< 100ms) like Histogram Stretching.
+   - **Use Case**: Extremely fast algorithms (< 100ms) like Histogram, GHS, or Curves Stretching.
    - **Pattern**:
      - Add a "Live Preview" checkbox (`QCheckBox* m_previewChk`).
      - Connect parameter change events (slider value changes, etc.) directly to an `onParameterChanged()` slot.
      - In `onParameterChanged()`, check if the preview checkbox is checked. If it is, start a short single-shot debounce timer (`QTimer* m_previewTimer`) to trigger the preview calculation after e.g., 150ms of inactivity.
-     - Call `win->setPreviewImage(previewResult)` to show the preview, and `win->restoreOriginalImage()` when unchecked.
-     - On "Apply", commit the result via `win->commitPreviewImage(finalResult)` and reset the preview checkbox.
+     - Build composed RGB/L and Saturation LUTs (65536 entries, sequential composition of steps) and pass them to the target window via `win->imageView()->setLivePreview(liveLut, liveSatLut)`. This is display-only and does not mutate or swap the workspace's image buffer.
+     - Clear the live preview via `win->restoreOriginalImage()` when unchecked or dialog is closed.
+     - On "Apply", compute the exact analytical stretch on the original image, save undo state, commit the result by updating the window element via `win->setElement()`, and reset the preview checkbox.
 
 2. **Recipe 2: Manual Update Previews (Computationally Intense Algorithms)**
    - **Use Case**: Algorithms with non-trivial processing times (e.g., Background Extraction, Star Finding, Denoising) where real-time slider updates would lag or freeze the GUI.
@@ -84,7 +85,7 @@ When adding algorithms that support interactive previewing, choose one of these 
      - The "Update Preview" button should only be enabled when the checkbox is checked.
      - Toggling the checkbox on runs the preview once and enables the button. Toggling it off restores the original image (`win->restoreOriginalImage()`) and disables the button.
      - Parameter changes do *not* automatically trigger execution. Instead, the user manually clicks "Update Preview" to rerun the algorithm on the active view.
-     - Like Recipe 1, use `win->setPreviewImage(previewResult)` to display the result, and ensure that closing the dialog or switching windows cleans up by calling `win->restoreOriginalImage()`.
+     - Use `win->setPreviewImage(previewResult)` to display the result (which stores the preview image inside `ImageView` for display-only coordinates/histograms rendering, without swapping workspace image pointers), and ensure that closing the dialog or switching windows cleans up by calling `win->restoreOriginalImage()`.
 
 3. **Global Preview Lifecycle Rule**:
    - To prevent multiple previews from overlapping or sticking around when switching contexts, previews must automatically turn off if a different window is focused.
@@ -102,10 +103,12 @@ When adding algorithms that support interactive previewing, choose one of these 
    - When adding new algorithm dialogs, always prefer calling these base class helpers rather than duplicating the traversal logic.
 
 5. **Preview vs. Apply Performance Strategy**:
-   - For dialogs with computationally expensive transformations (e.g., stretching), distinguish between the **live preview** path and the **final apply** path:
-     - **Preview**: Use precomputed LUT (Look-Up Table) approximations (65,536 entries) for the per-pixel loop. LUTs allow a single table-lookup with linear interpolation to replace repeated transcendental function calls (`std::pow`, `std::exp`, `std::log`) or rational expressions, massively accelerating per-frame responsiveness. Build LUTs using `StretchingAlgorithm::buildHistogramLUT()` or `::buildGhsLUT()`. For curves, use the widget's pre-cached LUT from `CurvesWidget::getLut()`.
-     - **Apply**: Run the exact analytical math, without LUT approximations, to preserve full floating-point precision in the final committed result.
-   - Both paths must still use OpenMP (`#pragma omp parallel for`) over raw pixel data pointers for maximum throughput.
+    - Previews are kept strictly display-only. The main workspace data (`m_element.image`) and the view base image (`m_currentImage`) are never swapped or mutated during previews.
+    - Choose the preview execution strategy depending on algorithm speed:
+      - **Fast Previews (LUT-based)**: For per-pixel adjustments (Histogram, GHS, Curves), precompute 1D LUTs (RGB/L and Saturation separately) and apply them on the fly in `ImageView::drawBackground` (using RGB -> HSL -> Saturation LUT -> HSL -> RGB on the fly for saturation stretches). This allows the viewport display stretch (e.g., auto-stretch) to compose on top in real-time.
+      - **Slow Previews (Image-based)**: For complex spatial calculations (Background Extraction), compute a full-resolution preview buffer once, set it on `ImageView` via `setPreviewImage` (which stores it in `m_previewImage`), and let `ImageView` automatically sample from it during coordinates, autostretch, and histogram calculations via `activeImage()`.
+    - **Apply**: Click "Apply" to compute the exact analytical math on the original image, save undo state, and update the workspace element in-place to commit.
+    - All analytical math paths must still use OpenMP (`#pragma omp parallel for`) over raw pixel data pointers for maximum throughput.
 
 
 ### In-Place vs. New Image Algorithms

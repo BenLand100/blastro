@@ -43,6 +43,8 @@ private slots:
     void onRunClicked();
 
 private:
+    void populateHintsFromElement(const QString& name);
+
     QComboBox* m_targetInputCombo;
     QComboBox* m_solverCombo;
     QDoubleSpinBox* m_raHintSpin;

@@ -17,8 +17,12 @@
  */
 
 #include "PlatesolveDialog.h"
+#include "WorkspaceImageWindow.h"
 #include <QJsonObject>
 #include "core/Preferences.h"
+#include "core/GrayscaleImage.h"
+#include "core/RGBImage.h"
+#include "core/ImageBatch.h"
 #include <QVBoxLayout>
 #include <QFormLayout>
 #include <QHBoxLayout>
@@ -47,6 +51,8 @@ PlatesolveDialog::PlatesolveDialog(WorkspaceRegistry& workspace, QWidget* parent
     m_targetInputCombo->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     refreshWorkspaceElements();
     formLayout->addRow("Input Element:", m_targetInputCombo);
+
+    connect(m_targetInputCombo, &QComboBox::currentTextChanged, this, &PlatesolveDialog::populateHintsFromElement);
 
     // 2. Solver engine
     m_solverCombo = new QComboBox(this);
@@ -113,6 +119,11 @@ PlatesolveDialog::PlatesolveDialog(WorkspaceRegistry& workspace, QWidget* parent
     btnLayout->addWidget(runBtn);
 
     mainLayout->addLayout(btnLayout);
+
+    // Populate hints from the initially selected element (if any)
+    if (!m_targetInputCombo->currentText().isEmpty()) {
+        populateHintsFromElement(m_targetInputCombo->currentText());
+    }
 }
 
 void PlatesolveDialog::onRunClicked() {
@@ -141,15 +152,95 @@ std::map<std::string, std::string> PlatesolveDialog::getConfig() const {
 }
 
 void PlatesolveDialog::refreshWorkspaceElements() {
+    QString activeName;
+    if (auto win = getActiveImageWindow()) {
+        activeName = win->name();
+    }
     QString currentText = m_targetInputCombo->currentText();
     m_targetInputCombo->clear();
     auto keys = m_workspace.elementNames();
     for (const auto& name : keys) {
         m_targetInputCombo->addItem(QString::fromStdString(name));
     }
-    int idx = m_targetInputCombo->findText(currentText);
+    int idx = -1;
+    if (!activeName.isEmpty()) {
+        idx = m_targetInputCombo->findText(activeName);
+    }
+    if (idx < 0 && !currentText.isEmpty()) {
+        idx = m_targetInputCombo->findText(currentText);
+    }
     if (idx >= 0) {
         m_targetInputCombo->setCurrentIndex(idx);
+    } else if (m_targetInputCombo->count() > 0) {
+        m_targetInputCombo->setCurrentIndex(0);
+    }
+}
+
+void PlatesolveDialog::populateHintsFromElement(const QString& name) {
+    if (name.isEmpty() || !m_workspace.contains(name.toStdString())) {
+        return;
+    }
+
+    // Retrieve the metadata for the selected element.
+    // For batches, use the first frame's baseMetadata.
+    const ImageMetadata* meta = nullptr;
+    WorkspaceElement elem = m_workspace.getElement(name.toStdString());
+    ImageMetadata batchMeta;
+    if (std::holds_alternative<GrayscaleImagePtr>(elem)) {
+        meta = &std::get<GrayscaleImagePtr>(elem)->metadata();
+    } else if (std::holds_alternative<RGBImagePtr>(elem)) {
+        meta = &std::get<RGBImagePtr>(elem)->metadata();
+    } else if (std::holds_alternative<ImageBatchPtr>(elem)) {
+        auto batch = std::get<ImageBatchPtr>(elem);
+        if (batch->count() > 0) {
+            batchMeta = batch->frameMetadata(0).baseMetadata;
+            meta = &batchMeta;
+        }
+    }
+
+    if (!meta) return;
+
+    // Helper: look up a numeric FITS keyword, return true if found and parseable
+    auto getDouble = [&](const std::string& key, double& out) -> bool {
+        auto it = meta->fitsKeywords.find(key);
+        if (it != meta->fitsKeywords.end()) {
+            try {
+                out = std::stod(it->second);
+                return true;
+            } catch (...) {}
+        }
+        return false;
+    };
+
+    // Focal length: standard FITS keyword FOCALLEN (mm)
+    double focalLen = 0.0;
+    if (getDouble("FOCALLEN", focalLen) && focalLen > 0.0) {
+        m_focalLengthSpin->setValue(focalLen);
+    }
+
+    // Pixel size: XPIXSZ preferred, fallback to YPIXSZ (micrometers)
+    double pixSz = 0.0;
+    if ((getDouble("XPIXSZ", pixSz) || getDouble("YPIXSZ", pixSz)) && pixSz > 0.0) {
+        m_pixelSizeSpin->setValue(pixSz);
+    }
+
+    // RA/Dec: prefer already-solved WCS center; fallback to RA/DEC FITS keywords
+    double ra = -1.0, dec = -99.0;
+    if (meta->wcsSolved) {
+        ra = meta->wcsRaCenter;
+        dec = meta->wcsDecCenter;
+    } else {
+        getDouble("RA", ra);
+        getDouble("DEC", dec);
+    }
+    if (ra >= 0.0 && dec >= -90.0) {
+        m_raHintSpin->setValue(ra);
+        m_decHintSpin->setValue(dec);
+        m_blindSolveChk->setChecked(false);
+    } else {
+        m_raHintSpin->setValue(0.0);
+        m_decHintSpin->setValue(0.0);
+        m_blindSolveChk->setChecked(true);
     }
 }
 

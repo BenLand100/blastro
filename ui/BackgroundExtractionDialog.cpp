@@ -593,6 +593,13 @@ bool BackgroundExtractionDialog::hasActivePreview() const {
 }
 
 void BackgroundExtractionDialog::clearPreview() {
+    WorkspaceImageWindow* win = nullptr;
+    if (m_currentTrackedSub) {
+        win = qobject_cast<WorkspaceImageWindow*>(m_currentTrackedSub->widget());
+    } else {
+        win = getActiveImageWindow();
+    }
+
     if (m_previewChk) {
         m_previewChk->blockSignals(true);
         m_previewChk->setChecked(false);
@@ -601,12 +608,8 @@ void BackgroundExtractionDialog::clearPreview() {
     if (m_updatePreviewBtn) {
         m_updatePreviewBtn->setEnabled(false);
     }
-    // Use tracked window directly so we don't lose the target when the dialog gains focus
-    if (m_currentTrackedSub) {
-        if (auto* win = qobject_cast<WorkspaceImageWindow*>(m_currentTrackedSub->widget())) {
-            win->restoreOriginalImage();
-        }
-    } else if (auto win = getActiveImageWindow()) {
+    
+    if (win) {
         win->restoreOriginalImage();
     }
 }

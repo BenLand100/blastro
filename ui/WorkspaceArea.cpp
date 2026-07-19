@@ -112,7 +112,8 @@ void WorkspaceArea::renameElementView(const QString& oldName, const QString& new
 ImageVariant WorkspaceArea::getActiveImage() const {
     // Search in activation history order (most recently active first)
     QList<QMdiSubWindow*> windows = subWindowList(QMdiArea::ActivationHistoryOrder);
-    for (QMdiSubWindow* sub : windows) {
+    for (int i = windows.size() - 1; i >= 0; --i) {
+        QMdiSubWindow* sub = windows[i];
         if (!sub) continue;
         QWidget* widget = sub->widget();
         if (auto win = qobject_cast<WorkspaceImageWindow*>(widget)) {
@@ -125,7 +126,8 @@ ImageVariant WorkspaceArea::getActiveImage() const {
 QString WorkspaceArea::getActiveImageName() const {
     // Search in activation history order (most recently active first)
     QList<QMdiSubWindow*> windows = subWindowList(QMdiArea::ActivationHistoryOrder);
-    for (QMdiSubWindow* sub : windows) {
+    for (int i = windows.size() - 1; i >= 0; --i) {
+        QMdiSubWindow* sub = windows[i];
         if (!sub) continue;
         QWidget* widget = sub->widget();
         if (auto win = qobject_cast<WorkspaceImageWindow*>(widget)) {

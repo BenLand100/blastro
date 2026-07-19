@@ -9,6 +9,7 @@
  */
 
 #include "StarFindingDialog.h"
+#include "WorkspaceImageWindow.h"
 #include <QJsonObject>
 #include "core/Preferences.h"
 #include <QVBoxLayout>
@@ -159,6 +160,10 @@ std::map<std::string, std::string> StarFindingDialog::getConfig() const {
 }
 
 void StarFindingDialog::refreshWorkspaceElements() {
+    QString activeName;
+    if (auto win = getActiveImageWindow()) {
+        activeName = win->name();
+    }
     QString currentText = m_targetInputCombo->currentText();
     m_targetInputCombo->clear();
     auto keys = m_workspace.elementNames();
@@ -168,9 +173,17 @@ void StarFindingDialog::refreshWorkspaceElements() {
             m_targetInputCombo->addItem(QString::fromStdString(name));
         }
     }
-    int idx = m_targetInputCombo->findText(currentText);
+    int idx = -1;
+    if (!activeName.isEmpty()) {
+        idx = m_targetInputCombo->findText(activeName);
+    }
+    if (idx < 0 && !currentText.isEmpty()) {
+        idx = m_targetInputCombo->findText(currentText);
+    }
     if (idx >= 0) {
         m_targetInputCombo->setCurrentIndex(idx);
+    } else if (m_targetInputCombo->count() > 0) {
+        m_targetInputCombo->setCurrentIndex(0);
     }
 }
 

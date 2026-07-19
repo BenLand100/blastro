@@ -19,7 +19,9 @@ add_library(blastro_ui
     WorkspaceArea.cpp
     ImageView.cpp
     BatchImageWidget.cpp
-    HistogramWidget.cpp
+    HistogramBaseWidget.cpp
+    HtWidget.cpp
+    GhsWidget.cpp
     CurvesWidget.cpp
     WorkspaceImageWindow.cpp
     AlgorithmDialog.cpp
