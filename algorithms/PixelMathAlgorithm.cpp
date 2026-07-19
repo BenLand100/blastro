@@ -38,6 +38,12 @@ struct ImageBindings {
     RGBImagePtr rgbImage;
     ImageBatchPtr batchImage;
     
+    // Extracted pointers for fast access
+    float* grayData = nullptr;
+    float* rData = nullptr;
+    float* gData = nullptr;
+    float* bData = nullptr;
+
     // Current pixel value pointer/reference for exprtk
     double currentVal = 0.0;
     double currentR = 0.0;
@@ -128,6 +134,7 @@ void PixelMathAlgorithm::execute(WorkspaceRegistry& workspace,
 
         if (std::holds_alternative<GrayscaleImagePtr>(elem)) {
             bind.grayImage = std::get<GrayscaleImagePtr>(elem);
+            bind.grayData = bind.grayImage->buffer()->data();
             if (width == 0) {
                 width = bind.grayImage->width();
                 height = bind.grayImage->height();
@@ -135,6 +142,9 @@ void PixelMathAlgorithm::execute(WorkspaceRegistry& workspace,
             bindings.push_back(bind);
         } else if (std::holds_alternative<RGBImagePtr>(elem)) {
             bind.rgbImage = std::get<RGBImagePtr>(elem);
+            bind.rData = bind.rgbImage->r()->buffer()->data();
+            bind.gData = bind.rgbImage->g()->buffer()->data();
+            bind.bData = bind.rgbImage->b()->buffer()->data();
             if (width == 0) {
                 width = bind.rgbImage->width();
                 height = bind.rgbImage->height();
@@ -147,12 +157,16 @@ void PixelMathAlgorithm::execute(WorkspaceRegistry& workspace,
                 auto firstFrame = bind.batchImage->getImage(0);
                 if (std::holds_alternative<GrayscaleImagePtr>(firstFrame)) {
                     auto img = std::get<GrayscaleImagePtr>(firstFrame);
+                    bind.grayData = img->buffer()->data();
                     if (width == 0) {
                         width = img->width();
                         height = img->height();
                     }
                 } else if (std::holds_alternative<RGBImagePtr>(firstFrame)) {
                     auto img = std::get<RGBImagePtr>(firstFrame);
+                    bind.rData = img->r()->buffer()->data();
+                    bind.gData = img->g()->buffer()->data();
+                    bind.bData = img->b()->buffer()->data();
                     if (width == 0) {
                         width = img->width();
                         height = img->height();
@@ -256,8 +270,24 @@ void PixelMathAlgorithm::execute(WorkspaceRegistry& workspace,
         outputElem = outK;
     }
 
+    float* outKData = nullptr;
+    float* outRGB_R = nullptr;
+    float* outRGB_G = nullptr;
+    float* outRGB_B = nullptr;
+
+    if (isRGB) {
+        outRGB_R = outRGB->r()->buffer()->data();
+        outRGB_G = outRGB->g()->buffer()->data();
+        outRGB_B = outRGB->b()->buffer()->data();
+    } else {
+        outKData = outK->buffer()->data();
+    }
+
+    int totalPixels = width * height;
+
     // 4. Parallel Pixel loop with thread-local exprtk expressions
     #pragma omp parallel
+
     {
         double threadX = 0.0;
         double threadY = 0.0;
@@ -326,74 +356,58 @@ void PixelMathAlgorithm::execute(WorkspaceRegistry& workspace,
         }
 
         #pragma omp for schedule(static)
-        for (int y = 0; y < height; ++y) {
+        for (int i = 0; i < totalPixels; ++i) {
+            int y = i / width;
+            int x = i % width;
             threadY = y;
+            threadX = x;
             
             // Report progress from the master thread only
-            if (progress && omp_get_thread_num() == 0 && (y % 10 == 0)) {
+            if (progress && omp_get_thread_num() == 0 && (i % (width * 10) == 0)) {
                 progress(static_cast<int>(100.0 * y / height));
             }
             
-            for (int x = 0; x < width; ++x) {
-                threadX = x;
-
-                // Update bindings for current pixel coordinate in thread-local space
-                for (auto& bind : threadBindings) {
-                    if (bind.grayImage) {
-                        float val = bind.grayImage->buffer()->pixel(x, y);
-                        bind.currentVal = val;
-                        bind.currentR = val;
-                        bind.currentG = val;
-                        bind.currentB = val;
-                    } else if (bind.rgbImage) {
-                        bind.currentR = bind.rgbImage->r()->buffer()->pixel(x, y);
-                        bind.currentG = bind.rgbImage->g()->buffer()->pixel(x, y);
-                        bind.currentB = bind.rgbImage->b()->buffer()->pixel(x, y);
-                        bind.currentVal = (bind.currentR + bind.currentG + bind.currentB) / 3.0;
-                    } else if (bind.batchImage) {
-                        auto frame = bind.batchImage->getImage(0);
-                        if (std::holds_alternative<GrayscaleImagePtr>(frame)) {
-                            float val = std::get<GrayscaleImagePtr>(frame)->buffer()->pixel(x, y);
-                            bind.currentVal = val;
-                            bind.currentR = val;
-                            bind.currentG = val;
-                            bind.currentB = val;
-                        } else if (std::holds_alternative<RGBImagePtr>(frame)) {
-                            auto rgb = std::get<RGBImagePtr>(frame);
-                            bind.currentR = rgb->r()->buffer()->pixel(x, y);
-                            bind.currentG = rgb->g()->buffer()->pixel(x, y);
-                            bind.currentB = rgb->b()->buffer()->pixel(x, y);
-                            bind.currentVal = (bind.currentR + bind.currentG + bind.currentB) / 3.0;
-                        }
-                    }
+            // Update bindings for current pixel coordinate in thread-local space
+            for (auto& bind : threadBindings) {
+                if (bind.grayData) {
+                    float val = bind.grayData[i];
+                    bind.currentVal = val;
+                    bind.currentR = val;
+                    bind.currentG = val;
+                    bind.currentB = val;
+                } else if (bind.rData && bind.gData && bind.bData) {
+                    bind.currentR = bind.rData[i];
+                    bind.currentG = bind.gData[i];
+                    bind.currentB = bind.bData[i];
+                    bind.currentVal = (bind.currentR + bind.currentG + bind.currentB) / 3.0;
                 }
+            }
 
-                // Evaluate expressions and write to output
-                if (isRGB) {
-                    // Red
-                    if (!exprR.empty()) {
-                        for (auto& bind : threadBindings) {
-                            bind.currentVal = bind.currentR;
-                        }
-                        outRGB->r()->buffer()->setPixel(x, y, static_cast<float>(threadExprR.value()));
+            // Evaluate expressions and write to output
+            if (isRGB) {
+                // Red
+                if (!exprR.empty()) {
+                    for (auto& bind : threadBindings) {
+                        bind.currentVal = bind.currentR;
                     }
-                    // Green
-                    if (!exprG.empty()) {
-                        for (auto& bind : threadBindings) {
-                            bind.currentVal = bind.currentG;
-                        }
-                        outRGB->g()->buffer()->setPixel(x, y, static_cast<float>(threadExprG.value()));
-                    }
-                    // Blue
-                    if (!exprB.empty()) {
-                        for (auto& bind : threadBindings) {
-                            bind.currentVal = bind.currentB;
-                        }
-                        outRGB->b()->buffer()->setPixel(x, y, static_cast<float>(threadExprB.value()));
-                    }
-                } else {
-                    outK->buffer()->setPixel(x, y, static_cast<float>(threadExprK.value()));
+                    outRGB_R[i] = static_cast<float>(threadExprR.value());
                 }
+                // Green
+                if (!exprG.empty()) {
+                    for (auto& bind : threadBindings) {
+                        bind.currentVal = bind.currentG;
+                    }
+                    outRGB_G[i] = static_cast<float>(threadExprG.value());
+                }
+                // Blue
+                if (!exprB.empty()) {
+                    for (auto& bind : threadBindings) {
+                        bind.currentVal = bind.currentB;
+                    }
+                    outRGB_B[i] = static_cast<float>(threadExprB.value());
+                }
+            } else {
+                outKData[i] = static_cast<float>(threadExprK.value());
             }
         }
     }
