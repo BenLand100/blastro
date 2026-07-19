@@ -128,25 +128,8 @@ void HistogramBaseWidget::drawBaseBackground(QPainter& bgPainter, int w, int h, 
             }
 
             std::vector<double> renderHist(numBins, 0.0);
-            if (nonZeroCount > 0 && nonZeroCount < 500) {
-                int windowSize = std::max(5, numBins / 256 + 1);
-                if (windowSize % 2 == 0) windowSize++;
-                int half = windowSize / 2;
-                double currentSum = 0;
-                for (int i = 0; i < half && i < numBins; ++i) {
-                    currentSum += hist[i];
-                }
-                for (int i = 0; i < numBins; ++i) {
-                    int addIdx = i + half;
-                    int removeIdx = i - half - 1;
-                    if (addIdx < numBins) currentSum += hist[addIdx];
-                    if (removeIdx >= 0) currentSum -= hist[removeIdx];
-                    renderHist[i] = currentSum / windowSize;
-                }
-            } else {
-                for (int i = 0; i < numBins; ++i) {
-                    renderHist[i] = hist[i];
-                }
+            for (int i = 0; i < numBins; ++i) {
+                renderHist[i] = hist[i];
             }
 
             double maxVal = *std::max_element(renderHist.begin(), renderHist.end());
@@ -155,7 +138,6 @@ void HistogramBaseWidget::drawBaseBackground(QPainter& bgPainter, int w, int h, 
 
                 std::vector<double> yValues(w, h);
                 std::vector<bool> validX(w, false);
-                int minBinWindow = std::max(5, static_cast<int>(numBins / (w * 2.0)));
 
                 for (int x = 0; x < w; ++x) {
                     double valCenter = xToValue(x);
@@ -166,15 +148,13 @@ void HistogramBaseWidget::drawBaseBackground(QPainter& bgPainter, int w, int h, 
                         int binEnd = std::max(0, std::min(numBins - 1, static_cast<int>(valRight * numBins)));
                         if (binStart > binEnd) std::swap(binStart, binEnd);
 
-                        int centerBin = (binStart + binEnd) / 2;
-                        if (binEnd - binStart < minBinWindow) {
-                            binStart = std::max(0, centerBin - minBinWindow / 2);
-                            binEnd = std::min(numBins - 1, centerBin + minBinWindow / 2);
-                        }
-
                         double maxInBin = 0.0;
-                        for (int b = binStart; b <= binEnd; ++b) {
-                            if (renderHist[b] > maxInBin) maxInBin = renderHist[b];
+                        if (binStart == binEnd) {
+                            maxInBin = renderHist[binStart];
+                        } else {
+                            for (int b = binStart; b <= binEnd; ++b) {
+                                if (renderHist[b] > maxInBin) maxInBin = renderHist[b];
+                            }
                         }
 
                         double logVal = std::max(0.0, std::log(maxInBin + 0.8) - std::log(0.8));

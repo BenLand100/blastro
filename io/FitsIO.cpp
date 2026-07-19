@@ -116,7 +116,8 @@ static void writeMetadata(CCfits::PHDU& phdu, const ImageMetadata& metadata) {
         }
 
         if (name == "EXPTIME" || name == "GAIN" || name == "FILTER" || name == "FILTNAM" ||
-            name == "CRVAL1" || name == "CRVAL2" || name == "CD1_1" || name == "CD1_2" ||
+            (metadata.wcsSolved && (name == "CRVAL1" || name == "CRVAL2")) ||
+            name == "CD1_1" || name == "CD1_2" ||
             name == "CD2_1" || name == "CD2_2" || name == "CDELT1" || name == "CDELT2" ||
             name == "CROTA2" || name == "WCS_SLVD") {
             continue;
@@ -998,6 +999,60 @@ bool FitsIO::readHeaderInfo(const std::string& filepath, FitsHeaderInfo& info) {
             info.objectName = obj;
         } catch (...) {
             info.objectName = "";
+        }
+
+        // Read Focal Length
+        try {
+            double fl = 0.0;
+            image.readKey("FOCALLEN", fl);
+            info.focalLength = fl;
+        } catch (...) {
+            info.focalLength = 0.0;
+        }
+
+        // Read Pixel Size
+        try {
+            double pix = 0.0;
+            try {
+                image.readKey("XPIXSZ", pix);
+            } catch (...) {
+                image.readKey("YPIXSZ", pix);
+            }
+            info.pixelSize = pix;
+        } catch (...) {
+            info.pixelSize = 0.0;
+        }
+
+        // Read RA / DEC
+        try {
+            double ra = -1.0, dec = -99.0;
+            bool found = false;
+            try {
+                image.readKey("CRVAL1", ra);
+                image.readKey("CRVAL2", dec);
+                found = true;
+            } catch (...) {
+                try {
+                    image.readKey("RA", ra);
+                    image.readKey("DEC", dec);
+                    found = true;
+                } catch (...) {
+                    try {
+                        image.readKey("OBJCTRA", ra);
+                        image.readKey("OBJCTDEC", dec);
+                        found = true;
+                    } catch (...) {}
+                }
+            }
+            if (found && ra >= 0.0 && dec >= -90.0) {
+                info.raHint = ra;
+                info.decHint = dec;
+                info.hasRaDec = true;
+            } else {
+                info.hasRaDec = false;
+            }
+        } catch (...) {
+            info.hasRaDec = false;
         }
 
         return true;

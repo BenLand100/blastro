@@ -93,7 +93,7 @@ public:
     
     void runAutostretch();
     
-    std::vector<std::vector<int>> getHistogram(int bins = 256) const;
+    std::vector<std::vector<int>> getHistogram(int bins = 2048) const;
 
     void zoomIn();
     void zoomOut();

@@ -36,6 +36,11 @@ struct FitsHeaderInfo {
     int height = 0;
     double gain = 0.0;
     std::string objectName = "";
+    double raHint = -1.0;
+    double decHint = -99.0;
+    double focalLength = 0.0;
+    double pixelSize = 0.0;
+    bool hasRaDec = false;
 };
 
 class FitsIO : public ImageReader, public ImageWriter {
