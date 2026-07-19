@@ -320,32 +320,12 @@ BackgroundExtractionDialog::BackgroundExtractionDialog(WorkspaceRegistry& worksp
     });
     connect(m_updatePreviewBtn, &QPushButton::clicked, this, &BackgroundExtractionDialog::updatePreview);
 
-    if (auto* mdi = findMdiArea()) {
+    if (auto* mdi = findWorkspaceArea()) {
         connect(mdi, &QMdiArea::subWindowActivated, this, &BackgroundExtractionDialog::onSubWindowActivated);
     }
     updateBgeModes();
 }
 
-WorkspaceImageWindow* BackgroundExtractionDialog::getActiveImageWindow() const {
-    QWidget* p = parentWidget();
-    while (p) {
-        if (auto mw = qobject_cast<QMainWindow*>(p)) {
-            if (auto wa = mw->findChild<WorkspaceArea*>()) {
-                QString activeName = wa->getActiveImageName();
-                if (!activeName.isEmpty()) {
-                    auto win = wa->getImageWindow(activeName);
-                    // Preview windows cannot become a target
-                    if (win && win->hasPreviewActive() && (!m_previewChk || !m_previewChk->isChecked())) {
-                        return nullptr;
-                    }
-                    return win;
-                }
-            }
-        }
-        p = p->parentWidget();
-    }
-    return nullptr;
-}
 
 void BackgroundExtractionDialog::onApplyClicked() {
     auto win = getActiveImageWindow();
@@ -483,19 +463,8 @@ void BackgroundExtractionDialog::onSubWindowActivated(QMdiSubWindow*) {
     updateBgeModes();
 }
 
-QMdiArea* BackgroundExtractionDialog::findMdiArea() const {
-    QWidget* p = parentWidget();
-    while (p) {
-        if (auto* mw = qobject_cast<QMainWindow*>(p)) {
-            return mw->findChild<QMdiArea*>();
-        }
-        p = p->parentWidget();
-    }
-    return nullptr;
-}
-
 void BackgroundExtractionDialog::updateBgeModes() {
-    auto* mdi = findMdiArea();
+    auto* mdi = findWorkspaceArea();
     if (!mdi) return;
     
     auto* activeWin = getActiveImageWindow();
@@ -519,7 +488,7 @@ void BackgroundExtractionDialog::updateBgeModes() {
 }
 
 void BackgroundExtractionDialog::disableAllBgeModes() {
-    auto* mdi = findMdiArea();
+    auto* mdi = findWorkspaceArea();
     if (!mdi) return;
     
     bool wasPreviewActive = m_previewChk && m_previewChk->isChecked();
@@ -609,6 +578,37 @@ void BackgroundExtractionDialog::updatePreview() {
     } catch (const std::exception& e) {
         QMessageBox::critical(this, "Preview Error", QString("Error during preview generation:\n%1").arg(e.what()));
     }
+}
+
+bool BackgroundExtractionDialog::hasActivePreview() const {
+    return m_previewChk && m_previewChk->isChecked();
+}
+
+void BackgroundExtractionDialog::clearPreview() {
+    if (m_previewChk) {
+        m_previewChk->blockSignals(true);
+        m_previewChk->setChecked(false);
+        m_previewChk->blockSignals(false);
+    }
+    if (m_updatePreviewBtn) {
+        m_updatePreviewBtn->setEnabled(false);
+    }
+    if (auto win = getActiveImageWindow()) {
+        win->restoreOriginalImage();
+    }
+}
+
+QMdiSubWindow* BackgroundExtractionDialog::getTargetWindow() const {
+    auto win = getActiveImageWindow();
+    if (!win) return nullptr;
+    QWidget* p = win->parentWidget();
+    while (p) {
+        if (auto sub = qobject_cast<QMdiSubWindow*>(p)) {
+            return sub;
+        }
+        p = p->parentWidget();
+    }
+    return nullptr;
 }
 
 } // namespace blastro

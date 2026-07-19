@@ -41,6 +41,11 @@ public:
     QJsonObject serializeState() const override;
     void restoreState(const QJsonObject& obj) override;
 
+    // Global preview management
+    bool hasActivePreview() const override;
+    void clearPreview() override;
+    QMdiSubWindow* getTargetWindow() const override;
+
 protected:
     void showEvent(QShowEvent* event) override;
     void hideEvent(QHideEvent* event) override;
@@ -54,8 +59,6 @@ private slots:
     void updatePreview();
 
 private:
-    WorkspaceImageWindow* getActiveImageWindow() const;
-    QMdiArea* findMdiArea() const;
     void updateBgeModes();
     void disableAllBgeModes();
 

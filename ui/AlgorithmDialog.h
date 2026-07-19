@@ -23,7 +23,12 @@
 #include <map>
 #include <string>
 
+class QMdiSubWindow;
+
 namespace blastro {
+
+class WorkspaceArea;
+class WorkspaceImageWindow;
 
 class AlgorithmDialog : public QWidget {
     Q_OBJECT
@@ -34,6 +39,17 @@ public:
     virtual std::map<std::string, std::string> getConfig() const = 0;
     virtual std::string algorithmName() const = 0;
     virtual void refreshWorkspaceElements() {}
+
+    // Standardized helpers for target window tracking
+    WorkspaceArea* findWorkspaceArea() const;
+    WorkspaceImageWindow* getActiveImageWindow() const;
+
+
+    // Global preview management
+    virtual bool hasActivePreview() const { return false; }
+    virtual void clearPreview() {}
+    virtual QMdiSubWindow* getTargetWindow() const { return nullptr; }
+
 
     // Project / session persistence
     virtual QJsonObject serializeState() const { return {}; }

@@ -40,6 +40,7 @@
 #include "AlignDialog.h"
 #include "BackgroundExtractionDialog.h"
 #include "StretchingDialog.h"
+#include "AlgorithmDialog.h"
 #include "PlatesolveDialog.h"
 #include "algorithms/PlatesolveAlgorithm.h"
 #include "PreferencesWindow.h"
@@ -1066,6 +1067,17 @@ void MainWindow::addImageToWorkspace(const QString& name, const WorkspaceElement
 }
 
 void MainWindow::onSubWindowActivated(QMdiSubWindow* window) {
+    // Global preview management: turn off previews if another window is activated
+    for (auto* sub : m_workspaceArea->subWindowList()) {
+        if (auto* dlg = qobject_cast<AlgorithmDialog*>(sub->widget())) {
+            if (dlg->hasActivePreview()) {
+                if (window != sub && window != dlg->getTargetWindow()) {
+                    dlg->clearPreview();
+                }
+            }
+        }
+    }
+
     // Disconnect previous image view mouse tracking if any
     if (m_connectedImageView) {
         disconnect(m_connectedImageView, &ImageView::mousePosChanged, this, &MainWindow::updateStatusReadout);

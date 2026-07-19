@@ -17,8 +17,12 @@
  */
 
 #include "AlgorithmDialog.h"
+#include "WorkspaceArea.h"
+#include "WorkspaceImageWindow.h"
 #include <QMdiSubWindow>
 #include <QCloseEvent>
+#include <QMainWindow>
+
 
 namespace blastro {
 
@@ -73,4 +77,32 @@ void AlgorithmDialog::onClose() {
     close();
 }
 
+WorkspaceArea* AlgorithmDialog::findWorkspaceArea() const {
+    QWidget* p = parentWidget();
+    while (p) {
+        if (auto mw = qobject_cast<QMainWindow*>(p)) {
+            if (auto wa = mw->findChild<WorkspaceArea*>()) {
+                return wa;
+            }
+        }
+        p = p->parentWidget();
+    }
+    return nullptr;
+}
+
+WorkspaceImageWindow* AlgorithmDialog::getActiveImageWindow() const {
+    if (auto wa = findWorkspaceArea()) {
+        QString activeName = wa->getActiveImageName();
+        if (!activeName.isEmpty()) {
+            auto win = wa->getImageWindow(activeName);
+            if (win && win->hasPreviewActive() && !hasActivePreview()) {
+                return nullptr;
+            }
+            return win;
+        }
+    }
+    return nullptr;
+}
+
 } // namespace blastro
+
