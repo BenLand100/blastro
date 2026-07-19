@@ -30,9 +30,12 @@
 #include <QTimer>
 #include <QTabWidget>
 
+class QStackedWidget;
+
 namespace blastro {
 
 class HistogramWidget;
+class CurvesWidget;
 
 class StretchingDialog : public AlgorithmDialog {
     Q_OBJECT
@@ -45,6 +48,11 @@ public:
     QJsonObject serializeState() const override;
     void restoreState(const QJsonObject& obj) override;
 
+    // Global preview management
+    bool hasActivePreview() const override;
+    void clearPreview() override;
+    QMdiSubWindow* getTargetWindow() const override;
+
 protected:
     void closeEvent(QCloseEvent* event) override;
 
@@ -55,17 +63,18 @@ private slots:
     void onHtParamsChanged(const std::array<double, 3>& b, const std::array<double, 3>& w, const std::array<double, 3>& m);
     void onGhsParamsChanged(const std::array<double, 3>& sp, const std::array<double, 3>& d);
     void onGhsProtectionsChanged(const std::array<double, 3>& shadowProtect, const std::array<double, 3>& highlightProtect);
+    void onCurveChanged(int channel, const std::vector<QPointF>& points);
     void onCopyLiveStretch();
     void onParameterChanged();
     void onChannelChanged(int id);
     void onResetStretchClicked();
     void updatePreview();
+    ImageVariant applyCurrentStretch(const ImageVariant& baseImg, bool isPreview = false);
     void refreshHistogramAndCache();
     void onTargetImageChanged(QMdiSubWindow* sub);
     void onTargetImageUpdated();
 
 private:
-    WorkspaceImageWindow* getActiveImageWindow() const;
     void syncUiFromValues();
 
     enum class ConstraintSource {
@@ -77,7 +86,9 @@ private:
 
     // Dialog layout components
     QTabWidget* m_tabWidget;
+    QStackedWidget* m_histogramContainer; // To swap between HistogramWidget and CurvesWidget
     HistogramWidget* m_histogramWidget;
+    CurvesWidget* m_curvesWidget;
 
     // HT Tab parameters
     QSlider* m_bSlider;
@@ -104,7 +115,8 @@ private:
     QTimer* m_previewTimer;
 
     // Internal values
-    bool m_isGhsMode = false;
+    enum class StretchMode { HT, GHS, Curves };
+    StretchMode m_mode = StretchMode::HT;
     
     enum class ActiveChannel {
         K = 0,
@@ -137,6 +149,9 @@ private:
     double m_lSpPoint = 0.5, m_lStretchFactor = 0.0, m_lShadowProtect = 0.0, m_lHighlightProtect = 1.0;
     double m_sSpPoint = 0.5, m_sStretchFactor = 0.0, m_sShadowProtect = 0.0, m_sHighlightProtect = 1.0;
 
+    // Curves Parameters (K, R, G, B, L, S)
+    std::array<std::vector<QPointF>, 6> m_curvePoints;
+
     int m_threads = -1;
 
     // Caching
@@ -144,6 +159,8 @@ private:
     std::shared_ptr<ImageBuffer> m_cachedSBuf;
     std::shared_ptr<ImageBuffer> m_cachedLBuf;
     void* m_cachedBaseImgPtr = nullptr;
+    std::vector<std::vector<int>> m_cachedHistogram;
+    int m_cachedHistogramChannel = -1;
 };
 
 } // namespace blastro

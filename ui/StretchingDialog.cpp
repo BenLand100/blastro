@@ -17,6 +17,13 @@
  */
 
 #include "StretchingDialog.h"
+#include "WorkspaceImageWindow.h"
+#include <QMessageBox>
+#include <QDialog>
+#include <QFormLayout>
+#include <QComboBox>
+#include <QStackedWidget>
+#include "../core/MathUtils.h"
 #include <omp.h>
 #include <QJsonObject>
 #include <QJsonArray>
@@ -24,8 +31,9 @@
 #include "core/Preferences.h"
 #include "algorithms/StretchingAlgorithm.h"
 #include "WorkspaceArea.h"
+#include "CurvesWidget.h"
+#include "HistogramWidget.h"
 #include <QVBoxLayout>
-#include <QFormLayout>
 #include <QHBoxLayout>
 #include <QMessageBox>
 #include <QMainWindow>
@@ -88,10 +96,19 @@ StretchingDialog::StretchingDialog(WorkspaceRegistry& workspace, QWidget* parent
     mainLayout->setSpacing(10);
 
     // 1. Large Histogram Widget at the top
+    m_histogramContainer = new QStackedWidget(this);
+    mainLayout->addWidget(m_histogramContainer, 1); // Container absorbs vertical resize space
+
     m_histogramWidget = new HistogramWidget(this);
     m_histogramWidget->setMinimumHeight(150);
     m_histogramWidget->setActive(true);
-    mainLayout->addWidget(m_histogramWidget, 1); // Histogram absorbs vertical resize space
+    m_histogramContainer->addWidget(m_histogramWidget);
+
+    m_curvesWidget = new CurvesWidget(this);
+    m_curvesWidget->setMinimumHeight(150);
+    m_histogramContainer->addWidget(m_curvesWidget);
+    
+    connect(m_curvesWidget, &CurvesWidget::curveChanged, this, &StretchingDialog::onCurveChanged);
 
     connect(m_histogramWidget, &HistogramWidget::stretchParamsChanged, this, &StretchingDialog::onHtParamsChanged);
     connect(m_histogramWidget, &HistogramWidget::ghsParamsChanged, this, &StretchingDialog::onGhsParamsChanged);
@@ -99,7 +116,6 @@ StretchingDialog::StretchingDialog(WorkspaceRegistry& workspace, QWidget* parent
 
     // 2. Tab Widget for HT vs GHS mode
     m_tabWidget = new QTabWidget(this);
-    connect(m_tabWidget, &QTabWidget::currentChanged, this, &StretchingDialog::onTabChanged);
 
     // --- Tab 0: Histogram Transformation ---
     QWidget* htTab = new QWidget(this);
@@ -340,6 +356,14 @@ StretchingDialog::StretchingDialog(WorkspaceRegistry& workspace, QWidget* parent
 
     m_tabWidget->addTab(ghsTab, "Generalized Hyperbolic (GHS)");
 
+    // --- Tab 2: Curves ---
+    QWidget* curvesTab = new QWidget(this);
+    QVBoxLayout* curvesLayout = new QVBoxLayout(curvesTab);
+    QLabel* curvesLbl = new QLabel("Curves tool. Edit directly on the histogram view above.", this);
+    curvesLbl->setAlignment(Qt::AlignCenter);
+    curvesLayout->addWidget(curvesLbl);
+    m_tabWidget->addTab(curvesTab, "Curves");
+
     mainLayout->addWidget(m_tabWidget, 0); // Controls tab stays compact
 
     // 3. General control box
@@ -434,6 +458,8 @@ StretchingDialog::StretchingDialog(WorkspaceRegistry& workspace, QWidget* parent
 
     mainLayout->addLayout(btnLayout);
 
+    connect(m_tabWidget, &QTabWidget::currentChanged, this, &StretchingDialog::onTabChanged);
+
     // Load active image histogram into widget
     refreshHistogramAndCache();
 
@@ -452,40 +478,40 @@ void StretchingDialog::closeEvent(QCloseEvent* event) {
     if (auto win = getActiveImageWindow()) {
         win->restoreOriginalImage();
     }
+    if (m_previewChk) {
+        m_previewChk->blockSignals(true);
+        m_previewChk->setChecked(false);
+        m_previewChk->blockSignals(false);
+    }
     QWidget::closeEvent(event);
 }
 
-WorkspaceImageWindow* StretchingDialog::getActiveImageWindow() const {
-    if (m_currentTrackedSub) {
-        if (auto win = qobject_cast<WorkspaceImageWindow*>(m_currentTrackedSub->widget())) {
-            return win;
-        }
-    }
-
-    QWidget* p = parentWidget();
-    while (p) {
-        if (auto mw = qobject_cast<QMainWindow*>(p)) {
-            if (auto wa = mw->findChild<WorkspaceArea*>()) {
-                QString activeName = wa->getActiveImageName();
-                if (!activeName.isEmpty()) {
-                    auto win = wa->getImageWindow(activeName);
-                    // Preview windows cannot become a target
-                    if (win && win->hasPreviewActive() && (!m_previewChk || !m_previewChk->isChecked())) {
-                        return nullptr; 
-                    }
-                    return win;
-                }
-            }
-        }
-        p = p->parentWidget();
-    }
-    return nullptr;
-}
 
 void StretchingDialog::onTabChanged(int index) {
-    m_isGhsMode = (index == 1);
-    m_histogramWidget->setGhsMode(m_isGhsMode);
-    onParameterChanged();
+    if (index == 0) m_mode = StretchMode::HT;
+    else if (index == 1) m_mode = StretchMode::GHS;
+    else m_mode = StretchMode::Curves;
+
+    if (m_histogramWidget) {
+        m_histogramWidget->setGhsMode(m_mode == StretchMode::GHS);
+    }
+    
+    if (m_histogramContainer) {
+        if (m_mode == StretchMode::Curves) {
+            m_histogramContainer->setCurrentWidget(m_curvesWidget);
+        } else {
+            m_histogramContainer->setCurrentWidget(m_histogramWidget);
+        }
+    }
+    
+    syncUiFromValues();
+    // Turn off live preview on tab switch — tab navigation should always be instant.
+    if (m_previewChk && m_previewChk->isChecked()) {
+        m_previewChk->blockSignals(true);
+        m_previewChk->setChecked(false);
+        m_previewChk->blockSignals(false);
+        clearPreview();
+    }
 }
 
 void StretchingDialog::onChannelChanged(int id) {
@@ -649,6 +675,8 @@ void StretchingDialog::onGhsProtectionsChanged(const std::array<double, 3>& shad
 void StretchingDialog::onCopyLiveStretch() {
     auto win = getActiveImageWindow();
     if (win && win->imageView() && m_histogramWidget && m_tabWidget) {
+        m_mode = StretchMode::HT;
+        m_tabWidget->setCurrentIndex(0);
         m_blackpoint = win->imageView()->blackpoints();
         m_whitepoint = win->imageView()->whitepoints();
         m_midpoint = win->imageView()->midpoints();
@@ -662,7 +690,7 @@ void StretchingDialog::onCopyLiveStretch() {
         }
         
         m_tabWidget->setCurrentIndex(0); // HT Tab
-        m_isGhsMode = false;
+        m_mode = StretchMode::HT;
         m_histogramWidget->setGhsMode(false);
 
         syncUiFromValues();
@@ -724,7 +752,7 @@ void StretchingDialog::onParameterChanged() {
         sPp.fill(m_sShadowProtect); hPp.fill(m_sHighlightProtect);
     }
 
-    if (m_isGhsMode) {
+    if (m_mode == StretchMode::GHS) {
         m_histogramWidget->setGhsParams(spp, dp);
         m_histogramWidget->setGhsProtections(sPp, hPp);
     } else {
@@ -867,6 +895,8 @@ void StretchingDialog::refreshHistogramAndCache() {
         m_cachedHBuf = nullptr;
         m_cachedSBuf = nullptr;
         m_cachedLBuf = nullptr;
+        m_cachedHistogram.clear();
+        m_cachedHistogramChannel = -1;
 
         if (std::holds_alternative<RGBImagePtr>(baseImg)) {
             auto rgb = std::get<RGBImagePtr>(baseImg);
@@ -891,15 +921,33 @@ void StretchingDialog::refreshHistogramAndCache() {
         }
     }
 
+    int activeChInt = static_cast<int>(m_activeChannel);
+    if (m_cachedHistogramChannel == activeChInt && !m_cachedHistogram.empty()) {
+        if (m_activeChannel == ActiveChannel::L) {
+            m_histogramWidget->setSingleTraceColor(QColor("#c4a000"));
+        } else if (m_activeChannel == ActiveChannel::S) {
+            m_histogramWidget->setSingleTraceColor(QColor("#75507b"));
+        } else {
+            m_histogramWidget->setSingleTraceColor(Qt::white);
+        }
+        m_histogramWidget->setHistograms(m_cachedHistogram);
+        return;
+    }
+
+    m_cachedHistogramChannel = activeChInt;
+
     if (m_activeChannel == ActiveChannel::L && m_cachedLBuf) {
         m_histogramWidget->setSingleTraceColor(QColor("#c4a000")); // Yellow
-        m_histogramWidget->setHistograms(computeBufferHistogram(m_cachedLBuf, 65536));
+        m_cachedHistogram = computeBufferHistogram(m_cachedLBuf, 65536);
+        m_histogramWidget->setHistograms(m_cachedHistogram);
     } else if (m_activeChannel == ActiveChannel::S && m_cachedSBuf) {
         m_histogramWidget->setSingleTraceColor(QColor("#75507b")); // Purple
-        m_histogramWidget->setHistograms(computeBufferHistogram(m_cachedSBuf, 65536));
+        m_cachedHistogram = computeBufferHistogram(m_cachedSBuf, 65536);
+        m_histogramWidget->setHistograms(m_cachedHistogram);
     } else {
         m_histogramWidget->setSingleTraceColor(Qt::white);
-        m_histogramWidget->setHistograms(computeVariantHistogram(baseImg, 65536));
+        m_cachedHistogram = computeVariantHistogram(baseImg, 65536);
+        m_histogramWidget->setHistograms(m_cachedHistogram);
     }
 }
 
@@ -1041,6 +1089,237 @@ void StretchingDialog::enforceGhsConstraints(ConstraintSource source) {
     }
 }
 
+
+ImageVariant StretchingDialog::applyCurrentStretch(const ImageVariant& baseImg, bool isPreview) {
+    if (baseImg.index() == 0 && std::get<0>(baseImg) == nullptr) return baseImg;
+    
+    auto win = getActiveImageWindow();
+    bool channelsLinked = win && win->imageView() && win->imageView()->channelsLinked();
+
+    if (std::holds_alternative<GrayscaleImagePtr>(baseImg)) {
+        auto gray = std::get<GrayscaleImagePtr>(baseImg);
+        auto cloned = cloneGrayscale(gray);
+
+        if (m_mode == StretchMode::Curves) {
+            // Curves is always LUT-based. For preview use the widget's cached LUT;
+            // for apply recompute it fresh from the control points for full precision.
+            std::vector<float> lut;
+            if (isPreview) {
+                lut = m_curvesWidget->getLut(0); // K channel
+            } else {
+                std::vector<double> px, py;
+                for (const auto& pt : m_curvePoints[0]) { px.push_back(pt.x()); py.push_back(pt.y()); }
+                lut = MathUtils::computeCurvesLUT(px, py);
+            }
+            return StretchingAlgorithm::stretchCurvesGrayscale(cloned, lut);
+        } else if (m_mode == StretchMode::GHS) {
+            if (isPreview) {
+                auto lut = StretchingAlgorithm::buildGhsLUT(0.0, 1.0, m_spPoint[0], m_stretchFactor[0], m_shadowProtect[0], m_highlightProtect[0], 1);
+                return StretchingAlgorithm::stretchCurvesGrayscale(cloned, lut);
+            } else {
+                return StretchingAlgorithm::stretchGhsGrayscale(cloned, 0.0, 1.0, m_spPoint[0], m_stretchFactor[0], m_shadowProtect[0], m_highlightProtect[0], 1);
+            }
+        } else {
+            if (isPreview) {
+                auto lut = StretchingAlgorithm::buildHistogramLUT(m_blackpoint[0], m_whitepoint[0], m_midpoint[0]);
+                return StretchingAlgorithm::stretchCurvesGrayscale(cloned, lut);
+            } else {
+                return StretchingAlgorithm::stretchHistogramGrayscale(cloned, m_blackpoint[0], m_whitepoint[0], m_midpoint[0]);
+            }
+        }
+    } else if (std::holds_alternative<RGBImagePtr>(baseImg)) {
+        auto rgb = std::get<RGBImagePtr>(baseImg);
+        auto cloned = cloneRGB(rgb);
+
+        if (m_mode == StretchMode::Curves) {
+            auto isDefaultCurve = [](const std::vector<QPointF>& pts) {
+                return pts.size() == 2 && pts[0] == QPointF(0,0) && pts[1] == QPointF(1,1);
+            };
+
+            // Helper that returns a LUT either from the widget cache (preview) or freshly computed (apply)
+            auto getCurveLUT = [&](int channel) -> std::vector<float> {
+                if (isPreview) {
+                    return m_curvesWidget->getLut(channel);
+                } else {
+                    std::vector<double> px, py;
+                    for (const auto& pt : m_curvePoints[channel]) { px.push_back(pt.x()); py.push_back(pt.y()); }
+                    return MathUtils::computeCurvesLUT(px, py);
+                }
+            };
+
+            // 1. R, G, B stretches
+            if (channelsLinked) {
+                if (!isDefaultCurve(m_curvePoints[0])) {
+                    auto lut = getCurveLUT(0);
+                    std::array<std::vector<float>, 3> luts = {lut, lut, lut};
+                    cloned = StretchingAlgorithm::stretchCurvesRGB(cloned, luts, false);
+                }
+            } else {
+                bool rgbNeedsStretch = !isDefaultCurve(m_curvePoints[1]) || !isDefaultCurve(m_curvePoints[2]) || !isDefaultCurve(m_curvePoints[3]);
+                if (rgbNeedsStretch) {
+                    std::array<std::vector<float>, 3> luts;
+                    for (int i = 0; i < 3; ++i) {
+                        luts[i] = getCurveLUT(i + 1);
+                    }
+                    cloned = StretchingAlgorithm::stretchCurvesRGB(cloned, luts, false);
+                }
+            }
+
+            // 2. L stretch
+            if (!isDefaultCurve(m_curvePoints[4])) {
+                auto lut = getCurveLUT(4);
+                std::array<std::vector<float>, 3> luts = {lut, lut, lut};
+                cloned = StretchingAlgorithm::stretchCurvesRGB(cloned, luts, true);
+            }
+
+            // 3. S stretch
+            if (!isDefaultCurve(m_curvePoints[5])) {
+                auto lut = getCurveLUT(5);
+                cloned = StretchingAlgorithm::stretchCurvesHSL(cloned, lut, true);
+            }
+
+        } else if (m_mode == StretchMode::GHS) {
+            auto isDefaultGHS = [](double sp, double sh, double hl, double sf) {
+                return std::abs(sp - 0.5) < 1e-4 && std::abs(sh - 0.0) < 1e-4 && std::abs(hl - 1.0) < 1e-4 && sf < 1e-4;
+            };
+
+            if (isPreview) {
+                // Preview: use per-channel LUTs for fast pixel evaluation
+                auto applyGhsLUT = [&](RGBImagePtr img, int ch, bool colorPreserving) -> RGBImagePtr {
+                    auto lut = StretchingAlgorithm::buildGhsLUT(0.0, 1.0, m_spPoint[ch], m_stretchFactor[ch], m_shadowProtect[ch], m_highlightProtect[ch], 1);
+                    std::array<std::vector<float>, 3> luts = {lut, lut, lut};
+                    return StretchingAlgorithm::stretchCurvesRGB(img, luts, colorPreserving);
+                };
+
+                if (channelsLinked) {
+                    if (!isDefaultGHS(m_spPoint[0], m_shadowProtect[0], m_highlightProtect[0], m_stretchFactor[0])) {
+                        cloned = applyGhsLUT(cloned, 0, false);
+                    }
+                } else {
+                    bool rgbNeedsStretch = !isDefaultGHS(m_spPoint[0], m_shadowProtect[0], m_highlightProtect[0], m_stretchFactor[0]) ||
+                                           !isDefaultGHS(m_spPoint[1], m_shadowProtect[1], m_highlightProtect[1], m_stretchFactor[1]) ||
+                                           !isDefaultGHS(m_spPoint[2], m_shadowProtect[2], m_highlightProtect[2], m_stretchFactor[2]);
+                    if (rgbNeedsStretch) {
+                        std::array<std::vector<float>, 3> luts;
+                        for (int i = 0; i < 3; ++i) {
+                            luts[i] = StretchingAlgorithm::buildGhsLUT(0.0, 1.0, m_spPoint[i], m_stretchFactor[i], m_shadowProtect[i], m_highlightProtect[i], 1);
+                        }
+                        cloned = StretchingAlgorithm::stretchCurvesRGB(cloned, luts, false);
+                    }
+                }
+
+                if (!isDefaultGHS(m_lSpPoint, m_lShadowProtect, m_lHighlightProtect, m_lStretchFactor)) {
+                    auto lut = StretchingAlgorithm::buildGhsLUT(0.0, 1.0, m_lSpPoint, m_lStretchFactor, m_lShadowProtect, m_lHighlightProtect, 1);
+                    std::array<std::vector<float>, 3> luts = {lut, lut, lut};
+                    cloned = StretchingAlgorithm::stretchCurvesRGB(cloned, luts, true);
+                }
+
+                if (!isDefaultGHS(m_sSpPoint, m_sShadowProtect, m_sHighlightProtect, m_sStretchFactor)) {
+                    auto lut = StretchingAlgorithm::buildGhsLUT(0.0, 1.0, m_sSpPoint, m_sStretchFactor, m_sShadowProtect, m_sHighlightProtect, 1);
+                    cloned = StretchingAlgorithm::stretchCurvesHSL(cloned, lut, true);
+                }
+            } else {
+                // Apply: exact analytical math
+                if (channelsLinked) {
+                    if (!isDefaultGHS(m_spPoint[0], m_shadowProtect[0], m_highlightProtect[0], m_stretchFactor[0])) {
+                        std::array<double, 3> low = {0.0, 0.0, 0.0};
+                        std::array<double, 3> high = {1.0, 1.0, 1.0};
+                        cloned = StretchingAlgorithm::stretchGhsRGB(cloned, low, high, m_spPoint, m_stretchFactor, m_shadowProtect, m_highlightProtect, 1, false);
+                    }
+                } else {
+                    bool rgbNeedsStretch = !isDefaultGHS(m_spPoint[0], m_shadowProtect[0], m_highlightProtect[0], m_stretchFactor[0]) ||
+                                           !isDefaultGHS(m_spPoint[1], m_shadowProtect[1], m_highlightProtect[1], m_stretchFactor[1]) ||
+                                           !isDefaultGHS(m_spPoint[2], m_shadowProtect[2], m_highlightProtect[2], m_stretchFactor[2]);
+                    if (rgbNeedsStretch) {
+                        std::array<double, 3> low = {0.0, 0.0, 0.0};
+                        std::array<double, 3> high = {1.0, 1.0, 1.0};
+                        cloned = StretchingAlgorithm::stretchGhsRGB(cloned, low, high, m_spPoint, m_stretchFactor, m_shadowProtect, m_highlightProtect, 1, false);
+                    }
+                }
+
+                if (!isDefaultGHS(m_lSpPoint, m_lShadowProtect, m_lHighlightProtect, m_lStretchFactor)) {
+                    std::array<double, 3> low = {0.0, 0.0, 0.0};
+                    std::array<double, 3> high = {1.0, 1.0, 1.0};
+                    std::array<double, 3> sp = {m_lSpPoint, m_lSpPoint, m_lSpPoint};
+                    std::array<double, 3> sf = {m_lStretchFactor, m_lStretchFactor, m_lStretchFactor};
+                    std::array<double, 3> sh = {m_lShadowProtect, m_lShadowProtect, m_lShadowProtect};
+                    std::array<double, 3> hl = {m_lHighlightProtect, m_lHighlightProtect, m_lHighlightProtect};
+                    cloned = StretchingAlgorithm::stretchGhsRGB(cloned, low, high, sp, sf, sh, hl, 1, true);
+                }
+
+                if (!isDefaultGHS(m_sSpPoint, m_sShadowProtect, m_sHighlightProtect, m_sStretchFactor)) {
+                    cloned = StretchingAlgorithm::stretchGhsHSL(cloned, 0.0, 1.0, m_sSpPoint, m_sStretchFactor, m_sShadowProtect, m_sHighlightProtect, 1, true);
+                }
+            }
+
+        } else { // HT
+            auto isDefaultHT = [](double b, double w, double m) {
+                return std::abs(b - 0.0) < 1e-4 && std::abs(w - 1.0) < 1e-4 && std::abs(m - 0.5) < 1e-4;
+            };
+
+            if (isPreview) {
+                // Preview: build per-channel LUTs and run through stretchCurvesRGB
+                if (channelsLinked) {
+                    if (!isDefaultHT(m_blackpoint[0], m_whitepoint[0], m_midpoint[0])) {
+                        auto lut = StretchingAlgorithm::buildHistogramLUT(m_blackpoint[0], m_whitepoint[0], m_midpoint[0]);
+                        std::array<std::vector<float>, 3> luts = {lut, lut, lut};
+                        cloned = StretchingAlgorithm::stretchCurvesRGB(cloned, luts, false);
+                    }
+                } else {
+                    bool rgbNeedsStretch = !isDefaultHT(m_blackpoint[0], m_whitepoint[0], m_midpoint[0]) ||
+                                           !isDefaultHT(m_blackpoint[1], m_whitepoint[1], m_midpoint[1]) ||
+                                           !isDefaultHT(m_blackpoint[2], m_whitepoint[2], m_midpoint[2]);
+                    if (rgbNeedsStretch) {
+                        std::array<std::vector<float>, 3> luts;
+                        for (int i = 0; i < 3; ++i) {
+                            luts[i] = StretchingAlgorithm::buildHistogramLUT(m_blackpoint[i], m_whitepoint[i], m_midpoint[i]);
+                        }
+                        cloned = StretchingAlgorithm::stretchCurvesRGB(cloned, luts, false);
+                    }
+                }
+
+                if (!isDefaultHT(m_lBlackpoint, m_lWhitepoint, m_lMidpoint)) {
+                    auto lut = StretchingAlgorithm::buildHistogramLUT(m_lBlackpoint, m_lWhitepoint, m_lMidpoint);
+                    std::array<std::vector<float>, 3> luts = {lut, lut, lut};
+                    cloned = StretchingAlgorithm::stretchCurvesRGB(cloned, luts, true);
+                }
+
+                if (!isDefaultHT(m_sBlackpoint, m_sWhitepoint, m_sMidpoint)) {
+                    auto lut = StretchingAlgorithm::buildHistogramLUT(m_sBlackpoint, m_sWhitepoint, m_sMidpoint);
+                    cloned = StretchingAlgorithm::stretchCurvesHSL(cloned, lut, true);
+                }
+            } else {
+                // Apply: exact analytical math
+                if (channelsLinked) {
+                    if (!isDefaultHT(m_blackpoint[0], m_whitepoint[0], m_midpoint[0])) {
+                        cloned = StretchingAlgorithm::stretchHistogramRGB(cloned, m_blackpoint, m_whitepoint, m_midpoint, false);
+                    }
+                } else {
+                    bool rgbNeedsStretch = !isDefaultHT(m_blackpoint[0], m_whitepoint[0], m_midpoint[0]) ||
+                                           !isDefaultHT(m_blackpoint[1], m_whitepoint[1], m_midpoint[1]) ||
+                                           !isDefaultHT(m_blackpoint[2], m_whitepoint[2], m_midpoint[2]);
+                    if (rgbNeedsStretch) {
+                        cloned = StretchingAlgorithm::stretchHistogramRGB(cloned, m_blackpoint, m_whitepoint, m_midpoint, false);
+                    }
+                }
+
+                if (!isDefaultHT(m_lBlackpoint, m_lWhitepoint, m_lMidpoint)) {
+                    std::array<double, 3> bp = {m_lBlackpoint, m_lBlackpoint, m_lBlackpoint};
+                    std::array<double, 3> wp = {m_lWhitepoint, m_lWhitepoint, m_lWhitepoint};
+                    std::array<double, 3> mp = {m_lMidpoint, m_lMidpoint, m_lMidpoint};
+                    cloned = StretchingAlgorithm::stretchHistogramRGB(cloned, bp, wp, mp, true);
+                }
+
+                if (!isDefaultHT(m_sBlackpoint, m_sWhitepoint, m_sMidpoint)) {
+                    cloned = StretchingAlgorithm::stretchHistogramHSL(cloned, m_sBlackpoint, m_sWhitepoint, m_sMidpoint, true);
+                }
+            }
+        }
+        return cloned;
+    }
+    return baseImg;
+}
+
 void StretchingDialog::updatePreview() {
     auto win = getActiveImageWindow();
     if (!win) return;
@@ -1055,89 +1334,7 @@ void StretchingDialog::updatePreview() {
     ImageVariant baseImg = win->originalImage();
     if (baseImg.index() == 0 && std::get<0>(baseImg) == nullptr) return;
 
-    ImageVariant previewResult;
-
-    if (m_isGhsMode) {
-        if (std::holds_alternative<GrayscaleImagePtr>(baseImg)) {
-            auto gray = std::get<GrayscaleImagePtr>(baseImg);
-            auto cloned = cloneGrayscale(gray);
-            previewResult = StretchingAlgorithm::stretchGhsGrayscale(cloned, 0.0, 1.0, m_spPoint[0], m_stretchFactor[0], m_shadowProtect[0], m_highlightProtect[0], 1);
-        } else if (std::holds_alternative<RGBImagePtr>(baseImg)) {
-            auto rgb = std::get<RGBImagePtr>(baseImg);
-            if (m_activeChannel == ActiveChannel::L) {
-                auto cloned = cloneRGB(rgb);
-                std::array<double, 3> low = {0.0, 0.0, 0.0};
-                std::array<double, 3> high = {1.0, 1.0, 1.0};
-                std::array<double, 3> sp = {m_lSpPoint, m_lSpPoint, m_lSpPoint};
-                std::array<double, 3> sf = {m_lStretchFactor, m_lStretchFactor, m_lStretchFactor};
-                std::array<double, 3> sh = {m_lShadowProtect, m_lShadowProtect, m_lShadowProtect};
-                std::array<double, 3> hl = {m_lHighlightProtect, m_lHighlightProtect, m_lHighlightProtect};
-                previewResult = StretchingAlgorithm::stretchGhsRGB(cloned, low, high, sp, sf, sh, hl, 1, true); // true = color preserving (scale luminance)
-            } else if (m_activeChannel == ActiveChannel::S && m_cachedSBuf) {
-                auto clonedS = cloneGrayscale(std::make_shared<GrayscaleImage>(m_cachedSBuf));
-                auto stretchedS = StretchingAlgorithm::stretchGhsGrayscale(clonedS, 0.0, 1.0, m_sSpPoint, m_sStretchFactor, m_sShadowProtect, m_sHighlightProtect, 1);
-                
-                auto outR = std::make_shared<ImageBuffer>(rgb->width(), rgb->height());
-                auto outG = std::make_shared<ImageBuffer>(rgb->width(), rgb->height());
-                auto outB = std::make_shared<ImageBuffer>(rgb->width(), rgb->height());
-                const float* hData = m_cachedHBuf->data();
-                const float* sData = stretchedS->buffer()->data();
-                const float* lData = m_cachedLBuf->data();
-                float* rData = outR->data(); float* gData = outG->data(); float* bData = outB->data();
-                int numPix = rgb->width() * rgb->height();
-                #pragma omp parallel for
-                for (int i = 0; i < numPix; ++i) StretchingAlgorithm::hslToRgb(hData[i], sData[i], lData[i], rData[i], gData[i], bData[i]);
-                previewResult = std::make_shared<RGBImage>(
-                    std::make_shared<GrayscaleImage>(outR),
-                    std::make_shared<GrayscaleImage>(outG),
-                    std::make_shared<GrayscaleImage>(outB)
-                );
-            } else {
-                auto cloned = cloneRGB(rgb);
-                std::array<double, 3> low = {0.0, 0.0, 0.0};
-                std::array<double, 3> high = {1.0, 1.0, 1.0};
-                previewResult = StretchingAlgorithm::stretchGhsRGB(cloned, low, high, m_spPoint, m_stretchFactor, m_shadowProtect, m_highlightProtect, 1, false); // false = direct RGB stretch
-            }
-        }
-    } else {
-        if (std::holds_alternative<GrayscaleImagePtr>(baseImg)) {
-            auto gray = std::get<GrayscaleImagePtr>(baseImg);
-            auto cloned = cloneGrayscale(gray);
-            previewResult = StretchingAlgorithm::stretchHistogramGrayscale(cloned, m_blackpoint[0], m_whitepoint[0], m_midpoint[0]);
-        } else if (std::holds_alternative<RGBImagePtr>(baseImg)) {
-            auto rgb = std::get<RGBImagePtr>(baseImg);
-            if (m_activeChannel == ActiveChannel::L) {
-                auto cloned = cloneRGB(rgb);
-                std::array<double, 3> bp = {m_lBlackpoint, m_lBlackpoint, m_lBlackpoint};
-                std::array<double, 3> wp = {m_lWhitepoint, m_lWhitepoint, m_lWhitepoint};
-                std::array<double, 3> mp = {m_lMidpoint, m_lMidpoint, m_lMidpoint};
-                previewResult = StretchingAlgorithm::stretchHistogramRGB(cloned, bp, wp, mp, true); // true = color preserving
-            } else if (m_activeChannel == ActiveChannel::S && m_cachedSBuf) {
-                auto clonedS = cloneGrayscale(std::make_shared<GrayscaleImage>(m_cachedSBuf));
-                auto stretchedS = StretchingAlgorithm::stretchHistogramGrayscale(clonedS, m_sBlackpoint, m_sWhitepoint, m_sMidpoint);
-                
-                auto outR = std::make_shared<ImageBuffer>(rgb->width(), rgb->height());
-                auto outG = std::make_shared<ImageBuffer>(rgb->width(), rgb->height());
-                auto outB = std::make_shared<ImageBuffer>(rgb->width(), rgb->height());
-                const float* hData = m_cachedHBuf->data();
-                const float* sData = stretchedS->buffer()->data();
-                const float* lData = m_cachedLBuf->data();
-                float* rData = outR->data(); float* gData = outG->data(); float* bData = outB->data();
-                int numPix = rgb->width() * rgb->height();
-                #pragma omp parallel for
-                for (int i = 0; i < numPix; ++i) StretchingAlgorithm::hslToRgb(hData[i], sData[i], lData[i], rData[i], gData[i], bData[i]);
-                previewResult = std::make_shared<RGBImage>(
-                    std::make_shared<GrayscaleImage>(outR),
-                    std::make_shared<GrayscaleImage>(outG),
-                    std::make_shared<GrayscaleImage>(outB)
-                );
-            } else {
-                auto cloned = cloneRGB(rgb);
-                previewResult = StretchingAlgorithm::stretchHistogramRGB(cloned, m_blackpoint, m_whitepoint, m_midpoint, false); // false = direct RGB stretch
-            }
-        }
-    }
-
+    ImageVariant previewResult = applyCurrentStretch(baseImg, /*isPreview=*/true);
     win->setPreviewImage(previewResult);
 }
 
@@ -1150,88 +1347,9 @@ void StretchingDialog::onApplyClicked() {
     }
 
     ImageVariant baseImg = win->originalImage();
-    ImageVariant finalResult;
+    ImageVariant finalResult = applyCurrentStretch(baseImg);
 
-    if (m_isGhsMode) {
-        if (std::holds_alternative<GrayscaleImagePtr>(baseImg)) {
-            auto gray = std::get<GrayscaleImagePtr>(baseImg);
-            auto cloned = cloneGrayscale(gray);
-            finalResult = StretchingAlgorithm::stretchGhsGrayscale(cloned, 0.0, 1.0, m_spPoint[0], m_stretchFactor[0], m_shadowProtect[0], m_highlightProtect[0], 1);
-        } else if (std::holds_alternative<RGBImagePtr>(baseImg)) {
-            auto rgb = std::get<RGBImagePtr>(baseImg);
-            if (m_activeChannel == ActiveChannel::L) {
-                auto cloned = cloneRGB(rgb);
-                std::array<double, 3> low = {0.0, 0.0, 0.0};
-                std::array<double, 3> high = {1.0, 1.0, 1.0};
-                std::array<double, 3> sp = {m_lSpPoint, m_lSpPoint, m_lSpPoint};
-                std::array<double, 3> sf = {m_lStretchFactor, m_lStretchFactor, m_lStretchFactor};
-                std::array<double, 3> sh = {m_lShadowProtect, m_lShadowProtect, m_lShadowProtect};
-                std::array<double, 3> hl = {m_lHighlightProtect, m_lHighlightProtect, m_lHighlightProtect};
-                finalResult = StretchingAlgorithm::stretchGhsRGB(cloned, low, high, sp, sf, sh, hl, 1, true);
-            } else if (m_activeChannel == ActiveChannel::S && m_cachedSBuf) {
-                auto clonedS = cloneGrayscale(std::make_shared<GrayscaleImage>(m_cachedSBuf));
-                auto stretchedS = StretchingAlgorithm::stretchGhsGrayscale(clonedS, 0.0, 1.0, m_sSpPoint, m_sStretchFactor, m_sShadowProtect, m_sHighlightProtect, 1);
-                
-                auto outR = std::make_shared<ImageBuffer>(rgb->width(), rgb->height());
-                auto outG = std::make_shared<ImageBuffer>(rgb->width(), rgb->height());
-                auto outB = std::make_shared<ImageBuffer>(rgb->width(), rgb->height());
-                const float* hData = m_cachedHBuf->data();
-                const float* sData = stretchedS->buffer()->data();
-                const float* lData = m_cachedLBuf->data();
-                float* rData = outR->data(); float* gData = outG->data(); float* bData = outB->data();
-                int numPix = rgb->width() * rgb->height();
-                #pragma omp parallel for
-                for (int i = 0; i < numPix; ++i) StretchingAlgorithm::hslToRgb(hData[i], sData[i], lData[i], rData[i], gData[i], bData[i]);
-                finalResult = std::make_shared<RGBImage>(
-                    std::make_shared<GrayscaleImage>(outR),
-                    std::make_shared<GrayscaleImage>(outG),
-                    std::make_shared<GrayscaleImage>(outB)
-                );
-            } else {
-                auto cloned = cloneRGB(rgb);
-                std::array<double, 3> low = {0.0, 0.0, 0.0};
-                std::array<double, 3> high = {1.0, 1.0, 1.0};
-                finalResult = StretchingAlgorithm::stretchGhsRGB(cloned, low, high, m_spPoint, m_stretchFactor, m_shadowProtect, m_highlightProtect, 1, false);
-            }
-        }
-    } else {
-        if (std::holds_alternative<GrayscaleImagePtr>(baseImg)) {
-            auto gray = std::get<GrayscaleImagePtr>(baseImg);
-            auto cloned = cloneGrayscale(gray);
-            finalResult = StretchingAlgorithm::stretchHistogramGrayscale(cloned, m_blackpoint[0], m_whitepoint[0], m_midpoint[0]);
-        } else if (std::holds_alternative<RGBImagePtr>(baseImg)) {
-            auto rgb = std::get<RGBImagePtr>(baseImg);
-            if (m_activeChannel == ActiveChannel::L) {
-                auto cloned = cloneRGB(rgb);
-                std::array<double, 3> bp = {m_lBlackpoint, m_lBlackpoint, m_lBlackpoint};
-                std::array<double, 3> wp = {m_lWhitepoint, m_lWhitepoint, m_lWhitepoint};
-                std::array<double, 3> mp = {m_lMidpoint, m_lMidpoint, m_lMidpoint};
-                finalResult = StretchingAlgorithm::stretchHistogramRGB(cloned, bp, wp, mp, true);
-            } else if (m_activeChannel == ActiveChannel::S && m_cachedSBuf) {
-                auto clonedS = cloneGrayscale(std::make_shared<GrayscaleImage>(m_cachedSBuf));
-                auto stretchedS = StretchingAlgorithm::stretchHistogramGrayscale(clonedS, m_sBlackpoint, m_sWhitepoint, m_sMidpoint);
-                
-                auto outR = std::make_shared<ImageBuffer>(rgb->width(), rgb->height());
-                auto outG = std::make_shared<ImageBuffer>(rgb->width(), rgb->height());
-                auto outB = std::make_shared<ImageBuffer>(rgb->width(), rgb->height());
-                const float* hData = m_cachedHBuf->data();
-                const float* sData = stretchedS->buffer()->data();
-                const float* lData = m_cachedLBuf->data();
-                float* rData = outR->data(); float* gData = outG->data(); float* bData = outB->data();
-                int numPix = rgb->width() * rgb->height();
-                #pragma omp parallel for
-                for (int i = 0; i < numPix; ++i) StretchingAlgorithm::hslToRgb(hData[i], sData[i], lData[i], rData[i], gData[i], bData[i]);
-                finalResult = std::make_shared<RGBImage>(
-                    std::make_shared<GrayscaleImage>(outR),
-                    std::make_shared<GrayscaleImage>(outG),
-                    std::make_shared<GrayscaleImage>(outB)
-                );
-            } else {
-                auto cloned = cloneRGB(rgb);
-                finalResult = StretchingAlgorithm::stretchHistogramRGB(cloned, m_blackpoint, m_whitepoint, m_midpoint, false);
-            }
-        }
-    }
+    if (finalResult.index() == 0 && std::get<0>(finalResult) == nullptr) return;
 
     if (m_previewChk->isChecked()) {
         win->commitPreviewImage(finalResult);
@@ -1279,16 +1397,19 @@ void StretchingDialog::onPrefsClicked() {
 
 std::map<std::string, std::string> StretchingDialog::getConfig() const {
     std::map<std::string, std::string> config;
-    config["mode"] = m_isGhsMode ? "ghs" : "histogram";
+    if (m_mode == StretchMode::HT) config["mode"] = "histogram";
+    else if (m_mode == StretchMode::GHS) config["mode"] = "ghs";
+    else config["mode"] = "curves";
+    
     config["threads"] = std::to_string(m_threads);
 
-    if (m_isGhsMode) {
+    if (m_mode == StretchMode::GHS) {
         config["symmetry_point"] = std::to_string(m_spPoint[0]);
         config["stretch_factor"] = std::to_string(m_stretchFactor[0]);
         config["shadow_protect"] = std::to_string(m_shadowProtect[0]);
         config["highlight_protect"] = std::to_string(m_highlightProtect[0]);
         config["form"] = "1";
-    } else {
+    } else if (m_mode == StretchMode::HT) {
         config["blackpoint"] = std::to_string(m_blackpoint[0]);
         config["whitepoint"] = std::to_string(m_whitepoint[0]);
         config["midpoint"] = std::to_string(m_midpoint[0]);
@@ -1298,7 +1419,7 @@ std::map<std::string, std::string> StretchingDialog::getConfig() const {
 
 QJsonObject StretchingDialog::serializeState() const {
     QJsonObject obj;
-    obj["is_ghs_mode"] = m_isGhsMode;
+    obj["mode"] = static_cast<int>(m_mode);
     
     auto arrToJson = [](const std::array<double, 3>& arr) {
         QJsonArray jArr;
@@ -1317,12 +1438,33 @@ QJsonObject StretchingDialog::serializeState() const {
     obj["stretch_factor"] = arrToJson(m_stretchFactor);
     obj["shadow_protect"] = arrToJson(m_shadowProtect);
     obj["highlight_protect"] = arrToJson(m_highlightProtect);
+    
+    // Curves params
+    QJsonArray curvesArr;
+    for (int i = 0; i < 6; ++i) {
+        QJsonArray ptsArr;
+        for (const auto& pt : m_curvePoints[i]) {
+            QJsonObject ptObj;
+            ptObj["x"] = pt.x();
+            ptObj["y"] = pt.y();
+            ptsArr.append(ptObj);
+        }
+        curvesArr.append(ptsArr);
+    }
+    obj["curves"] = curvesArr;
+
     // Prefs
     obj["threads"] = m_threads;
     return obj;
 }
 
 void StretchingDialog::restoreState(const QJsonObject& obj) {
+    if (m_previewChk) {
+        m_previewChk->blockSignals(true);
+        m_previewChk->setChecked(false);
+        m_previewChk->blockSignals(false);
+    }
+
     auto jsonToArr = [](const QJsonObject& o, const QString& key, std::array<double, 3>& out, double def) {
         if (o.contains(key)) {
             if (o[key].isArray()) {
@@ -1348,16 +1490,39 @@ void StretchingDialog::restoreState(const QJsonObject& obj) {
     if (obj.contains("threads")) {
         m_threads = obj["threads"].toInt(-1);
     }
-    if (obj.contains("is_ghs_mode")) {
-        m_isGhsMode = obj["is_ghs_mode"].toBool(false);
+    if (obj.contains("mode")) {
+        m_mode = static_cast<StretchMode>(obj["mode"].toInt(0));
+    } else if (obj.contains("is_ghs_mode")) {
+        m_mode = obj["is_ghs_mode"].toBool(false) ? StretchMode::GHS : StretchMode::HT;
+    }
+    
+    if (obj.contains("curves")) {
+        QJsonArray curvesArr = obj["curves"].toArray();
+        for (int i = 0; i < 6 && i < curvesArr.size(); ++i) {
+            QJsonArray ptsArr = curvesArr[i].toArray();
+            std::vector<QPointF> pts;
+            for (int j = 0; j < ptsArr.size(); ++j) {
+                QJsonObject ptObj = ptsArr[j].toObject();
+                pts.push_back(QPointF(ptObj["x"].toDouble(), ptObj["y"].toDouble()));
+            }
+            if (pts.size() >= 2) m_curvePoints[i] = pts;
+        }
     }
 
     m_tabWidget->blockSignals(true);
-    m_tabWidget->setCurrentIndex(m_isGhsMode ? 1 : 0);
+    m_tabWidget->setCurrentIndex(static_cast<int>(m_mode));
     m_tabWidget->blockSignals(false);
 
+    if (m_histogramContainer) {
+        if (m_mode == StretchMode::Curves) {
+            m_histogramContainer->setCurrentWidget(m_curvesWidget);
+        } else {
+            m_histogramContainer->setCurrentWidget(m_histogramWidget);
+        }
+    }
+
     if (m_histogramWidget) {
-        m_histogramWidget->setGhsMode(m_isGhsMode);
+        m_histogramWidget->setGhsMode(m_mode == StretchMode::GHS);
     }
 
     syncUiFromValues();
@@ -1421,3 +1586,32 @@ void StretchingDialog::onTargetImageUpdated() {
 }
 
 } // namespace blastro
+
+void blastro::StretchingDialog::onCurveChanged(int channel, const std::vector<QPointF>& points) {
+    if (channel >= 0 && channel < 6) {
+        m_curvePoints[channel] = points;
+        updatePreview();
+    }
+}
+
+bool blastro::StretchingDialog::hasActivePreview() const {
+    return m_previewChk && m_previewChk->isChecked();
+}
+
+void blastro::StretchingDialog::clearPreview() {
+    if (m_previewChk) {
+        m_previewChk->blockSignals(true);
+        m_previewChk->setChecked(false);
+        m_previewChk->blockSignals(false);
+    }
+    if (m_previewTimer) {
+        m_previewTimer->stop();
+    }
+    if (auto win = getActiveImageWindow()) {
+        win->restoreOriginalImage();
+    }
+}
+
+QMdiSubWindow* blastro::StretchingDialog::getTargetWindow() const {
+    return m_currentTrackedSub;
+}

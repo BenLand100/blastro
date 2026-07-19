@@ -25,6 +25,17 @@ namespace blastro {
 
 class StretchingAlgorithm {
 public:
+    // Precomputes a 65536-entry LUT for a Histogram Transformation.
+    // Use this for fast preview paths; do not use for final apply.
+    static std::vector<float> buildHistogramLUT(double blackpoint, double whitepoint, double midpoint);
+
+    // Precomputes a 65536-entry LUT for a Generalized Hyperbolic Stretch.
+    // Use this for fast preview paths; do not use for final apply.
+    static std::vector<float> buildGhsLUT(double lowPoint, double highPoint,
+                                          double symmetryPoint, double stretchFactor,
+                                          double shadowProtect, double highlightProtect,
+                                          int form);
+
     // Performs traditional Histogram Transformation (HT) on a single channel.
     // blackpoint: [0, 1]
     // whitepoint: [0, 1]
@@ -81,6 +92,20 @@ public:
                                      double highlightProtect,
                                      int form,
                                      bool stretchSaturation);
+
+    // Performs Curves Stretch on a single channel using a precomputed LUT.
+    static GrayscaleImagePtr stretchCurvesGrayscale(GrayscaleImagePtr src,
+                                                    const std::vector<float>& lut);
+
+    // Performs Curves Stretch on an RGB image using precomputed LUTs.
+    static RGBImagePtr stretchCurvesRGB(RGBImagePtr src,
+                                        const std::array<std::vector<float>, 3>& luts,
+                                        bool colorPreserving = true);
+
+    // Performs Curves Stretch in HSL space using a precomputed LUT.
+    static RGBImagePtr stretchCurvesHSL(RGBImagePtr src,
+                                        const std::vector<float>& lut,
+                                        bool stretchSaturation);
 };
 
 } // namespace blastro

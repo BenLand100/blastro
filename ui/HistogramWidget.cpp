@@ -124,10 +124,12 @@ HistogramWidget::DragTarget HistogramWidget::getCloseLine(const QPoint& pos) con
     DragTarget target = {DragTarget::None, 0};
     double h = height();
 
-    int startChan = m_channelsLinked ? 0 : 0;
-    int endChan = m_channelsLinked ? 1 : 3;
+    int logicalActive = m_activeChannel;
+    if (logicalActive > 2 || m_channelsLinked) {
+        logicalActive = 0;
+    }
 
-    for (int c = startChan; c < endChan; ++c) {
+    for (int c = logicalActive; c <= logicalActive; ++c) {
         if (m_ghsMode) {
             double xSP = valueToX(m_spPoint[c]);
             double xS = valueToX(m_shadowProtect[c]);
@@ -373,10 +375,21 @@ void HistogramWidget::paintEvent(QPaintEvent* event) {
     }
 
     // 4. Draw stretch curves & lines
-    int startChan = m_channelsLinked ? 0 : 0;
-    int endChan = m_channelsLinked ? 1 : 3;
+    for (int c = 0; c < 3; ++c) {
+        if (m_channelsLinked && c != 0) continue; // If linked, just draw index 0
 
-    for (int c = startChan; c < endChan; ++c) {
+        int logicalActive = m_activeChannel;
+        if (logicalActive > 2) logicalActive = 0; // L and S map to 0
+
+        bool isDefaultHT = (std::abs(m_blackpoint[c] - 0.0) < 1e-4 && std::abs(m_whitepoint[c] - 1.0) < 1e-4 && std::abs(m_midpoint[c] - 0.5) < 1e-4);
+        bool isDefaultGHS = (std::abs(m_spPoint[c] - 0.5) < 1e-4 && std::abs(m_shadowProtect[c] - 0.0) < 1e-4 && std::abs(m_highlightProtect[c] - 1.0) < 1e-4 && m_stretchFactor[c] < 1e-4);
+
+        bool isDefault = m_ghsMode ? isDefaultGHS : isDefaultHT;
+
+        if (c != logicalActive && isDefault && !m_channelsLinked) {
+            continue; // Skip rendering default channels that are not active
+        }
+
         QColor lineColor;
         if (m_channelsLinked) {
             lineColor = m_singleChannelColor;
@@ -384,6 +397,10 @@ void HistogramWidget::paintEvent(QPaintEvent* event) {
             if (c == 0) lineColor = QColor("#cc3333"); // R
             else if (c == 1) lineColor = QColor("#33aa33"); // G
             else if (c == 2) lineColor = QColor("#3366cc"); // B
+        }
+
+        if (c != logicalActive && !m_channelsLinked) {
+            lineColor.setAlpha(100); // Dimmed
         }
 
         if (m_ghsMode) {

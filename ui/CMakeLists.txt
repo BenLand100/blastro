@@ -20,6 +20,7 @@ add_library(blastro_ui
     ImageView.cpp
     BatchImageWidget.cpp
     HistogramWidget.cpp
+    CurvesWidget.cpp
     WorkspaceImageWindow.cpp
     AlgorithmDialog.cpp
     PixelMathDialog.cpp

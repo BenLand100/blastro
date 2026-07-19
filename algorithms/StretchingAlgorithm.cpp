@@ -135,6 +135,33 @@ static float evaluateHistogramPixel(float val, const HistogramParams& p) {
     return static_cast<float>(p.m_minus_1 * x / (p.two_m_minus_1 * x - m));
 }
 
+
+std::vector<float> StretchingAlgorithm::buildHistogramLUT(double blackpoint, double whitepoint, double midpoint) {
+    constexpr int lutSize = 65536;
+    std::vector<float> lut(lutSize);
+    HistogramParams p = precomputeHistogram(blackpoint, whitepoint, midpoint);
+    #pragma omp parallel for
+    for (int i = 0; i < lutSize; ++i) {
+        lut[i] = evaluateHistogramPixel(static_cast<float>(i) / (lutSize - 1), p);
+    }
+    return lut;
+}
+
+std::vector<float> StretchingAlgorithm::buildGhsLUT(double lowPoint, double highPoint,
+                                                     double symmetryPoint, double stretchFactor,
+                                                     double shadowProtect, double highlightProtect,
+                                                     int form) {
+    constexpr int lutSize = 65536;
+    std::vector<float> lut(lutSize);
+    GhsParams p = precomputeGhs(lowPoint, highPoint, symmetryPoint, stretchFactor, form);
+    #pragma omp parallel for
+    for (int i = 0; i < lutSize; ++i) {
+        float val = static_cast<float>(i) / (lutSize - 1);
+        lut[i] = evaluateGhsPixel(val, p, symmetryPoint, shadowProtect, highlightProtect, form);
+    }
+    return lut;
+}
+
 GrayscaleImagePtr StretchingAlgorithm::stretchHistogramGrayscale(GrayscaleImagePtr src,
                                                                  double blackpoint,
                                                                  double whitepoint,
@@ -450,6 +477,143 @@ RGBImagePtr StretchingAlgorithm::stretchGhsHSL(RGBImagePtr src,
             S = evaluateGhsPixel(S, p, symmetryPoint, shadowProtect, highlightProtect, form);
         } else {
             L = evaluateGhsPixel(L, p, symmetryPoint, shadowProtect, highlightProtect, form);
+        }
+
+        hslToRgb(H, S, L, r, g, b);
+
+        outRData[i] = std::clamp(r, 0.0f, 1.0f);
+        outGData[i] = std::clamp(g, 0.0f, 1.0f);
+        outBData[i] = std::clamp(b, 0.0f, 1.0f);
+    }
+
+    return std::make_shared<RGBImage>(outR, outG, outB);
+}
+
+static inline float evaluateLUT(float val, const std::vector<float>& lut) {
+    if (std::isnan(val)) return std::numeric_limits<float>::quiet_NaN();
+    if (lut.empty()) return val;
+    int lutSize = lut.size();
+    float idxF = val * (lutSize - 1);
+    int idx = static_cast<int>(idxF);
+    if (idx < 0) return lut.front();
+    if (idx >= lutSize - 1) return lut.back();
+    float t = idxF - idx;
+    return (1.0f - t) * lut[idx] + t * lut[idx + 1];
+}
+
+GrayscaleImagePtr StretchingAlgorithm::stretchCurvesGrayscale(GrayscaleImagePtr src,
+                                                              const std::vector<float>& lut) {
+    if (!src) return nullptr;
+    int w = src->width();
+    int h = src->height();
+    int numPixels = w * h;
+
+    auto outBuffer = std::make_shared<ImageBuffer>(w, h);
+    float* outData = outBuffer->data();
+    const float* inData = src->buffer()->data();
+
+    #pragma omp parallel for
+    for (int i = 0; i < numPixels; ++i) {
+        outData[i] = evaluateLUT(inData[i], lut);
+    }
+
+    return std::make_shared<GrayscaleImage>(outBuffer);
+}
+
+RGBImagePtr StretchingAlgorithm::stretchCurvesRGB(RGBImagePtr src,
+                                                  const std::array<std::vector<float>, 3>& luts,
+                                                  bool colorPreserving) {
+    if (!src) return nullptr;
+    int w = src->width();
+    int h = src->height();
+    int numPixels = w * h;
+
+    if (colorPreserving) {
+        auto outR = std::make_shared<GrayscaleImage>(w, h);
+        auto outG = std::make_shared<GrayscaleImage>(w, h);
+        auto outB = std::make_shared<GrayscaleImage>(w, h);
+
+        float* outRData = outR->buffer()->data();
+        float* outGData = outG->buffer()->data();
+        float* outBData = outB->buffer()->data();
+
+        const float* rData = src->r()->buffer()->data();
+        const float* gData = src->g()->buffer()->data();
+        const float* bData = src->b()->buffer()->data();
+
+        #pragma omp parallel for
+        for (int i = 0; i < numPixels; ++i) {
+            float r = rData[i];
+            float g = gData[i];
+            float b = bData[i];
+
+            if (std::isnan(r) || std::isnan(g) || std::isnan(b)) {
+                outRData[i] = outGData[i] = outBData[i] = std::numeric_limits<float>::quiet_NaN();
+                continue;
+            }
+
+            float Y = (r + g + b) / 3.0f;
+            if (Y < 1e-6f) {
+                outRData[i] = 0.0f;
+                outGData[i] = 0.0f;
+                outBData[i] = 0.0f;
+            } else {
+                float Y_stretched = evaluateLUT(Y, luts[0]); // Use red LUT (assumed K for color preserving)
+                float ratio = Y_stretched / Y;
+
+                outRData[i] = std::clamp(r * ratio, 0.0f, 1.0f);
+                outGData[i] = std::clamp(g * ratio, 0.0f, 1.0f);
+                outBData[i] = std::clamp(b * ratio, 0.0f, 1.0f);
+            }
+        }
+
+        return std::make_shared<RGBImage>(outR, outG, outB);
+    } else {
+        auto extR = stretchCurvesGrayscale(src->r(), luts[0]);
+        auto extG = stretchCurvesGrayscale(src->g(), luts[1]);
+        auto extB = stretchCurvesGrayscale(src->b(), luts[2]);
+        return std::make_shared<RGBImage>(extR, extG, extB);
+    }
+}
+
+RGBImagePtr StretchingAlgorithm::stretchCurvesHSL(RGBImagePtr src,
+                                                  const std::vector<float>& lut,
+                                                  bool stretchSaturation) {
+    if (!src) return nullptr;
+    int w = src->width();
+    int h = src->height();
+    int numPixels = w * h;
+
+    auto outR = std::make_shared<GrayscaleImage>(w, h);
+    auto outG = std::make_shared<GrayscaleImage>(w, h);
+    auto outB = std::make_shared<GrayscaleImage>(w, h);
+
+    float* outRData = outR->buffer()->data();
+    float* outGData = outG->buffer()->data();
+    float* outBData = outB->buffer()->data();
+
+    const float* rData = src->r()->buffer()->data();
+    const float* gData = src->g()->buffer()->data();
+    const float* bData = src->b()->buffer()->data();
+
+    #pragma omp parallel for
+    for (int i = 0; i < numPixels; ++i) {
+        float r = rData[i];
+        float g = gData[i];
+        float b = bData[i];
+
+        if (std::isnan(r) || std::isnan(g) || std::isnan(b)) {
+            outRData[i] = outGData[i] = outBData[i] = std::numeric_limits<float>::quiet_NaN();
+            continue;
+        }
+
+        float H, S, L;
+        rgbToHsl(r, g, b, H, S, L);
+
+        if (stretchSaturation) {
+            S = evaluateLUT(S, lut);
+        } else {
+            L = evaluateLUT(L, lut);
         }
 
         hslToRgb(H, S, L, r, g, b);
