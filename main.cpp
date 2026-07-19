@@ -23,6 +23,8 @@
 #include <QIcon>
 #include <QTimer>
 #include <QDebug>
+#include <QCommandLineParser>
+#include <QCommandLineOption>
 #include <cstring>
 #include <iostream>
 
@@ -61,35 +63,94 @@ void blastroMessageHandler(QtMsgType type, const QMessageLogContext& context, co
 }
 
 int main(int argc, char* argv[]) {
+    QApplication app(argc, argv);
+    app.setWindowIcon(QIcon(":/icons/bl_spacey_icon.png"));
 
-    if (argc > 3 && (std::strcmp(argv[1], "--test-process") == 0 || std::strcmp(argv[1], "--run-plugin") == 0)) {
-        QApplication app(argc, argv);
-        app.setWindowIcon(QIcon(":/icons/bl_spacey_icon.png"));
-        QString pluginPath = argv[2];
-        QString imagePath = argv[3];
+    QCommandLineParser parser;
+    parser.setApplicationDescription("BLastro - Astronomical Image Processing Software");
+    parser.addHelpOption();
+
+    QCommandLineOption noRestoreOption("no-restore", "Do not restore the last session on startup.");
+    parser.addOption(noRestoreOption);
+
+    QCommandLineOption projectOption("project", "Open a specific project file on startup.", "project_path");
+    parser.addOption(projectOption);
+
+    QCommandLineOption sessionOption("session", "Open a specific session file on startup.", "session_path");
+    parser.addOption(sessionOption);
+
+    QCommandLineOption testProcessOption("test-process", "Run a test process/plugin on an image and launch GUI.", "plugin_path");
+    parser.addOption(testProcessOption);
+
+    QCommandLineOption runPluginOption("run-plugin", "Alias for --test-process.", "plugin_path");
+    parser.addOption(runPluginOption);
+
+    QCommandLineOption testRegisterOption("test-register", "Run a registration test on a cube.", "cube_path");
+    parser.addOption(testRegisterOption);
+
+    QCommandLineOption testLoadOption("test-load", "Load a PCL module/plugin on startup in GUI mode.", "plugin_path");
+    parser.addOption(testLoadOption);
+
+    QCommandLineOption loadPluginOption("load-plugin", "Alias for --test-load.", "plugin_path");
+    parser.addOption(loadPluginOption);
+
+    QCommandLineOption refIdxOption("ref-idx", "Reference frame index for registration test (default: 0).", "index");
+    parser.addOption(refIdxOption);
+
+    QCommandLineOption methodOption("method", "Alignment method for registration test (default: centroid).", "method");
+    parser.addOption(methodOption);
+
+    QCommandLineOption loadImageOption("load-image", "Load the specified image file on startup.", "image_path");
+    parser.addOption(loadImageOption);
+
+    parser.addPositionalArgument("images", "Image files to load on startup, or input files for test runs.", "[images...]");
+
+    parser.process(app);
+
+    bool isTestProcess = parser.isSet(testProcessOption) || parser.isSet(runPluginOption);
+    bool isTestRegister = parser.isSet(testRegisterOption);
+    bool isTestLoad = parser.isSet(testLoadOption) || parser.isSet(loadPluginOption);
+
+    if (isTestProcess) {
+        QString pluginPath = parser.isSet(testProcessOption) ? parser.value(testProcessOption) : parser.value(runPluginOption);
+        QString imagePath;
+        if (parser.positionalArguments().size() > 0) {
+            imagePath = parser.positionalArguments().first();
+        }
         qDebug() << "Test process execution: plugin =" << pluginPath << "image =" << imagePath;
-        
+
         blastro::MainWindow w;
         w.show();
-        
+
         QTimer::singleShot(100, [&w, pluginPath, imagePath]() {
             w.testProcessOnImage(pluginPath, imagePath);
         });
-        
+
         return app.exec();
     }
 
-    if (argc > 2 && (std::strcmp(argv[1], "--test-register") == 0)) {
-        QApplication app(argc, argv);
-        app.setWindowIcon(QIcon(":/icons/bl_spacey_icon.png"));
-        QString cubePath = argv[2];
-        int refIdx = (argc > 3) ? std::atoi(argv[3]) : 0;
-        QString method = (argc > 4) ? argv[4] : "centroid";
+    if (isTestRegister) {
+        QString cubePath = parser.value(testRegisterOption);
+        int refIdx = 0;
+        QString method = "centroid";
+
+        if (parser.isSet(refIdxOption)) {
+            refIdx = parser.value(refIdxOption).toInt();
+        } else if (parser.positionalArguments().size() > 0) {
+            refIdx = parser.positionalArguments().at(0).toInt();
+        }
+
+        if (parser.isSet(methodOption)) {
+            method = parser.value(methodOption);
+        } else if (parser.positionalArguments().size() > 1) {
+            method = parser.positionalArguments().at(1);
+        }
+
         qDebug() << "Test registration execution: cube =" << cubePath << "refIdx =" << refIdx << "method =" << method;
-        
+
         auto* w = new blastro::MainWindow();
         w->show();
-        
+
         // Failsafe timeout after 180 seconds (3 minutes) to ensure process exits even if hung
         QTimer::singleShot(180000, []() {
             qCritical() << "[main] Failsafe timeout triggered! Force exiting...";
@@ -99,72 +160,49 @@ int main(int argc, char* argv[]) {
         QTimer::singleShot(100, [w, cubePath, refIdx, method]() {
             w->testRegisterOnCube(cubePath, refIdx, method);
         });
-        
+
         int ret = app.exec();
         std::_Exit(ret);
     }
 
-    if (argc > 2 && (std::strcmp(argv[1], "--test-load") == 0 || std::strcmp(argv[1], "--load-plugin") == 0)) {
-        QApplication app(argc, argv);
-        app.setWindowIcon(QIcon(":/icons/bl_spacey_icon.png"));
-        QString path = argv[2];
+    if (isTestLoad) {
+        QString path = parser.isSet(testLoadOption) ? parser.value(testLoadOption) : parser.value(loadPluginOption);
         qDebug() << "Test loading PCL module from:" << path << "in GUI mode";
-        
+
         blastro::MainWindow w;
         w.show();
-        
+
         QTimer::singleShot(100, [&w, path]() {
             w.loadAndShowPlugin(path);
         });
-        
+
         return app.exec();
     }
 
-    QApplication app(argc, argv);
-    app.setWindowIcon(QIcon(":/icons/bl_spacey_icon.png"));
-    
-    // Parse flexible GUI preload arguments, project/session startup options, and positional image files
     blastro::StartupOptions startupOpts;
-    QString loadPluginPath;
-    QStringList positionalImages;
-    
-    QStringList args = QCoreApplication::arguments();
-    for (int i = 1; i < args.size(); ++i) {
-        QString arg = args.at(i);
-        if (arg.startsWith("--")) {
-            if (arg == "--no-restore") {
-                startupOpts.noRestore = true;
-            } else if (arg == "--project") {
-                if (i + 1 < args.size()) {
-                    startupOpts.projectPath = args.at(i + 1);
-                    ++i;
-                }
-            } else if (arg == "--session") {
-                if (i + 1 < args.size()) {
-                    startupOpts.sessionPath = args.at(i + 1);
-                    ++i;
-                }
-            } else if (arg == "--load-plugin" || arg == "--test-load" || arg == "--load-image" || arg == "--test-process" || arg == "--run-plugin") {
-                if (arg == "--load-plugin" || arg == "--test-load") {
-                    if (i + 1 < args.size()) {
-                        loadPluginPath = args.at(i + 1);
-                    }
-                } else if (arg == "--load-image") {
-                    if (i + 1 < args.size()) {
-                        positionalImages.append(args.at(i + 1));
-                    }
-                }
-                ++i; // Skip the option's value
-            }
-        } else {
-            // Treat as a positional image file
-            positionalImages.append(arg);
-        }
+    startupOpts.noRestore = parser.isSet(noRestoreOption);
+    if (parser.isSet(projectOption)) {
+        startupOpts.projectPath = parser.value(projectOption);
     }
-    
+    if (parser.isSet(sessionOption)) {
+        startupOpts.sessionPath = parser.value(sessionOption);
+    }
+
+    QStringList positionalImages = parser.positionalArguments();
+    if (parser.isSet(loadImageOption)) {
+        positionalImages.append(parser.value(loadImageOption));
+    }
+
+    QString loadPluginPath;
+    if (parser.isSet(loadPluginOption)) {
+        loadPluginPath = parser.value(loadPluginOption);
+    } else if (parser.isSet(testLoadOption)) {
+        loadPluginPath = parser.value(testLoadOption);
+    }
+
     blastro::MainWindow w;
     w.show();
-    
+
     QTimer::singleShot(200, [&w, startupOpts, positionalImages, loadPluginPath]() {
         int imageCounter = 1;
         for (const QString& imgPath : positionalImages) {
@@ -175,6 +213,6 @@ int main(int argc, char* argv[]) {
         }
         w.applyStartupOptions(startupOpts);
     });
-    
+
     return app.exec();
 }

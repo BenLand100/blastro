@@ -226,31 +226,97 @@ ImageVariant FitsIO::readImage(const std::string& filepath) {
             return grayImg;
         } else if (axes == 3) {
             long depth = image.axis(2);
-            std::valarray<float> contents;
-            image.read(contents);
+            int drizzled = 0;
+            try {
+                image.readKey("DRIZZLED", drizzled);
+            } catch (...) {
+                drizzled = 0;
+            }
 
-            if (depth == 3) {
-                // Read as RGB image
-                auto rgbImg = std::make_shared<RGBImage>(width, height);
-                populateMetadata(pInfile.get(), rgbImg->metadata());
-                auto bufR = rgbImg->r()->buffer();
-                auto bufG = rgbImg->g()->buffer();
-                auto bufB = rgbImg->b()->buffer();
+            if (drizzled) {
+                if (depth == 2) {
+                    std::valarray<float> contents;
+                    std::vector<long> fp = { 1, 1, 1 };
+                    std::vector<long> lp = { width, height, 1 };
+                    std::vector<long> stride = { 1, 1, 1 };
+                    image.read(contents, fp, lp, stride);
 
-                float scale = determineScaleFactor(image.bitpix(), contents);
-                long planeSize = width * height;
-                for (int y = 0; y < height; ++y) {
-                    for (int x = 0; x < width; ++x) {
-                        long idx = y * width + x;
-                        bufR->setPixel(x, y, contents[idx] / scale);
-                        bufG->setPixel(x, y, contents[planeSize + idx] / scale);
-                        bufB->setPixel(x, y, contents[2 * planeSize + idx] / scale);
+                    auto grayImg = std::make_shared<GrayscaleImage>(width, height);
+                    populateMetadata(pInfile.get(), grayImg->metadata());
+                    auto buffer = grayImg->buffer();
+                    float scale = determineScaleFactor(image.bitpix(), contents);
+                    for (int y = 0; y < height; ++y) {
+                        for (int x = 0; x < width; ++x) {
+                            buffer->setPixel(x, y, contents[y * width + x] / scale);
+                        }
                     }
+                    return grayImg;
+                } else if (depth == 6) {
+                    std::valarray<float> rPlane;
+                    std::vector<long> r_fp = { 1, 1, 1 };
+                    std::vector<long> r_lp = { width, height, 1 };
+                    std::vector<long> stride = { 1, 1, 1 };
+                    image.read(rPlane, r_fp, r_lp, stride);
+
+                    std::valarray<float> gPlane;
+                    std::vector<long> g_fp = { 1, 1, 3 };
+                    std::vector<long> g_lp = { width, height, 3 };
+                    image.read(gPlane, g_fp, g_lp, stride);
+
+                    std::valarray<float> bPlane;
+                    std::vector<long> b_fp = { 1, 1, 5 };
+                    std::vector<long> b_lp = { width, height, 5 };
+                    image.read(bPlane, b_fp, b_lp, stride);
+
+                    auto rgbImg = std::make_shared<RGBImage>(width, height);
+                    populateMetadata(pInfile.get(), rgbImg->metadata());
+                    auto bufR = rgbImg->r()->buffer();
+                    auto bufG = rgbImg->g()->buffer();
+                    auto bufB = rgbImg->b()->buffer();
+
+                    float scaleR = determineScaleFactor(image.bitpix(), rPlane);
+                    float scaleG = determineScaleFactor(image.bitpix(), gPlane);
+                    float scaleB = determineScaleFactor(image.bitpix(), bPlane);
+
+                    for (int y = 0; y < height; ++y) {
+                        for (int x = 0; x < width; ++x) {
+                            long idx = y * width + x;
+                            bufR->setPixel(x, y, rPlane[idx] / scaleR);
+                            bufG->setPixel(x, y, gPlane[idx] / scaleG);
+                            bufB->setPixel(x, y, bPlane[idx] / scaleB);
+                        }
+                    }
+                    return rgbImg;
+                } else {
+                    throw std::runtime_error("Drizzled FITS cube must have depth of 2 or 6");
                 }
-                return rgbImg;
             } else {
-                // 3D FITS cube that is not 3 planes is treated as a Batch of grayscale images
-                throw std::runtime_error("3D FITS cube with depth != 3 must be loaded as a Batch");
+                std::valarray<float> contents;
+                image.read(contents);
+
+                if (depth == 3) {
+                    // Read as RGB image
+                    auto rgbImg = std::make_shared<RGBImage>(width, height);
+                    populateMetadata(pInfile.get(), rgbImg->metadata());
+                    auto bufR = rgbImg->r()->buffer();
+                    auto bufG = rgbImg->g()->buffer();
+                    auto bufB = rgbImg->b()->buffer();
+
+                    float scale = determineScaleFactor(image.bitpix(), contents);
+                    long planeSize = width * height;
+                    for (int y = 0; y < height; ++y) {
+                        for (int x = 0; x < width; ++x) {
+                            long idx = y * width + x;
+                            bufR->setPixel(x, y, contents[idx] / scale);
+                            bufG->setPixel(x, y, contents[planeSize + idx] / scale);
+                            bufB->setPixel(x, y, contents[2 * planeSize + idx] / scale);
+                        }
+                    }
+                    return rgbImg;
+                } else {
+                    // 3D FITS cube that is not 3 planes is treated as a Batch of grayscale images
+                    throw std::runtime_error("3D FITS cube with depth != 3 must be loaded as a Batch");
+                }
             }
         } else {
             throw std::runtime_error("Unsupported FITS dimensions");

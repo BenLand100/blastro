@@ -24,24 +24,27 @@ namespace blastro {
 
 bool WorkspaceRegistry::registerElement(const std::string& name, WorkspaceElement element) {
     if (name.empty()) return false;
-    std::lock_guard<std::mutex> lock(m_mutex);
-    
-    m_registry[name] = element;
-
+    ElementCallback cb;
     std::string typeStr = "Unknown Element";
     std::string details;
-    if (std::holds_alternative<GrayscaleImagePtr>(element)) {
-        auto img = std::get<GrayscaleImagePtr>(element);
-        typeStr = "Grayscale Image";
-        details = img ? (std::to_string(img->width()) + "x" + std::to_string(img->height())) : "null";
-    } else if (std::holds_alternative<RGBImagePtr>(element)) {
-        auto img = std::get<RGBImagePtr>(element);
-        typeStr = "RGB Image";
-        details = img ? (std::to_string(img->width()) + "x" + std::to_string(img->height())) : "null";
-    } else if (std::holds_alternative<ImageBatchPtr>(element)) {
-        auto batch = std::get<ImageBatchPtr>(element);
-        typeStr = "Image Batch";
-        details = batch ? (std::to_string(batch->count()) + " frames") : "null";
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_registry[name] = element;
+        cb = m_onRegister;
+
+        if (std::holds_alternative<GrayscaleImagePtr>(element)) {
+            auto img = std::get<GrayscaleImagePtr>(element);
+            typeStr = "Grayscale Image";
+            details = img ? (std::to_string(img->width()) + "x" + std::to_string(img->height())) : "null";
+        } else if (std::holds_alternative<RGBImagePtr>(element)) {
+            auto img = std::get<RGBImagePtr>(element);
+            typeStr = "RGB Image";
+            details = img ? (std::to_string(img->width()) + "x" + std::to_string(img->height())) : "null";
+        } else if (std::holds_alternative<ImageBatchPtr>(element)) {
+            auto batch = std::get<ImageBatchPtr>(element);
+            typeStr = "Image Batch";
+            details = batch ? (std::to_string(batch->count()) + " frames") : "null";
+        }
     }
 
     Logger::info("Workspace", QString("Registered %1: '%2' (%3)")
@@ -49,38 +52,52 @@ bool WorkspaceRegistry::registerElement(const std::string& name, WorkspaceElemen
                  .arg(QString::fromStdString(name))
                  .arg(QString::fromStdString(details)));
 
+    if (cb) {
+        cb(name);
+    }
     return true;
 }
 
 bool WorkspaceRegistry::unregisterElement(const std::string& name) {
-    std::lock_guard<std::mutex> lock(m_mutex);
-    auto it = m_registry.find(name);
-    if (it == m_registry.end()) return false;
-    
-    m_registry.erase(it);
+    ElementCallback cb;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        auto it = m_registry.find(name);
+        if (it == m_registry.end()) return false;
+        m_registry.erase(it);
+        cb = m_onUnregister;
+    }
 
     Logger::info("Workspace", QString("Unregistered '%1'").arg(QString::fromStdString(name)));
 
+    if (cb) {
+        cb(name);
+    }
     return true;
 }
 
 bool WorkspaceRegistry::renameElement(const std::string& oldName, const std::string& newName) {
     if (newName.empty() || oldName == newName) return false;
-    std::lock_guard<std::mutex> lock(m_mutex);
-    
-    auto it = m_registry.find(oldName);
-    if (it == m_registry.end()) return false;
-    
-    if (m_registry.find(newName) != m_registry.end()) return false; // Target name exists
-    
-    auto element = it->second;
-    m_registry.erase(it);
-    m_registry[newName] = element;
+    RenameCallback cb;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        auto it = m_registry.find(oldName);
+        if (it == m_registry.end()) return false;
+        if (m_registry.find(newName) != m_registry.end()) return false; // Target name exists
+        
+        auto element = it->second;
+        m_registry.erase(it);
+        m_registry[newName] = element;
+        cb = m_onRename;
+    }
 
     Logger::info("Workspace", QString("Renamed '%1' to '%2'")
                  .arg(QString::fromStdString(oldName))
                  .arg(QString::fromStdString(newName)));
 
+    if (cb) {
+        cb(oldName, newName);
+    }
     return true;
 }
 

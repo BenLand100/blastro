@@ -25,6 +25,7 @@
 #include <variant>
 #include <vector>
 #include <mutex>
+#include <functional>
 
 namespace blastro {
 
@@ -32,9 +33,16 @@ using WorkspaceElement = std::variant<GrayscaleImagePtr, RGBImagePtr, ImageBatch
 
 class WorkspaceRegistry {
 public:
+    using ElementCallback = std::function<void(const std::string& name)>;
+    using RenameCallback = std::function<void(const std::string& oldName, const std::string& newName)>;
+
     WorkspaceRegistry() = default;
     ~WorkspaceRegistry() = default;
     
+    void setElementRegisteredCallback(ElementCallback cb) { std::lock_guard<std::mutex> lock(m_mutex); m_onRegister = cb; }
+    void setElementUnregisteredCallback(ElementCallback cb) { std::lock_guard<std::mutex> lock(m_mutex); m_onUnregister = cb; }
+    void setElementRenamedCallback(RenameCallback cb) { std::lock_guard<std::mutex> lock(m_mutex); m_onRename = cb; }
+
     bool registerElement(const std::string& name, WorkspaceElement element);
     bool unregisterElement(const std::string& name);
     bool renameElement(const std::string& oldName, const std::string& newName);
@@ -47,6 +55,10 @@ public:
 private:
     std::unordered_map<std::string, WorkspaceElement> m_registry;
     mutable std::mutex m_mutex;
+
+    ElementCallback m_onRegister;
+    ElementCallback m_onUnregister;
+    RenameCallback m_onRename;
 };
 
 } // namespace blastro

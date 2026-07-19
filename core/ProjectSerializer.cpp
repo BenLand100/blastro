@@ -17,6 +17,7 @@
  */
 
 #include "core/ProjectSerializer.h"
+#include <QCoreApplication>
 #include "core/Preferences.h"
 #include "core/GrayscaleImage.h"
 #include "core/RGBImage.h"
@@ -227,13 +228,19 @@ QJsonObject ProjectSerializer::serializeWorkspace(const QString& projectDir,
         elemObj["name"] = QString::fromStdString(name);
 
         if (std::holds_alternative<GrayscaleImagePtr>(elem)) {
-            // Single images don't have stored source paths in WorkspaceRegistry.
-            // They will be omitted from project serialization; user must re-open.
             elemObj["type"] = "GrayscaleImage";
-            elemObj["note"] = "not_persisted";
+            QString relPath = QString("images/%1.fits").arg(QString::fromStdString(name));
+            QString absPath = QDir(projectDir).absoluteFilePath(relPath);
+            auto pe = pathEntry(absPath, projectDir);
+            elemObj["path"] = pe["path"];
+            elemObj["path_type"] = pe["path_type"];
         } else if (std::holds_alternative<RGBImagePtr>(elem)) {
             elemObj["type"] = "RGBImage";
-            elemObj["note"] = "not_persisted";
+            QString relPath = QString("images/%1.fits").arg(QString::fromStdString(name));
+            QString absPath = QDir(projectDir).absoluteFilePath(relPath);
+            auto pe = pathEntry(absPath, projectDir);
+            elemObj["path"] = pe["path"];
+            elemObj["path_type"] = pe["path_type"];
         } else if (std::holds_alternative<ImageBatchPtr>(elem)) {
             auto batch = std::get<ImageBatchPtr>(elem);
             elemObj["type"] = "ImageBatch";
@@ -314,7 +321,7 @@ bool ProjectSerializer::saveProject(const QString& projectDir,
 
     // MDI image windows
     QJsonArray mdiWindows;
-    for (auto* sub : mdi->subWindowList()) {
+    for (auto* sub : mdi->subWindowList(QMdiArea::StackingOrder)) {
         auto* win = qobject_cast<WorkspaceImageWindow*>(sub->widget());
         if (!win) continue;
         QJsonObject entry;
@@ -385,6 +392,9 @@ bool ProjectSerializer::loadProject(const QString& projectDir,
         restoreWorkspace(root["workspace"].toObject(), workspace, mdi, mainWin);
     }
 
+    // Process queued window creation events so the windows exist before we set their geometries
+    QCoreApplication::processEvents();
+
     // Restore MDI image window geometry and view state (after elements are in workspace)
     if (root.contains("mdi_windows")) {
         // Mapping from element name to sub-window
@@ -393,6 +403,7 @@ bool ProjectSerializer::loadProject(const QString& projectDir,
             auto* win = qobject_cast<WorkspaceImageWindow*>(sub->widget());
             if (win) subMap[win->name()] = sub;
         }
+        QMdiSubWindow* activeSub = nullptr;
         for (const auto& val : root["mdi_windows"].toArray()) {
             QJsonObject entry = val.toObject();
             QString name = entry["element_name"].toString();
@@ -403,13 +414,23 @@ bool ProjectSerializer::loadProject(const QString& projectDir,
                 QJsonObject sw = entry["subwindow"].toObject();
                 sub->move(sw["x"].toInt(), sw["y"].toInt());
                 sub->resize(sw["width"].toInt(), sw["height"].toInt());
-                if (sw["minimized"].toBool()) sub->showMinimized();
-                else if (sw["maximized"].toBool()) sub->showMaximized();
-                else sub->show();
+                if (sw["minimized"].toBool()) {
+                    sub->showMinimized();
+                } else if (sw["maximized"].toBool()) {
+                    sub->showMaximized();
+                    activeSub = sub;
+                } else {
+                    sub->show();
+                    sub->raise();
+                    activeSub = sub;
+                }
             }
             if (win && entry.contains("window_state")) {
                 win->restoreWindowState(entry["window_state"].toObject());
             }
+        }
+        if (activeSub) {
+            mdi->setActiveSubWindow(activeSub);
         }
     }
 
@@ -456,7 +477,15 @@ void ProjectSerializer::restoreWorkspace(const QJsonObject& obj,
         QString note = elem["note"].toString();
         if (note == "not_persisted") continue;
 
-        if (type == "ImageBatch") {
+        if (type == "GrayscaleImage" || type == "RGBImage") {
+            QString absPath = resolvePath(elem, QDir::currentPath());
+            if (!absPath.isEmpty() && mainWin) {
+                QMetaObject::invokeMethod(mainWin, "loadImageDirectly",
+                    Qt::DirectConnection,
+                    Q_ARG(QString, absPath),
+                    Q_ARG(QString, name));
+            }
+        } else if (type == "ImageBatch") {
             QStringList paths;
             QJsonArray frames = elem["frames"].toArray();
             for (const auto& fval : frames) {
@@ -466,7 +495,7 @@ void ProjectSerializer::restoreWorkspace(const QJsonObject& obj,
             }
             if (!paths.isEmpty() && mainWin) {
                 QMetaObject::invokeMethod(mainWin, "loadBatchPaths",
-                    Qt::QueuedConnection,
+                    Qt::DirectConnection,
                     Q_ARG(QStringList, paths),
                     Q_ARG(QString, name));
             }
