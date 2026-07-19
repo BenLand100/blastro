@@ -184,6 +184,7 @@ void PreprocessingPipeline::execute(WorkspaceRegistry& workspace,
     }
 
     double drizzleScale = config.count("drizzle_scale") ? std::stod(config.at("drizzle_scale")) : 1.0;
+    double dropShrink = config.count("drop_shrink") ? std::stod(config.at("drop_shrink")) : 1.0;
     bool keepIntermediate = config.count("keep_intermediate") ? (config.at("keep_intermediate") == "true") : false;
     bool overwriteMasters = config.count("overwrite_masters") ? (config.at("overwrite_masters") == "true") : false;
 
@@ -1035,6 +1036,7 @@ void PreprocessingPipeline::execute(WorkspaceRegistry& workspace,
                 {"drizzle_scale", std::to_string(drizzleScale)},
                 {"reference_mode", alignRefMode},
                 {"interpolation_method", interpMethod},
+                {"drop_shrink", std::to_string(dropShrink)},
                 {"evict_cache", "true"}
             };
             if (hasCustomRef) {

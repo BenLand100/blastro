@@ -103,8 +103,10 @@ PreprocessingWizardDialog::PreprocessingWizardDialog(WorkspaceRegistry& workspac
       m_starMatchToleranceSpin(new QDoubleSpinBox(this)),
       m_starMaxEccentricitySpin(new QDoubleSpinBox(this)),
       // Alignment
+      m_alignMethodCombo(new QComboBox(this)),
       m_alignRefModeCombo(new QComboBox(this)),
       m_drizzleScaleSpin(new QDoubleSpinBox(this)),
+      m_drizzleDropSizeSpin(new QDoubleSpinBox(this)),
       m_alignMutuallyChk(new QCheckBox(this)),
       m_interpolationMethodCombo(new QComboBox(this)),
       // Light Stacking
@@ -452,19 +454,9 @@ PreprocessingWizardDialog::PreprocessingWizardDialog(WorkspaceRegistry& workspac
         controlLayout->addWidget(hdr);
         controlLayout->addWidget(body);
 
-        m_alignRefModeCombo->addItem("Find Centermost Frame", "average_center");
-        m_alignRefModeCombo->addItem("Use Registration Reference", "registration");
-        form->addRow("Reference Mode:", m_alignRefModeCombo);
-
-        m_drizzleScaleSpin->setRange(1.0, 3.0);
-        m_drizzleScaleSpin->setValue(1.0);
-        m_drizzleScaleSpin->setSingleStep(0.5);
-        m_drizzleScaleSpin->setDecimals(1);
-        m_drizzleScaleSpin->setSuffix("×");
-        form->addRow("Drizzle Scale:", m_drizzleScaleSpin);
-
-        m_alignMutuallyChk->setChecked(true);
-        form->addRow("Mutually Align Stacks:", m_alignMutuallyChk);
+        m_alignMethodCombo->addItem("Interpolate", "interpolate");
+        m_alignMethodCombo->addItem("Drizzle", "drizzle");
+        form->addRow("Alignment Mode:", m_alignMethodCombo);
 
         m_interpolationMethodCombo->addItem("Bilinear (Fast, Softer)", "bilinear");
         m_interpolationMethodCombo->addItem("Bicubic Spline", "bicubic");
@@ -472,6 +464,29 @@ PreprocessingWizardDialog::PreprocessingWizardDialog(WorkspaceRegistry& workspac
         m_interpolationMethodCombo->addItem("Lanczos-4 (Highest Quality)", "lanczos4");
         m_interpolationMethodCombo->setCurrentIndex(2); // Default to Lanczos-3
         form->addRow("Interpolation Method:", m_interpolationMethodCombo);
+
+        m_drizzleScaleSpin->setRange(1.0, 3.0);
+        m_drizzleScaleSpin->setValue(1.5);
+        m_drizzleScaleSpin->setSingleStep(0.5);
+        m_drizzleScaleSpin->setDecimals(1);
+        m_drizzleScaleSpin->setSuffix("×");
+        form->addRow("Drizzle Scale:", m_drizzleScaleSpin);
+
+        m_drizzleDropSizeSpin->setRange(0.1, 1.0);
+        m_drizzleDropSizeSpin->setValue(1.0);
+        m_drizzleDropSizeSpin->setSingleStep(0.1);
+        m_drizzleDropSizeSpin->setDecimals(2);
+        form->addRow("Drizzle Drop Size:", m_drizzleDropSizeSpin);
+
+        m_alignRefModeCombo->addItem("Find Centermost Frame", "average_center");
+        m_alignRefModeCombo->addItem("Use Registration Reference", "registration");
+        form->addRow("Reference Mode:", m_alignRefModeCombo);
+
+        m_alignMutuallyChk->setChecked(true);
+        form->addRow("Mutually Align Stacks:", m_alignMutuallyChk);
+
+        connect(m_alignMethodCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &PreprocessingWizardDialog::onAlignMethodChanged);
+        onAlignMethodChanged(0);
     }
 
     controlLayout->addSpacing(4);
@@ -1640,10 +1655,18 @@ void PreprocessingWizardDialog::onResumeStacking() {
     std::map<std::string, std::string> config;
     config["stage"] = "align_stack";
     config["registered_light_batch_name"] = joinedNames;
-    config["drizzle_scale"] = QString::number(m_drizzleScaleSpin->value()).toStdString();
+    std::string alignMethod = m_alignMethodCombo->currentData().toString().toStdString();
+    if (alignMethod == "drizzle") {
+        config["interpolation_method"] = "drizzle";
+        config["drizzle_scale"] = QString::number(m_drizzleScaleSpin->value()).toStdString();
+        config["drop_shrink"] = QString::number(m_drizzleDropSizeSpin->value()).toStdString();
+    } else {
+        config["interpolation_method"] = m_interpolationMethodCombo->currentData().toString().toStdString();
+        config["drizzle_scale"] = "1.0";
+        config["drop_shrink"] = "1.0";
+    }
     config["align_ref_mode"] = m_alignRefModeCombo->currentData().toString().toStdString();
     config["align_mutually"] = m_alignMutuallyChk->isChecked() ? "true" : "false";
-    config["interpolation_method"] = m_interpolationMethodCombo->currentData().toString().toStdString();
     config["transformation_model"] = m_transformationModelCombo->currentData().toString().toStdString();
     config["keep_intermediate"] = m_keepIntermediateChk->isChecked() ? "true" : "false";
     config["out_dir"] = QDir::current().filePath(
@@ -2054,9 +2077,17 @@ void PreprocessingWizardDialog::updateStepsPlan(const std::string& dummyStage) {
     std::vector<std::string> stage1Steps = PreprocessingPipeline::getPlannedSteps(config);
     m_stage1StepCount = stage1Steps.size();
 
-    // Stage 2
     config["stage"] = "align_stack";
-    config["drizzle_scale"] = QString::number(m_drizzleScaleSpin->value()).toStdString();
+    std::string alignMethod = m_alignMethodCombo->currentData().toString().toStdString();
+    if (alignMethod == "drizzle") {
+        config["interpolation_method"] = "drizzle";
+        config["drizzle_scale"] = QString::number(m_drizzleScaleSpin->value()).toStdString();
+        config["drop_shrink"] = QString::number(m_drizzleDropSizeSpin->value()).toStdString();
+    } else {
+        config["interpolation_method"] = m_interpolationMethodCombo->currentData().toString().toStdString();
+        config["drizzle_scale"] = "1.0";
+        config["drop_shrink"] = "1.0";
+    }
     config["align_ref_mode"] = m_alignRefModeCombo->currentData().toString().toStdString();
     config["align_mutually"] = m_alignMutuallyChk->isChecked() ? "true" : "false";
     std::string prefix = m_outPrefixEdit->text().toStdString();
@@ -2324,8 +2355,10 @@ QJsonObject PreprocessingWizardDialog::serializeControlState() const {
     obj["match_tolerance"] = m_starMatchToleranceSpin->value();
     obj["transformation_model"] = m_transformationModelCombo->currentData().toString();
     // Alignment
+    obj["align_method"] = m_alignMethodCombo->currentData().toString();
     obj["align_ref_mode"] = m_alignRefModeCombo->currentData().toString();
     obj["drizzle_scale"] = m_drizzleScaleSpin->value();
+    obj["drizzle_drop_size"] = m_drizzleDropSizeSpin->value();
     obj["align_mutually"] = m_alignMutuallyChk->isChecked();
     obj["interpolation_method"] = m_interpolationMethodCombo->currentData().toString();
     // Light Stacking
@@ -2390,10 +2423,13 @@ void PreprocessingWizardDialog::restoreControlState(const QJsonObject& obj) {
     if (obj.contains("star_max_eccentricity")) m_starMaxEccentricitySpin->setValue(obj["star_max_eccentricity"].toDouble());
     if (obj.contains("match_tolerance")) m_starMatchToleranceSpin->setValue(obj["match_tolerance"].toDouble());
     if (obj.contains("transformation_model")) setCombo(m_transformationModelCombo, obj["transformation_model"].toString());
+    if (obj.contains("align_method")) setCombo(m_alignMethodCombo, obj["align_method"].toString());
     if (obj.contains("align_ref_mode")) setCombo(m_alignRefModeCombo, obj["align_ref_mode"].toString());
     if (obj.contains("drizzle_scale")) m_drizzleScaleSpin->setValue(obj["drizzle_scale"].toDouble());
+    if (obj.contains("drizzle_drop_size")) m_drizzleDropSizeSpin->setValue(obj["drizzle_drop_size"].toDouble());
     if (obj.contains("align_mutually")) m_alignMutuallyChk->setChecked(obj["align_mutually"].toBool());
     if (obj.contains("interpolation_method")) setCombo(m_interpolationMethodCombo, obj["interpolation_method"].toString());
+    onAlignMethodChanged(m_alignMethodCombo->currentIndex());
     if (obj.contains("light_stack_method")) setCombo(m_lightStackMethodCombo, obj["light_stack_method"].toString());
     if (obj.contains("light_rejection")) setCombo(m_lightRejectionCombo, obj["light_rejection"].toString());
     if (obj.contains("light_sigma_low")) m_lightSigmaLowSpin->setValue(obj["light_sigma_low"].toDouble());
@@ -2409,6 +2445,20 @@ void PreprocessingWizardDialog::restoreControlState(const QJsonObject& obj) {
     if (obj.contains("bge_max_structure")) m_bgeMaxStructureSpin->setValue(obj["bge_max_structure"].toDouble());
     if (obj.contains("scale_additive")) m_lightScaleAdditiveChk->setChecked(obj["scale_additive"].toBool());
     if (obj.contains("scale_multiplicative")) m_lightScaleMultiplicativeChk->setChecked(obj["scale_multiplicative"].toBool());
+}
+
+void PreprocessingWizardDialog::onAlignMethodChanged(int index) {
+    Q_UNUSED(index);
+    QString method = m_alignMethodCombo->currentData().toString();
+    if (method == "drizzle") {
+        m_interpolationMethodCombo->setEnabled(false);
+        m_drizzleScaleSpin->setEnabled(true);
+        m_drizzleDropSizeSpin->setEnabled(true);
+    } else {
+        m_interpolationMethodCombo->setEnabled(true);
+        m_drizzleScaleSpin->setEnabled(false);
+        m_drizzleDropSizeSpin->setEnabled(false);
+    }
 }
 
 } // namespace blastro

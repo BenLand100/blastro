@@ -21,6 +21,7 @@
 #include <QComboBox>
 #include <QLineEdit>
 #include <QPushButton>
+#include <QDoubleSpinBox>
 
 namespace blastro {
 
@@ -39,12 +40,15 @@ public:
 private slots:
     void onRunClicked();
     void onPrefsClicked();
+    void onMethodChanged(int index);
 
 private:
     QComboBox* m_targetInputCombo;
     QLineEdit* m_outputName;
     QString m_outputPattern;
+    QComboBox* m_alignMethodCombo;
     QComboBox* m_drizzleCombo;
+    QDoubleSpinBox* m_drizzleDropSizeSpin;
     QComboBox* m_refModeCombo;
     QComboBox* m_interpolationCombo;
 

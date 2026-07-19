@@ -77,23 +77,14 @@ AlignDialog::AlignDialog(WorkspaceRegistry& workspace, QWidget* parent)
         m_outputName->setText(name);
     }
 
-    // 3. Drizzle Scale ComboBox
-    m_drizzleCombo = new QComboBox(this);
-    m_drizzleCombo->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-    m_drizzleCombo->addItem("1.0x (No Drizzle)", 1.0);
-    m_drizzleCombo->addItem("1.5x Drizzle", 1.5);
-    m_drizzleCombo->addItem("2.0x Drizzle", 2.0);
-    m_drizzleCombo->addItem("3.0x Drizzle", 3.0);
-    formLayout->addRow("Drizzle Scale:", m_drizzleCombo);
+    // 3. Alignment Mode ComboBox
+    m_alignMethodCombo = new QComboBox(this);
+    m_alignMethodCombo->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    m_alignMethodCombo->addItem("Interpolate", "interpolate");
+    m_alignMethodCombo->addItem("Drizzle", "drizzle");
+    formLayout->addRow("Alignment Mode:", m_alignMethodCombo);
 
-    // 4. Alignment Reference Mode ComboBox
-    m_refModeCombo = new QComboBox(this);
-    m_refModeCombo->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-    m_refModeCombo->addItem("Find Centermost", "average_center");
-    m_refModeCombo->addItem("Use Reference", "registration");
-    formLayout->addRow("Alignment Reference Mode:", m_refModeCombo);
-
-    // 5. Interpolation Method ComboBox
+    // 4. Interpolation Method ComboBox
     m_interpolationCombo = new QComboBox(this);
     m_interpolationCombo->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     m_interpolationCombo->addItem("Bilinear (Fast, Softer)", "bilinear");
@@ -102,6 +93,34 @@ AlignDialog::AlignDialog(WorkspaceRegistry& workspace, QWidget* parent)
     m_interpolationCombo->addItem("Lanczos-4 (Highest Quality)", "lanczos4");
     m_interpolationCombo->setCurrentIndex(2); // Default to Lanczos-3
     formLayout->addRow("Interpolation Method:", m_interpolationCombo);
+
+    // 5. Drizzle Scale ComboBox
+    m_drizzleCombo = new QComboBox(this);
+    m_drizzleCombo->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    m_drizzleCombo->addItem("1.0x Drizzle", 1.0);
+    m_drizzleCombo->addItem("1.5x Drizzle", 1.5);
+    m_drizzleCombo->addItem("2.0x Drizzle", 2.0);
+    m_drizzleCombo->addItem("3.0x Drizzle", 3.0);
+    m_drizzleCombo->setCurrentIndex(2); // Default to 2.0x
+    formLayout->addRow("Drizzle Scale:", m_drizzleCombo);
+
+    // 6. Drizzle Drop Size SpinBox
+    m_drizzleDropSizeSpin = new QDoubleSpinBox(this);
+    m_drizzleDropSizeSpin->setRange(0.1, 1.0);
+    m_drizzleDropSizeSpin->setValue(1.0);
+    m_drizzleDropSizeSpin->setSingleStep(0.1);
+    m_drizzleDropSizeSpin->setDecimals(2);
+    formLayout->addRow("Drizzle Drop Size:", m_drizzleDropSizeSpin);
+
+    // 7. Alignment Reference Mode ComboBox
+    m_refModeCombo = new QComboBox(this);
+    m_refModeCombo->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    m_refModeCombo->addItem("Find Centermost", "average_center");
+    m_refModeCombo->addItem("Use Reference", "registration");
+    formLayout->addRow("Alignment Reference Mode:", m_refModeCombo);
+
+    connect(m_alignMethodCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &AlignDialog::onMethodChanged);
+    onMethodChanged(0);
 
 
     mainLayout->addLayout(formLayout);
@@ -183,12 +202,20 @@ std::map<std::string, std::string> AlignDialog::getConfig() const {
     std::map<std::string, std::string> config;
     config["input_name"] = m_targetInputCombo->currentText().toStdString();
     config["output_name"] = m_outputName->text().trimmed().toStdString();
-    config["drizzle_scale"] = std::to_string(m_drizzleCombo->currentData().toDouble());
     config["reference_mode"] = m_refModeCombo->currentData().toString().toStdString();
-    config["interpolation_method"] = m_interpolationCombo->currentData().toString().toStdString();
-
     config["threads"] = std::to_string(m_threads);
     config["evict_cache"] = m_evictCache ? "true" : "false";
+
+    std::string method = m_alignMethodCombo->currentData().toString().toStdString();
+    if (method == "drizzle") {
+        config["interpolation_method"] = "drizzle";
+        config["drizzle_scale"] = std::to_string(m_drizzleCombo->currentData().toDouble());
+        config["drop_shrink"] = std::to_string(m_drizzleDropSizeSpin->value());
+    } else {
+        config["interpolation_method"] = m_interpolationCombo->currentData().toString().toStdString();
+        config["drizzle_scale"] = "1.0";
+        config["drop_shrink"] = "1.0";
+    }
     return config;
 }
 
@@ -210,9 +237,11 @@ void AlignDialog::refreshWorkspaceElements() {
 
 QJsonObject AlignDialog::serializeState() const {
     QJsonObject obj;
+    obj["align_method"] = m_alignMethodCombo->currentData().toString();
     obj["drizzle_scale"] = m_drizzleCombo->currentData().toDouble();
     obj["reference_mode"] = m_refModeCombo->currentData().toString();
     obj["interpolation_method"] = m_interpolationCombo->currentData().toString();
+    obj["drop_shrink"] = m_drizzleDropSizeSpin->value();
 
     obj["threads"] = m_threads;
     obj["evict_cache"] = m_evictCache;
@@ -220,6 +249,10 @@ QJsonObject AlignDialog::serializeState() const {
 }
 
 void AlignDialog::restoreState(const QJsonObject& obj) {
+    if (obj.contains("align_method")) {
+        int idx = m_alignMethodCombo->findData(obj["align_method"].toString());
+        if (idx >= 0) m_alignMethodCombo->setCurrentIndex(idx);
+    }
     if (obj.contains("drizzle_scale")) {
         double scale = obj["drizzle_scale"].toDouble();
         for (int i = 0; i < m_drizzleCombo->count(); ++i) {
@@ -237,11 +270,30 @@ void AlignDialog::restoreState(const QJsonObject& obj) {
         int idx = m_interpolationCombo->findData(obj["interpolation_method"].toString());
         if (idx >= 0) m_interpolationCombo->setCurrentIndex(idx);
     }
+    if (obj.contains("drop_shrink")) {
+        m_drizzleDropSizeSpin->setValue(obj["drop_shrink"].toDouble());
+    }
 
     if (obj.contains("threads"))
         m_threads = obj["threads"].toInt();
     if (obj.contains("evict_cache"))
         m_evictCache = obj["evict_cache"].toBool();
+
+    onMethodChanged(m_alignMethodCombo->currentIndex());
+}
+
+void AlignDialog::onMethodChanged(int index) {
+    Q_UNUSED(index);
+    QString method = m_alignMethodCombo->currentData().toString();
+    if (method == "drizzle") {
+        m_interpolationCombo->setEnabled(false);
+        m_drizzleCombo->setEnabled(true);
+        m_drizzleDropSizeSpin->setEnabled(true);
+    } else {
+        m_interpolationCombo->setEnabled(true);
+        m_drizzleCombo->setEnabled(false);
+        m_drizzleDropSizeSpin->setEnabled(false);
+    }
 }
 
 } // namespace blastro

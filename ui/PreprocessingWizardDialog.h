@@ -69,6 +69,7 @@ private slots:
     void onMetricChanged(int index);
     void onRangeChanged(double minVal, double maxVal);
     void onSpinBoxChanged();
+    void onAlignMethodChanged(int index);
     void onCancel();
     void onStepStarted(int stepIndex);
     void onStepProgressUpdated(int stepIndex, int percent, double elapsed);
@@ -143,8 +144,10 @@ private:
     QDoubleSpinBox* m_starMaxEccentricitySpin;
 
     // Control Tab — Alignment section
+    QComboBox* m_alignMethodCombo;
     QComboBox* m_alignRefModeCombo;
     QDoubleSpinBox* m_drizzleScaleSpin;
+    QDoubleSpinBox* m_drizzleDropSizeSpin;
     QCheckBox* m_alignMutuallyChk;
     QComboBox* m_interpolationMethodCombo;
 
