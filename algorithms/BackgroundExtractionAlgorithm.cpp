@@ -71,11 +71,11 @@ void BackgroundExtractionAlgorithm::execute(WorkspaceRegistry& workspace,
         omp_set_num_threads(threads);
     }
 
-    Logger::header("BackgroundExtraction", QString("Starting BGE execution. Input: %1, Output: %2, Method: %3, Order: %4, RbfSmoothing: %5, Normalize: %6, AutoExclude: %7, MaxDeviation: %8, MaxStructure: %9, Threads: %10")
+    Logger::header("BackgroundExtraction", QString("Starting BGE on '%1' -> '%2' [%3, order=%4, rbf=%5, autoExclude=%6, threads=%7]")
                    .arg(QString::fromStdString(inputName))
                    .arg(QString::fromStdString(outputName))
                    .arg(QString::fromStdString(method))
-                   .arg(order).arg(rbfSmoothing).arg(normalize).arg(autoExclude).arg(maxDeviation).arg(maxStructure).arg(threads));
+                   .arg(order).arg(rbfSmoothing).arg(autoExclude).arg(threads));
 
     QElapsedTimer totalTimer;
     totalTimer.start();
@@ -161,6 +161,9 @@ void BackgroundExtractionAlgorithm::execute(WorkspaceRegistry& workspace,
                     continue;
                 }
 
+                QElapsedTimer frameTimer;
+                frameTimer.start();
+
                 ImageVariant frame = inputBatch->getImage(i);
                 auto meta = inputBatch->frameMetadata(i);
 
@@ -213,6 +216,11 @@ void BackgroundExtractionAlgorithm::execute(WorkspaceRegistry& workspace,
                 inputBatch->clearCache(i);
 
                 int completed = ++completedFrames;
+                Logger::info("BackgroundExtraction", QString("[%1/%2] BGE '%3': %4 sample pts in %5 ms")
+                             .arg(completed).arg(count)
+                             .arg(QString::fromStdString(frameName))
+                             .arg(targetPts.size())
+                             .arg(frameTimer.elapsed()));
                 if (progress) {
                     #pragma omp critical
                     progress(static_cast<int>(5.0 + 90.0 * completed / count));
@@ -256,6 +264,7 @@ void BackgroundExtractionAlgorithm::execute(WorkspaceRegistry& workspace,
     }
 
     // Single-image mode
+    Logger::info("BackgroundExtraction", QString("Extracting background from '%1'...").arg(QString::fromStdString(inputName)));
     WorkspaceElement outputElem;
     if (std::holds_alternative<GrayscaleImagePtr>(inputElem)) {
         auto gray = std::get<GrayscaleImagePtr>(inputElem);
@@ -283,8 +292,8 @@ void BackgroundExtractionAlgorithm::execute(WorkspaceRegistry& workspace,
     workspace.registerElement(outputName, outputElem, visible);
 
     if (progress) progress(100);
-    Logger::success("BackgroundExtraction", QString("Finished BGE in %1 ms. Registered output: %2")
-                    .arg(totalTimer.elapsed()).arg(QString::fromStdString(outputName)));
+    Logger::success("BackgroundExtraction", QString("Finished BGE on '%1' in %2 ms. Registered output: %3")
+                    .arg(QString::fromStdString(inputName)).arg(totalTimer.elapsed()).arg(QString::fromStdString(outputName)));
 }
 
 } // namespace blastro
