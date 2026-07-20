@@ -1417,13 +1417,15 @@ void ImageView::setShowBgeControlPoints(bool show, bool manual) {
 }
 
 std::vector<std::pair<double, double>> ImageView::getBgeControlPoints() const {
-    ImageVariant actImg = activeImage();
-    if (std::holds_alternative<GrayscaleImagePtr>(actImg)) {
-        if (auto img = std::get<GrayscaleImagePtr>(actImg)) {
+    // Always read from the base image (m_currentImage), not activeImage().
+    // During preview, activeImage() returns m_previewImage which is a freshly
+    // computed result with no control points stored on its buffer.
+    if (std::holds_alternative<GrayscaleImagePtr>(m_currentImage)) {
+        if (auto img = std::get<GrayscaleImagePtr>(m_currentImage)) {
             if (img->buffer()) return img->buffer()->bgeControlPoints();
         }
-    } else if (std::holds_alternative<RGBImagePtr>(actImg)) {
-        if (auto img = std::get<RGBImagePtr>(actImg)) {
+    } else if (std::holds_alternative<RGBImagePtr>(m_currentImage)) {
+        if (auto img = std::get<RGBImagePtr>(m_currentImage)) {
             if (img->r() && img->r()->buffer()) return img->r()->buffer()->bgeControlPoints();
         }
     }
@@ -1431,13 +1433,13 @@ std::vector<std::pair<double, double>> ImageView::getBgeControlPoints() const {
 }
 
 void ImageView::setBgeControlPoints(const std::vector<std::pair<double, double>>& pts) {
-    ImageVariant actImg = activeImage();
-    if (std::holds_alternative<GrayscaleImagePtr>(actImg)) {
-        if (auto img = std::get<GrayscaleImagePtr>(actImg)) {
+    // Always write to the base image (m_currentImage), not activeImage().
+    if (std::holds_alternative<GrayscaleImagePtr>(m_currentImage)) {
+        if (auto img = std::get<GrayscaleImagePtr>(m_currentImage)) {
             if (img->buffer()) img->buffer()->setBgeControlPoints(pts);
         }
-    } else if (std::holds_alternative<RGBImagePtr>(actImg)) {
-        if (auto img = std::get<RGBImagePtr>(actImg)) {
+    } else if (std::holds_alternative<RGBImagePtr>(m_currentImage)) {
+        if (auto img = std::get<RGBImagePtr>(m_currentImage)) {
             if (img->r() && img->r()->buffer()) img->r()->buffer()->setBgeControlPoints(pts);
             if (img->g() && img->g()->buffer()) img->g()->buffer()->setBgeControlPoints(pts);
             if (img->b() && img->b()->buffer()) img->b()->buffer()->setBgeControlPoints(pts);
