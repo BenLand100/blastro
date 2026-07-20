@@ -28,9 +28,10 @@
 
 ## PCL Bridge
 
-UNIMPLEMENTED PCL API CALL: Font/SetFontWeight
-UNIMPLEMENTED PCL API CALL: Font/GetFontHeight
-UNIMPLEMENTED PCL API CALL: Sizer/SetSizerAlignment
-UNIMPLEMENTED PCL API CALL: Control/SetControlFont
-UNIMPLEMENTED PCL API CALL: Font/GetFontHeight
-UNIMPLEMENTED PCL API CALL: Control/SetControlFont
+* [x] Font/SetFontWeight
+* [x] Font/GetFontHeight
+* [x] Sizer/SetSizerAlignment
+* [x] Control/SetControlFont
+* [x] Complete Control/ functionality (geometry, hierarchy, visibility, focus, stylesheets, palette colors, transformations, event routines, window properties)
+* [x] Class A Containers (Sizer, Dialog, Frame, GroupBox, TabBox)
+* [x] Class B Interactive Widgets & Controls (Button, Edit, TextBox, ComboBox, Slider, SpinBox, Label, BitmapBox, TreeBox, ScrollBox)

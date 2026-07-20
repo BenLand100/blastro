@@ -35,9 +35,14 @@
 #include "core/RGBImage.h"
 #include "core/ImageBuffer.h"
 #include "core/TempDirectory.h"
+#include "core/PCLBridge.h"
+#include "core/PCLStubs.h"
 #include "io/FitsIO.h"
 #include <CCfits/CCfits>
+#include <QApplication>
+#include <QFont>
 #include <QDir>
+#include <valarray>
 #include <QString>
 #include <iostream>
 #include <cmath>
@@ -48,6 +53,64 @@
 #include <map>
 #include <string>
 #include <random>
+#include <sstream>
+#include <stdexcept>
+
+using namespace blastro;
+
+// Redefine assert to throw an exception so we can catch it and print the buffered log
+#undef assert
+#define assert(expr) \
+    do { \
+        if (!(expr)) { \
+            throw std::runtime_error(std::string("Assertion failed: ") + #expr + " at " + __FILE__ + ":" + std::to_string(__LINE__)); \
+        } \
+    } while (0)
+
+static QtMessageHandler originalHandler = nullptr;
+static std::stringstream* currentLogBuffer = nullptr;
+
+void SilentMessageHandler(QtMsgType type, const QMessageLogContext &context, const QString &msg) {
+    if (currentLogBuffer) {
+        (*currentLogBuffer) << msg.toStdString() << "\n";
+    } else if (originalHandler) {
+        originalHandler(type, context, msg);
+    }
+}
+
+#define RUN_TEST(testFunc) \
+    do { \
+        std::cout << "Running " << #testFunc << "..." << std::flush; \
+        std::stringstream buffer; \
+        std::streambuf *oldOut = std::cout.rdbuf(buffer.rdbuf()); \
+        std::streambuf *oldErr = std::cerr.rdbuf(buffer.rdbuf()); \
+        currentLogBuffer = &buffer; \
+        try { \
+            testFunc(); \
+            std::cout.rdbuf(oldOut); \
+            std::cerr.rdbuf(oldErr); \
+            currentLogBuffer = nullptr; \
+            std::cout << " PASSED" << std::endl; \
+        } catch (const std::exception& e) { \
+            std::cout.rdbuf(oldOut); \
+            std::cerr.rdbuf(oldErr); \
+            currentLogBuffer = nullptr; \
+            std::cout << " FAILED" << std::endl; \
+            std::cerr << "--- TEST OUTPUT ---" << std::endl; \
+            std::cerr << buffer.str() << std::endl; \
+            std::cerr << "Exception: " << e.what() << std::endl; \
+            std::exit(1); \
+        } catch (...) { \
+            std::cout.rdbuf(oldOut); \
+            std::cerr.rdbuf(oldErr); \
+            currentLogBuffer = nullptr; \
+            std::cout << " FAILED" << std::endl; \
+            std::cerr << "--- TEST OUTPUT ---" << std::endl; \
+            std::cerr << buffer.str() << std::endl; \
+            std::cerr << "Unknown Exception caught" << std::endl; \
+            std::exit(1); \
+        } \
+    } while(0)
 
 using namespace blastro;
 
@@ -2206,30 +2269,154 @@ void testAutocropPostprocessing() {
     QDir(QString::fromStdString(tempDir)).removeRecursively();
 }
 
-int main() {
+void testPCLUIBridge() {
+    std::cout << "Running PCL UI Bridge Test..." << std::endl;
+    blastro::initPCLStubs();
+    blastro::PCLBridge bridge;
+
+    // 1. Font tests
+    void* pSetFontWeight = blastro::getPCLStub("Font/SetFontWeight");
+    assert(pSetFontWeight != nullptr);
+
+    typedef void* (*CreateFontFn)(void*, const char16_t*, double);
+    typedef void (*SetWeightFn)(void*, int32_t);
+    typedef int32_t (*GetWeightFn)(void*);
+    typedef int32_t (*GetHeightFn)(void*);
+
+    CreateFontFn createFont = (CreateFontFn)blastro::getPCLStub("Font/CreateFontByFace");
+    SetWeightFn setWeight = (SetWeightFn)blastro::getPCLStub("Font/SetFontWeight");
+    GetWeightFn getWeight = (GetWeightFn)blastro::getPCLStub("Font/GetFontWeight");
+    GetHeightFn getHeight = (GetHeightFn)blastro::getPCLStub("Font/GetFontHeight");
+
+    assert(createFont != nullptr);
+    assert(setWeight != nullptr);
+    assert(getWeight != nullptr);
+    assert(getHeight != nullptr);
+
+    std::u16string fontName = u"SansSerif";
+    void* fontHandle = createFont(nullptr, fontName.c_str(), 12.0);
+    assert(fontHandle != nullptr);
+
+    setWeight(fontHandle, 75);
+    int32_t weight = getWeight(fontHandle);
+    assert(weight == 75);
+
+    int32_t h = getHeight(fontHandle);
+    assert(h > 0);
+
+    delete static_cast<QFont*>(fontHandle);
+
+    // 2. Control/ functions test
+    typedef void* (*CreateControlFn)(void*, void*, void*, uint32_t);
+    typedef void (*SetVisibleFn)(void*, bool);
+    typedef bool (*GetVisibleFn)(void*);
+    typedef void (*SetEnabledFn)(void*, bool);
+    typedef bool (*GetEnabledFn)(void*);
+
+    CreateControlFn createCtrl = (CreateControlFn)blastro::getPCLStub("Control/CreateControl");
+    SetVisibleFn setVisible = (SetVisibleFn)blastro::getPCLStub("Control/SetControlVisible");
+    GetVisibleFn getVisible = (GetVisibleFn)blastro::getPCLStub("Control/GetControlVisible");
+    SetEnabledFn setEnabled = (SetEnabledFn)blastro::getPCLStub("Control/SetControlEnabled");
+    GetEnabledFn getEnabled = (GetEnabledFn)blastro::getPCLStub("Control/GetControlEnabled");
+
+    assert(createCtrl != nullptr);
+    assert(setVisible != nullptr);
+    assert(getVisible != nullptr);
+    assert(setEnabled != nullptr);
+    assert(getEnabled != nullptr);
+
+    void* ctrlHandle = createCtrl(nullptr, nullptr, nullptr, 0);
+    assert(ctrlHandle != nullptr);
+
+    setVisible(ctrlHandle, true);
+    assert(getVisible(ctrlHandle) == true);
+
+    setEnabled(ctrlHandle, false);
+    assert(getEnabled(ctrlHandle) == false);
+
+    delete static_cast<QWidget*>(ctrlHandle);
+
+    // 3. Class A Container tests (Frame, TabBox)
+    typedef void* (*CreateFrameFn)(void*, void*, void*, uint32_t);
+    typedef void (*SetFrameStyleFn)(void*, int32_t);
+    typedef int32_t (*GetFrameStyleFn)(void*);
+
+    CreateFrameFn createFrame = (CreateFrameFn)blastro::getPCLStub("Frame/CreateFrame");
+    SetFrameStyleFn setFrameStyle = (SetFrameStyleFn)blastro::getPCLStub("Frame/SetFrameStyle");
+    GetFrameStyleFn getFrameStyle = (GetFrameStyleFn)blastro::getPCLStub("Frame/GetFrameStyle");
+
+    assert(createFrame != nullptr);
+    assert(setFrameStyle != nullptr);
+    assert(getFrameStyle != nullptr);
+
+    void* frameHandle = createFrame(nullptr, nullptr, nullptr, 0);
+    assert(frameHandle != nullptr);
+    setFrameStyle(frameHandle, 1);
+    assert(getFrameStyle(frameHandle) == 1);
+    delete static_cast<QWidget*>(frameHandle);
+
+    // 4. Class B Interactive Widget tests (Label, SpinBox, Slider, ComboBox)
+    typedef void* (*CreateLabelFn)(void*, void*, const char16_t*, void*, uint32_t);
+    typedef bool (*GetLabelTextFn)(void*, char16_t*, size_t*);
+    typedef void (*SetLabelWordWrapFn)(void*, bool);
+    typedef bool (*GetLabelWordWrapFn)(void*);
+
+    CreateLabelFn createLabel = (CreateLabelFn)blastro::getPCLStub("Label/CreateLabel");
+    GetLabelTextFn getLabelText = (GetLabelTextFn)blastro::getPCLStub("Label/GetLabelText");
+    SetLabelWordWrapFn setWordWrap = (SetLabelWordWrapFn)blastro::getPCLStub("Label/SetLabelWordWrappingEnabled");
+    GetLabelWordWrapFn getWordWrap = (GetLabelWordWrapFn)blastro::getPCLStub("Label/GetLabelWordWrappingEnabled");
+
+    assert(createLabel != nullptr);
+    assert(getLabelText != nullptr);
+    assert(setWordWrap != nullptr);
+    assert(getWordWrap != nullptr);
+
+    std::u16string labelStr = u"Test Label";
+    void* labelHandle = createLabel(nullptr, nullptr, labelStr.c_str(), nullptr, 0);
+    assert(labelHandle != nullptr);
+
+    char16_t textBuf[64] = {0};
+    size_t textLen = 63;
+    bool ok = getLabelText(labelHandle, textBuf, &textLen);
+    assert(ok == true);
+    assert(std::u16string(textBuf) == labelStr);
+
+    setWordWrap(labelHandle, true);
+    assert(getWordWrap(labelHandle) == true);
+
+    delete static_cast<QWidget*>(labelHandle);
+
+    std::cout << "[+] PCL UI Bridge Test PASSED." << std::endl << std::endl;
+}
+
+int main(int argc, char** argv) {
+    QApplication app(argc, argv);
+    originalHandler = qInstallMessageHandler(SilentMessageHandler);
+
     std::cout << "========================================" << std::endl;
     std::cout << "Starting Blastro Algorithm Unit Tests..." << std::endl;
     std::cout << "========================================" << std::endl << std::endl;
 
-    testGaussianStarFitting();
-    testConstellationMatching();
-    testStackingMathematics();
-    testCalibrationPipeline();
-    testLightFramePipeline();
-    testGhsStretching();
-    testBackgroundExtractionOnGradient();
-    testRbfBackgroundExtraction();
-    testPreprocessingPipeline();
-    testPreprocessingCalibrationSelection();
-    testMutualStackAlignment();
-    testPlatesolvingAndMetadataPreservation();
-    testPixelMathNamingAndExecution();
-    testPixelMathRGBMode();
-    testPixelMathDimensionMismatch();
-    testPixelMathPrecedence();
-    testDrizzleReadWrite();
-    testPreprocessingPostprocessing();
-    testAutocropPostprocessing();
+    RUN_TEST(testGaussianStarFitting);
+    RUN_TEST(testConstellationMatching);
+    RUN_TEST(testStackingMathematics);
+    RUN_TEST(testCalibrationPipeline);
+    RUN_TEST(testLightFramePipeline);
+    RUN_TEST(testGhsStretching);
+    RUN_TEST(testBackgroundExtractionOnGradient);
+    RUN_TEST(testRbfBackgroundExtraction);
+    RUN_TEST(testPreprocessingPipeline);
+    RUN_TEST(testPreprocessingCalibrationSelection);
+    RUN_TEST(testMutualStackAlignment);
+    RUN_TEST(testPlatesolvingAndMetadataPreservation);
+    RUN_TEST(testPixelMathNamingAndExecution);
+    RUN_TEST(testPixelMathRGBMode);
+    RUN_TEST(testPixelMathDimensionMismatch);
+    RUN_TEST(testPixelMathPrecedence);
+    RUN_TEST(testDrizzleReadWrite);
+    RUN_TEST(testPreprocessingPostprocessing);
+    RUN_TEST(testAutocropPostprocessing);
+    RUN_TEST(testPCLUIBridge);
 
     std::cout << "========================================" << std::endl;
     std::cout << "All Blastro Algorithm Unit Tests PASSED!" << std::endl;

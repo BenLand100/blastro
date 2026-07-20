@@ -78,6 +78,8 @@ target_link_libraries(blastro PRIVATE
 add_executable(test_algorithms tests/test_algorithms.cpp)
 target_link_libraries(test_algorithms PRIVATE
     blastro_core
+    blastro_ui
     blastro_algorithms
+    Qt6::Core Qt6::Gui Qt6::Widgets
     OpenMP::OpenMP_CXX
 )

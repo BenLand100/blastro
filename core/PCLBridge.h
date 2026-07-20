@@ -91,6 +91,9 @@ struct PCLProcessInfo {
     pcl::process_class_initialization_routine classInitFn = nullptr;
     pcl::process_execution_preferences_routine executionPreferencesFn = nullptr;
     pcl::process_interface_validation_routine validateInterfaceFn = nullptr;
+    pcl::process_set_handle_routine setServerHandleFn = nullptr;
+    pcl::process_clonation_routine cloneFn = nullptr;
+    pcl::process_assignment_routine assignFn = nullptr;
     bool hasEditPreferences = false;
 };
 

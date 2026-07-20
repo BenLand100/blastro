@@ -2245,10 +2245,17 @@ void MainWindow::applyStartupOptions(const StartupOptions& opts) {
         executeAlgorithmSlot(opts.runAlgoName.toStdString(), configMap);
     } else if (!opts.runPclPath.isEmpty()) {
         m_pendingCLIAction = true;
-        QString imagePath;
-        if (!opts.imagesToLoad.isEmpty()) imagePath = opts.imagesToLoad.first();
-        testProcessOnImage(opts.runPclPath, imagePath);
-        onCLIActionFinished();
+        ensurePCLBridge();
+        m_pclBridge->loadModule(opts.runPclPath);
+        auto processes = m_pclBridge->registeredProcesses();
+        if (!processes.empty()) {
+            m_pclBridge->launchInterface(processes[0], this);
+        }
+        if (m_exitAfterLoad) {
+            QTimer::singleShot(1000, this, [this]() {
+                QCoreApplication::exit(0);
+            });
+        }
     } else if (!opts.testRegisterCube.isEmpty()) {
         m_pendingCLIAction = true;
         testRegisterOnCube(opts.testRegisterCube, opts.refIdx, opts.method);

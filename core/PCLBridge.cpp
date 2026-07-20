@@ -39,14 +39,20 @@
 #include <QLineEdit>
 #include <QProcess>
 #include <QProgressDialog>
-#include <QPushButton>
+#include <QRadioButton>
 #include <QRegularExpression>
+#include <QScrollArea>
 #include <QSettings>
 #include <QSlider>
 #include <QSpinBox>
+#include <QStyle>
+#include <QTabWidget>
+#include <QTextEdit>
 #include <QThread>
 #include <QTimer>
 #include <QToolButton>
+#include <QTreeWidget>
+#include <QTreeWidgetItem>
 #include <QVBoxLayout>
 #include <QVariant>
 #include <QWidget>
@@ -154,6 +160,7 @@ struct PCLInterfaceInfo {
   pcl::interface_process_import_routine importProcessFn = nullptr;
   pcl::global_notification_routine globalPrefUpdatedFn = nullptr;
   pcl::interface_process_validation_routine validateProcessFn = nullptr;
+  pcl::interface_process_instantiation_routine newProcessFn = nullptr;
 };
 
 static std::unordered_map<meta_interface_handle, PCLInterfaceInfo> g_interfaces;
@@ -170,6 +177,20 @@ static std::unordered_map<std::string, control_handle> g_interfaceControls;
 // Button*/Slider*/etc. and access m_handlers, so we MUST pass the PCL client
 // pointer as hSender, not the Qt widget pointer.
 static std::unordered_map<control_handle, api_handle> g_widgetToClient;
+
+static api_bool copyStringToChar16(const QString &str, char16_type *dst, size_type *len) {
+  if (!len) return false;
+  std::u16string str16 = str.toStdU16String();
+  if (!dst) {
+    *len = str16.length();
+    return true;
+  }
+  size_type copyLen = std::min(*len, static_cast<size_type>(str16.length()));
+  std::memcpy(dst, str16.c_str(), copyLen * sizeof(char16_type));
+  dst[copyLen] = 0;
+  *len = copyLen;
+  return true;
+}
 
 struct ParameterKey {
   meta_parameter_handle param;
@@ -1348,6 +1369,82 @@ static void mock_SetProcessInterfaceValidationRoutine(
   }
 }
 
+static void mock_SetProcessSetServerHandleRoutine(pcl::process_set_handle_routine f) {
+  if (g_currentDefiningProcess) {
+    g_processes[g_currentDefiningProcess].setServerHandleFn = f;
+    qDebug() << "[PCL Bridge] Process set server handle routine set for:"
+             << g_processes[g_currentDefiningProcess].id;
+  }
+}
+
+static void mock_SetInterfaceProcessInstantiationRoutine(pcl::interface_process_instantiation_routine f) {
+  if (g_currentDefiningInterface) {
+    g_interfaces[g_currentDefiningInterface].newProcessFn = f;
+    qDebug() << "[PCL Bridge] Interface process instantiation routine set for:"
+             << g_interfaces[g_currentDefiningInterface].id;
+  }
+}
+
+static void mock_SetProcessClonationRoutine(pcl::process_clonation_routine f) {
+  if (g_currentDefiningProcess) {
+    g_processes[g_currentDefiningProcess].cloneFn = f;
+    qDebug() << "[PCL Bridge] Process clonation routine set for:"
+             << g_processes[g_currentDefiningProcess].id;
+  }
+}
+
+static void mock_SetProcessAssignmentRoutine(pcl::process_assignment_routine f) {
+  if (g_currentDefiningProcess) {
+    g_processes[g_currentDefiningProcess].assignFn = f;
+    qDebug() << "[PCL Bridge] Process assignment routine set for:"
+             << g_processes[g_currentDefiningProcess].id;
+  }
+}
+
+static process_handle mock_CreateProcessInstance(api_handle hModule, meta_process_handle hMeta) {
+  if (!hMeta) return nullptr;
+  const auto &procInfo = g_processes[hMeta];
+  process_handle hProc = nullptr;
+  if (procInfo.createFn) {
+    hProc = procInfo.createFn(hMeta);
+    if (hProc && procInfo.setServerHandleFn) {
+      procInfo.setServerHandleFn(hProc, hProc);
+    }
+    if (hProc && procInfo.initFn) {
+      procInfo.initFn(hProc);
+    }
+  }
+  qDebug() << "[PCL Bridge] CreateProcessInstance:" << procInfo.id << "->" << hProc;
+  return hProc;
+}
+
+static process_handle mock_CloneProcessInstance(api_handle hModule, const_process_handle hSrc, uint32 flags) {
+  if (!hSrc) return nullptr;
+  for (const auto &pair : g_processes) {
+    const auto &procInfo = pair.second;
+    if (procInfo.cloneFn) {
+      process_handle hCloned = procInfo.cloneFn(hSrc);
+      if (hCloned && procInfo.setServerHandleFn) {
+        procInfo.setServerHandleFn(hCloned, hCloned);
+      }
+      qDebug() << "[PCL Bridge] CloneProcessInstance ->" << hCloned;
+      return hCloned;
+    }
+  }
+  return nullptr;
+}
+
+static api_bool mock_AssignProcessInstance(process_handle hDst, const_process_handle hSrc, uint32 flags) {
+  if (!hDst || !hSrc) return false;
+  for (const auto &pair : g_processes) {
+    const auto &procInfo = pair.second;
+    if (procInfo.assignFn) {
+      return procInfo.assignFn(hDst, hSrc);
+    }
+  }
+  return false;
+}
+
 static void mock_EndInterfaceDefinition() {
   g_currentDefiningInterface = nullptr;
 }
@@ -1363,15 +1460,16 @@ static control_handle mock_CreateControl(api_handle hModule, api_handle client,
   control_handle ch = reinterpret_cast<control_handle>(w);
   if (client)
     g_widgetToClient[ch] = client;
-  qDebug() << "[PCL Bridge] CreateControl: client =" << client
-           << "parent =" << parentWidget << "-> QWidget =" << w;
+  else
+    g_widgetToClient[ch] = ch; // Fallback mapping widget handle to itself if client is null
+  std::cout << "[PCL Bridge] CreateControl: widget = " << w << " client = " << client << " parent = " << parentWidget << std::endl;
   if (!parentWidget) {
     qDebug() << "[PCL Bridge] Detected top-level control creation. Associating "
                 "with pending interface.";
     for (const auto &pair : g_interfaces) {
       std::string id = pair.second.id.toStdString();
       if (g_interfaceControls.find(id) == g_interfaceControls.end()) {
-        g_interfaceControls[id] = ch;
+        g_interfaceControls[id] = reinterpret_cast<control_handle>(w);
         qDebug() << "[PCL Bridge] Associated top-level control" << w
                  << "with interface ID:" << pair.second.id;
         break;
@@ -1396,6 +1494,14 @@ static void mock_SetControlSizer(control_handle h, sizer_handle s) {
   qDebug() << "[PCL Bridge] SetControlSizer:" << w << "layout =" << lay;
   if (w && lay) {
     w->setLayout(lay);
+    if (w->property("pcl_wants_fixed_size").toBool()) {
+      // Clear the temporary hard-coded lock
+      w->setMinimumSize(0, 0);
+      w->setMaximumSize(16777215, 16777215);
+      // Switch to layout-driven fixed size
+      lay->setSizeConstraint(QLayout::SetFixedSize);
+      w->setProperty("pcl_wants_fixed_size", QVariant());
+    }
   }
 }
 
@@ -1419,13 +1525,10 @@ static void mock_SetControlMaxSize(control_handle h, int32 w, int32 h_size) {
   qDebug() << "[PCL Bridge] SetControlMaxSize:" << widget << "width =" << w
            << "height =" << h_size;
   if (widget) {
-    if (w >= 0 && h_size >= 0) {
-      widget->setMaximumSize(w, h_size);
-    } else if (w >= 0) {
-      widget->setMaximumWidth(w);
-    } else if (h_size >= 0) {
-      widget->setMaximumHeight(h_size);
-    }
+    if (w <= 0 || w > 16777215) w = 16777215; // Unbounded or cap to Qt's max
+    if (h_size <= 0 || h_size > 16777215) h_size = 16777215;
+
+    widget->setMaximumSize(w, h_size);
   }
 }
 
@@ -1433,7 +1536,28 @@ static void mock_AdjustControlToContents(control_handle h) {
   QWidget *widget = reinterpret_cast<QWidget *>(h);
   qDebug() << "[PCL Bridge] AdjustControlToContents:" << widget;
   if (widget) {
+    widget->updateGeometry();
+    if (widget->layout()) {
+      widget->layout()->activate();
+      widget->layout()->update();
+    }
+    
+    bool layoutHasFixedSize = widget->layout() && widget->layout()->sizeConstraint() == QLayout::SetFixedSize;
+
+    bool wasFixed = !layoutHasFixedSize && (widget->minimumSize() == widget->maximumSize()) &&
+                    (widget->minimumWidth() > 0) &&
+                    (widget->minimumWidth() < 16777215);
+
+    if (wasFixed) {
+        widget->setMinimumSize(0, 0);
+        widget->setMaximumSize(16777215, 16777215);
+    }
+
     widget->adjustSize();
+
+    if (wasFixed) {
+        widget->setFixedSize(widget->size());
+    }
   }
 }
 
@@ -1452,7 +1576,7 @@ static control_handle mock_CreateDialog(api_handle hModule, api_handle client,
     for (const auto &pair : g_interfaces) {
       std::string id = pair.second.id.toStdString();
       if (g_interfaceControls.find(id) == g_interfaceControls.end()) {
-        g_interfaceControls[id] = ch;
+        g_interfaceControls[id] = reinterpret_cast<control_handle>(dlg);
         qDebug() << "[PCL Bridge] Associated top-level dialog" << dlg
                  << "with interface ID:" << pair.second.id;
         break;
@@ -1684,9 +1808,7 @@ static void mock_SetComboBoxCurrentItem(control_handle h, int32 index) {
   qDebug() << "[PCL Bridge] SetComboBoxCurrentItem:" << cb
            << "index =" << index;
   if (cb) {
-    cb->blockSignals(true);
     cb->setCurrentIndex(index);
-    cb->blockSignals(false);
   }
 }
 
@@ -1714,9 +1836,15 @@ static void mock_SetSpinBoxRange(control_handle h, int32 minVal, int32 maxVal) {
   qDebug() << "[PCL Bridge] SetSpinBoxRange:" << sb << "range = [" << minVal
            << "," << maxVal << "]";
   if (sb) {
-    sb->blockSignals(true);
     sb->setRange(minVal, maxVal);
-    sb->blockSignals(false);
+  }
+}
+
+static void mock_GetSpinBoxRange(const_control_handle h, int32 *minVal, int32 *maxVal) {
+  const QSpinBox *sb = reinterpret_cast<const QSpinBox *>(h);
+  if (sb) {
+    if (minVal) *minVal = sb->minimum();
+    if (maxVal) *maxVal = sb->maximum();
   }
 }
 
@@ -1724,9 +1852,7 @@ static void mock_SetSpinBoxValue(control_handle h, int32 val) {
   QSpinBox *sb = reinterpret_cast<QSpinBox *>(h);
   qDebug() << "[PCL Bridge] SetSpinBoxValue:" << sb << "value =" << val;
   if (sb) {
-    sb->blockSignals(true);
     sb->setValue(val);
-    sb->blockSignals(false);
   }
 }
 
@@ -1742,6 +1868,7 @@ static control_handle mock_CreateLabel(api_handle hModule, api_handle client,
                                        control_handle parent, uint32 flags) {
   QWidget *parentWidget = reinterpret_cast<QWidget *>(parent);
   QLabel *lbl = new QLabel(parentWidget);
+  lbl->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
   if (text) {
     lbl->setText(QString::fromUtf16(reinterpret_cast<const char16_t *>(text)));
   }
@@ -1761,6 +1888,48 @@ static void mock_SetLabelText(control_handle h, const char16_type *text) {
   qDebug() << "[PCL Bridge] SetLabelText:" << lbl << "text =" << str;
   if (lbl) {
     lbl->setText(str);
+  }
+}
+
+static api_bool mock_GetLabelText(const_control_handle h, char16_type *text, size_type *len) {
+  const QLabel *lbl = reinterpret_cast<const QLabel *>(h);
+  return copyStringToChar16(lbl ? lbl->text() : QString(), text, len);
+}
+
+static void mock_SetLabelWordWrappingEnabled(control_handle h, api_bool enable) {
+  QLabel *lbl = reinterpret_cast<QLabel *>(h);
+  qDebug() << "[PCL Bridge] SetLabelWordWrappingEnabled:" << lbl << "enable =" << (bool)enable;
+  if (lbl) {
+    lbl->setWordWrap(enable);
+  }
+}
+
+static api_bool mock_GetLabelWordWrappingEnabled(const_control_handle h) {
+  const QLabel *lbl = reinterpret_cast<const QLabel *>(h);
+  return lbl ? lbl->wordWrap() : false;
+}
+
+static int32 mock_GetLabelMargin(const_control_handle h) {
+  const QLabel *lbl = reinterpret_cast<const QLabel *>(h);
+  return lbl ? lbl->margin() : 0;
+}
+
+static void mock_SetLabelMargin(control_handle h, int32 margin) {
+  QLabel *lbl = reinterpret_cast<QLabel *>(h);
+  if (lbl) {
+    lbl->setMargin(margin);
+  }
+}
+
+static api_bool mock_GetLabelRichTextEnabled(const_control_handle h) {
+  const QLabel *lbl = reinterpret_cast<const QLabel *>(h);
+  return lbl ? (lbl->textFormat() == Qt::RichText) : false;
+}
+
+static void mock_SetLabelRichTextEnabled(control_handle h, api_bool enable) {
+  QLabel *lbl = reinterpret_cast<QLabel *>(h);
+  if (lbl) {
+    lbl->setTextFormat(enable ? Qt::RichText : Qt::PlainText);
   }
 }
 
@@ -1820,15 +1989,18 @@ static void mock_SetEditText(control_handle h, const char16_type *text) {
            : QString();
   qDebug() << "[PCL Bridge] SetEditText:" << edit << "text =" << str;
   if (edit) {
-    edit->blockSignals(true);
     edit->setText(str);
-    edit->blockSignals(false);
   }
 }
 
 static api_bool mock_GetEditReadOnly(const_control_handle h) {
   const QLineEdit *edit = reinterpret_cast<const QLineEdit *>(h);
   return edit ? edit->isReadOnly() : false;
+}
+
+static int32 mock_GetEditCaretPosition(const_control_handle h) {
+  const QLineEdit *edit = reinterpret_cast<const QLineEdit *>(h);
+  return edit ? edit->cursorPosition() : 0;
 }
 
 static void mock_SetEditReadOnly(control_handle h, api_bool readOnly) {
@@ -1991,6 +2163,7 @@ static api_bool mock_AttachToUIObject(api_handle hModule,
 static api_bool mock_DetachFromUIObject(api_handle hModule,
                                         api_handle hUIObject) {
   qDebug() << "[PCL Bridge] DetachFromUIObject: UIObject =" << hUIObject;
+  g_widgetToClient.erase(reinterpret_cast<control_handle>(hUIObject));
   return true;
 }
 
@@ -2005,6 +2178,155 @@ static void mock_SetLabelAlignment(control_handle h, int32 align) {
       qtAlign = Qt::AlignRight | Qt::AlignVCenter;
     lbl->setAlignment(qtAlign);
   }
+}
+
+static void getWidgetAndClientForHandle(control_handle h, QWidget *&outWidget, api_handle &outClient) {
+  outWidget = nullptr;
+  outClient = nullptr;
+
+  // 1. Check if h is an interface handle (hInterface)
+  auto intIt = g_interfaces.find(reinterpret_cast<meta_interface_handle>(h));
+  if (intIt != g_interfaces.end()) {
+    std::string idStr = intIt->second.id.toStdString();
+    auto ctrlIt = g_interfaceControls.find(idStr);
+    if (ctrlIt != g_interfaceControls.end()) {
+      outWidget = reinterpret_cast<QWidget *>(ctrlIt->second);
+    }
+    outClient = h;
+    return;
+  }
+
+  // 2. Check if h is a Qt widget handle in g_widgetToClient
+  auto clientIt = g_widgetToClient.find(h);
+  if (clientIt != g_widgetToClient.end()) {
+    outWidget = reinterpret_cast<QWidget *>(h);
+    outClient = clientIt->second;
+    return;
+  }
+
+  // 3. Check if h is a PCL client object pointer in g_widgetToClient
+  for (const auto &pair : g_widgetToClient) {
+    if (pair.second == h) {
+      outWidget = reinterpret_cast<QWidget *>(pair.first);
+      return;
+    }
+  }
+
+  // 4. Check if h is a top-level widget in g_interfaceControls
+  for (const auto &pair : g_interfaceControls) {
+    if (pair.second == h) {
+      outWidget = reinterpret_cast<QWidget *>(h);
+      for (const auto &intPair : g_interfaces) {
+        if (intPair.second.id.toStdString() == pair.first) {
+          outClient = const_cast<api_handle>(intPair.first);
+          return;
+        }
+      }
+    }
+  }
+
+  // 5. Fallback if h is a raw QWidget
+  outWidget = reinterpret_cast<QWidget *>(h);
+  outClient = nullptr;
+}
+
+class PCLEventFilter : public QObject {
+public:
+    PCLEventFilter(QObject* parent = nullptr) : QObject(parent) {}
+    bool eventFilter(QObject* obj, QEvent* event) override {
+        if (event->type() == QEvent::Show) {
+            void* routinePtr = obj->property("showRoutine").value<void*>();
+            if (routinePtr) {
+                auto routine = reinterpret_cast<pcl::control_event_routine>(routinePtr);
+                void* receiver = obj->property("showReceiver").value<void*>();
+                api_handle sender = obj->property("pclSender").value<api_handle>();
+                if (sender) {
+                    std::cout << "[PCL Bridge] Queueing ShowEventRoutine for obj = " << obj << " sender = " << sender << std::endl;
+                    QMetaObject::invokeMethod(this, [=]() {
+                        routine(sender, receiver);
+                        QWidget *w = qobject_cast<QWidget *>(obj);
+                        if (w) {
+                            w->updateGeometry();
+                            if (w->layout()) {
+                                w->layout()->activate();
+                                w->layout()->update();
+                            }
+                            w->adjustSize();
+                        }
+                    }, Qt::QueuedConnection);
+                } else {
+                    std::cout << "[PCL Bridge] PCLEventFilter Show: Skipping event for " << obj << " because pclSender is null/unregistered" << std::endl;
+                }
+            }
+        } else if (event->type() == QEvent::Hide) {
+            void* routinePtr = obj->property("hideRoutine").value<void*>();
+            if (routinePtr) {
+                auto routine = reinterpret_cast<pcl::control_event_routine>(routinePtr);
+                void* receiver = obj->property("hideReceiver").value<void*>();
+                api_handle sender = obj->property("pclSender").value<api_handle>();
+                if (sender) {
+                    std::cout << "[PCL Bridge] Queueing HideEventRoutine for obj = " << obj << " sender = " << sender << std::endl;
+                    QMetaObject::invokeMethod(this, [=]() {
+                        routine(sender, receiver);
+                    }, Qt::QueuedConnection);
+                } else {
+                    std::cout << "[PCL Bridge] PCLEventFilter Hide: Skipping event for " << obj << " because pclSender is null/unregistered" << std::endl;
+                }
+            }
+        }
+        return QObject::eventFilter(obj, event);
+    }
+};
+
+// Global map to store pending show/hide routines set on hInterface before top-level QWidget is created
+struct PendingInterfaceRoutines {
+  pcl::control_event_routine showRoutine = nullptr;
+  api_handle showReceiver = nullptr;
+  pcl::control_event_routine hideRoutine = nullptr;
+  api_handle hideReceiver = nullptr;
+};
+static std::unordered_map<control_handle, PendingInterfaceRoutines> g_pendingInterfaceRoutines;
+
+static api_bool mock_SetShowEventRoutine(control_handle h, api_handle receiver,
+                                     pcl::control_event_routine routine) {
+  QWidget *widget = nullptr;
+  api_handle clientPtr = nullptr;
+  getWidgetAndClientForHandle(h, widget, clientPtr);
+
+  std::cout << "[PCL Bridge] SetShowEventRoutine: h = " << h << " widget = " << widget << " receiver = " << receiver << " clientPtr = " << clientPtr << std::endl;
+  if (!widget) {
+    g_pendingInterfaceRoutines[h].showRoutine = routine;
+    g_pendingInterfaceRoutines[h].showReceiver = receiver;
+  } else {
+    widget->setProperty("showRoutine", QVariant::fromValue(reinterpret_cast<void *>(routine)));
+    widget->setProperty("showReceiver", QVariant::fromValue(reinterpret_cast<void *>(receiver)));
+    widget->setProperty("pclSender", QVariant::fromValue(clientPtr));
+    
+    static PCLEventFilter filter;
+    widget->installEventFilter(&filter);
+  }
+  return api_true;
+}
+
+static api_bool mock_SetHideEventRoutine(control_handle h, api_handle receiver,
+                                     pcl::control_event_routine routine) {
+  QWidget *widget = nullptr;
+  api_handle clientPtr = nullptr;
+  getWidgetAndClientForHandle(h, widget, clientPtr);
+
+  std::cout << "[PCL Bridge] SetHideEventRoutine: h = " << h << " widget = " << widget << " receiver = " << receiver << " clientPtr = " << clientPtr << std::endl;
+  if (!widget) {
+    g_pendingInterfaceRoutines[h].hideRoutine = routine;
+    g_pendingInterfaceRoutines[h].hideReceiver = receiver;
+  } else {
+    widget->setProperty("hideRoutine", QVariant::fromValue(reinterpret_cast<void *>(routine)));
+    widget->setProperty("hideReceiver", QVariant::fromValue(reinterpret_cast<void *>(receiver)));
+    widget->setProperty("pclSender", QVariant::fromValue(clientPtr));
+    
+    static PCLEventFilter filter;
+    widget->installEventFilter(&filter);
+  }
+  return api_true;
 }
 
 static api_bool mock_SetEventRoutine(control_handle h, api_handle receiver,
@@ -2171,7 +2493,7 @@ mock_SetButtonCheckEventRoutine(control_handle h, api_handle receiver,
     check->setProperty("pclSender",
                        QVariant::fromValue(clientIt != g_widgetToClient.end()
                                                ? clientIt->second
-                                               : (api_handle)h));
+                                               : static_cast<api_handle>(nullptr)));
 
     check->disconnect(check, &QCheckBox::stateChanged, nullptr, nullptr);
 
@@ -2179,7 +2501,7 @@ mock_SetButtonCheckEventRoutine(control_handle h, api_handle receiver,
       void *r = check->property("checkRoutine").value<void *>();
       void *rec = check->property("checkReceiver").value<void *>();
       void *snd = check->property("pclSender").value<void *>();
-      if (r) {
+      if (r && snd) {
         auto callback = reinterpret_cast<pcl::button_check_event_routine>(r);
         int32 pclState = 0;
         if (state == Qt::Checked)
@@ -2190,13 +2512,22 @@ mock_SetButtonCheckEventRoutine(control_handle h, api_handle receiver,
                  reinterpret_cast<control_handle>(rec), pclState);
       }
     });
+
+    if (routine) {
+      auto clientIt = g_widgetToClient.find(h);
+      if (clientIt != g_widgetToClient.end() && clientIt->second) {
+        int state = check->checkState();
+        int32 pclState = (state == Qt::Checked) ? 1 : ((state == Qt::PartiallyChecked) ? 2 : 0);
+        routine(reinterpret_cast<control_handle>(clientIt->second),
+                reinterpret_cast<control_handle>(receiver), pclState);
+      }
+    }
     return true;
   }
   return false;
 }
 
-static api_bool
-mock_SetButtonClickEventRoutine(control_handle h, api_handle receiver,
+static api_bool mock_SetButtonClickEventRoutine(control_handle h, api_handle receiver,
                                 pcl::button_click_event_routine routine) {
   QPushButton *btn = reinterpret_cast<QPushButton *>(h);
   qDebug() << "[PCL Bridge] SetButtonClickEventRoutine: btn =" << btn
@@ -2231,17 +2562,24 @@ mock_SetButtonClickEventRoutine(control_handle h, api_handle receiver,
 
 static void mock_GetClientRect(const_control_handle h, int32 *x1, int32 *y1,
                                int32 *x2, int32 *y2) {
-  const QWidget *w = reinterpret_cast<const QWidget *>(h);
-  qDebug() << "[PCL Bridge] GetClientRect:" << w;
-  if (w) {
+  QWidget *targetWidget = nullptr;
+  api_handle clientPtr = nullptr;
+  getWidgetAndClientForHandle(const_cast<control_handle>(h), targetWidget, clientPtr);
+  qDebug() << "[PCL Bridge] GetClientRect:" << targetWidget;
+  if (targetWidget) {
     if (x1)
       *x1 = 0;
     if (y1)
       *y1 = 0;
     if (x2)
-      *x2 = w->width();
+      *x2 = targetWidget->width();
     if (y2)
-      *y2 = w->height();
+      *y2 = targetWidget->height();
+  } else {
+    if (x1) *x1 = 0;
+    if (y1) *y1 = 0;
+    if (x2) *x2 = 0;
+    if (y2) *y2 = 0;
   }
 }
 
@@ -2250,11 +2588,25 @@ static void mock_SetControlFixedSize(control_handle h, int32 w, int32 h_size) {
   qDebug() << "[PCL Bridge] SetControlFixedSize:" << widget << "width =" << w
            << "height =" << h_size;
   if (widget) {
-    if (w >= 0 && h_size >= 0) {
+    if (w == 0 && h_size == 0) {
+      if (widget->layout()) {
+        widget->layout()->setSizeConstraint(QLayout::SetFixedSize);
+      } else {
+        // Defer layout size constraint until layout is set
+        widget->setProperty("pcl_wants_fixed_size", true);
+        widget->setFixedSize(widget->sizeHint()); // Temporary lock
+      }
+      return;
+    }
+    
+    if (w == 0) w = widget->sizeHint().width();
+    if (h_size == 0) h_size = widget->sizeHint().height();
+    
+    if (w > 0 && h_size > 0) {
       widget->setFixedSize(w, h_size);
-    } else if (w >= 0) {
+    } else if (w > 0) {
       widget->setFixedWidth(w);
-    } else if (h_size >= 0) {
+    } else if (h_size > 0) {
       widget->setFixedHeight(h_size);
     }
   }
@@ -2341,9 +2693,7 @@ static void mock_SetSliderRange(control_handle h, int32 minVal, int32 maxVal) {
   qDebug() << "[PCL Bridge] SetSliderRange:" << sl << "range = [" << minVal
            << "," << maxVal << "]";
   if (sl) {
-    sl->blockSignals(true);
     sl->setRange(minVal, maxVal);
-    sl->blockSignals(false);
   }
 }
 
@@ -2364,9 +2714,7 @@ static void mock_SetSliderValue(control_handle h, int32 val) {
   QSlider *sl = reinterpret_cast<QSlider *>(h);
   qDebug() << "[PCL Bridge] SetSliderValue:" << sl << "value =" << val;
   if (sl) {
-    sl->blockSignals(true);
     sl->setValue(val);
-    sl->blockSignals(false);
   }
 }
 
@@ -2432,6 +2780,742 @@ static void mock_SetSliderTrackingEnabled(control_handle h, api_bool enable) {
   }
 }
 
+// Control/ Extended Functionality
+static void mock_GetFrameRect(const_control_handle h, int32 *x0, int32 *y0, int32 *x1, int32 *y1) {
+  const QWidget *w = reinterpret_cast<const QWidget *>(h);
+  if (w) {
+    QRect r = w->frameGeometry();
+    if (x0) *x0 = r.left(); if (y0) *y0 = r.top();
+    if (x1) *x1 = r.right(); if (y1) *y1 = r.bottom();
+  }
+}
+
+static void mock_SetClientRect(control_handle h, int32 x0, int32 y0, int32 x1, int32 y1) {
+  QWidget *w = reinterpret_cast<QWidget *>(h);
+  if (w) w->setGeometry(x0, y0, std::max(0, x1 - x0 + 1), std::max(0, y1 - y0 + 1));
+}
+
+static void mock_GetControlExpansionEnabled(const_control_handle h, api_bool *horz, api_bool *vert) {
+  const QWidget *w = reinterpret_cast<const QWidget *>(h);
+  if (w) {
+    QSizePolicy sp = w->sizePolicy();
+    if (horz) *horz = (sp.horizontalPolicy() & QSizePolicy::ExpandFlag) != 0;
+    if (vert) *vert = (sp.verticalPolicy() & QSizePolicy::ExpandFlag) != 0;
+  }
+}
+
+static void mock_SetControlExpansionEnabled(control_handle h, api_bool horz, api_bool vert) {
+  QWidget *w = reinterpret_cast<QWidget *>(h);
+  if (w) {
+    QSizePolicy sp = w->sizePolicy();
+    sp.setHorizontalPolicy(horz ? QSizePolicy::Expanding : QSizePolicy::Preferred);
+    sp.setVerticalPolicy(vert ? QSizePolicy::Expanding : QSizePolicy::Preferred);
+    w->setSizePolicy(sp);
+  }
+}
+
+static api_bool mock_GetControlUnderMouseStatus(const_control_handle h) {
+  const QWidget *w = reinterpret_cast<const QWidget *>(h);
+  return w ? w->underMouse() : false;
+}
+
+static void mock_BringControlToFront(control_handle h) {
+  QWidget *w = reinterpret_cast<QWidget *>(h);
+  if (w) w->raise();
+}
+
+static void mock_SendControlToBack(control_handle h) {
+  QWidget *w = reinterpret_cast<QWidget *>(h);
+  if (w) w->lower();
+}
+
+static void mock_StackControls(control_handle stackThis, control_handle underThis) {
+  QWidget *wStack = reinterpret_cast<QWidget *>(stackThis);
+  QWidget *wUnder = reinterpret_cast<QWidget *>(underThis);
+  if (wStack && wUnder) wStack->stackUnder(wUnder);
+}
+
+static sizer_handle mock_GetControlSizer(const_control_handle h) {
+  const QWidget *w = reinterpret_cast<const QWidget *>(h);
+  return w ? reinterpret_cast<sizer_handle>(w->layout()) : nullptr;
+}
+
+static void mock_GlobalToLocal(const_control_handle h, int32 *x, int32 *y) {
+  const QWidget *w = reinterpret_cast<const QWidget *>(h);
+  if (w && x && y) {
+    QPoint p = w->mapFromGlobal(QPoint(*x, *y));
+    *x = p.x(); *y = p.y();
+  }
+}
+
+static void mock_LocalToGlobal(const_control_handle h, int32 *x, int32 *y) {
+  const QWidget *w = reinterpret_cast<const QWidget *>(h);
+  if (w && x && y) {
+    QPoint p = w->mapToGlobal(QPoint(*x, *y));
+    *x = p.x(); *y = p.y();
+  }
+}
+
+static void mock_ParentToLocal(const_control_handle h, int32 *x, int32 *y) {
+  const QWidget *w = reinterpret_cast<const QWidget *>(h);
+  if (w && x && y) {
+    QPoint p = w->mapFromParent(QPoint(*x, *y));
+    *x = p.x(); *y = p.y();
+  }
+}
+
+static void mock_LocalToParent(const_control_handle h, int32 *x, int32 *y) {
+  const QWidget *w = reinterpret_cast<const QWidget *>(h);
+  if (w && x && y) {
+    QPoint p = w->mapToParent(QPoint(*x, *y));
+    *x = p.x(); *y = p.y();
+  }
+}
+
+static void mock_ControlToLocal(const_control_handle hSrc, const_control_handle hDst, int32 *x, int32 *y) {
+  const QWidget *wSrc = reinterpret_cast<const QWidget *>(hSrc);
+  const QWidget *wDst = reinterpret_cast<const QWidget *>(hDst);
+  if (wSrc && wDst && x && y) {
+    QPoint globalPos = wSrc->mapToGlobal(QPoint(*x, *y));
+    QPoint p = wDst->mapFromGlobal(globalPos);
+    *x = p.x(); *y = p.y();
+  }
+}
+
+static void mock_LocalToControl(const_control_handle hSrc, const_control_handle hDst, int32 *x, int32 *y) {
+  mock_ControlToLocal(hSrc, hDst, x, y);
+}
+
+static control_handle mock_GetChildByPos(const_control_handle h, int32 x, int32 y) {
+  const QWidget *w = reinterpret_cast<const QWidget *>(h);
+  return w ? reinterpret_cast<control_handle>(w->childAt(x, y)) : nullptr;
+}
+
+static void mock_GetChildrenRect(const_control_handle h, int32 *x0, int32 *y0, int32 *x1, int32 *y1) {
+  const QWidget *w = reinterpret_cast<const QWidget *>(h);
+  if (w) {
+    QRect r = w->childrenRect();
+    if (x0) *x0 = r.left(); if (y0) *y0 = r.top();
+    if (x1) *x1 = r.right(); if (y1) *y1 = r.bottom();
+  }
+}
+
+static api_bool mock_GetControlAncestry(const_control_handle hChild, const_control_handle hAncestor) {
+  const QWidget *c = reinterpret_cast<const QWidget *>(hChild);
+  const QWidget *a = reinterpret_cast<const QWidget *>(hAncestor);
+  return (c && a) ? c->isAncestorOf(a) : false;
+}
+
+static control_handle mock_GetControlParent(const_control_handle h) {
+  const QWidget *w = reinterpret_cast<const QWidget *>(h);
+  return w ? reinterpret_cast<control_handle>(w->parentWidget()) : nullptr;
+}
+
+static control_handle mock_GetControlWindow(const_control_handle h) {
+  const QWidget *w = reinterpret_cast<const QWidget *>(h);
+  return w ? reinterpret_cast<control_handle>(w->window()) : nullptr;
+}
+
+static api_bool mock_GetControlEnabled(const_control_handle h) {
+  const QWidget *w = reinterpret_cast<const QWidget *>(h);
+  return w ? w->isEnabled() : false;
+}
+
+static api_bool mock_GetControlMouseTrackingEnabled(const_control_handle h) {
+  const QWidget *w = reinterpret_cast<const QWidget *>(h);
+  return w ? w->hasMouseTracking() : false;
+}
+
+static void mock_SetControlMouseTrackingEnabled(control_handle h, api_bool enable) {
+  QWidget *w = reinterpret_cast<QWidget *>(h);
+  if (w) w->setMouseTracking(enable != 0);
+}
+
+static void mock_GetControlVisibleRect(const_control_handle h, int32 *x0, int32 *y0, int32 *x1, int32 *y1) {
+  const QWidget *w = reinterpret_cast<const QWidget *>(h);
+  if (w) {
+    QRect r = w->visibleRegion().boundingRect();
+    if (x0) *x0 = r.left(); if (y0) *y0 = r.top();
+    if (x1) *x1 = r.right(); if (y1) *y1 = r.bottom();
+  }
+}
+
+static api_bool mock_GetWindowState(const_control_handle h, api_bool *active, api_bool *modal, api_bool *maximized, api_bool *minimized) {
+  const QWidget *w = reinterpret_cast<const QWidget *>(h);
+  if (!w || !w->isWindow()) return false;
+  if (active) *active = w->isActiveWindow();
+  if (modal) *modal = w->isModal();
+  if (maximized) *maximized = w->isMaximized();
+  if (minimized) *minimized = w->isMinimized();
+  return true;
+}
+
+static void mock_ActivateWindow(control_handle h) {
+  QWidget *w = reinterpret_cast<QWidget *>(h);
+  if (w) { w->activateWindow(); w->raise(); }
+}
+
+static api_bool mock_GetControlFocus(const_control_handle h) {
+  const QWidget *w = reinterpret_cast<const QWidget *>(h);
+  return (w && g_widgetToClient.count(const_cast<control_handle>(h)) > 0) ? w->hasFocus() : false;
+}
+
+static void mock_SetControlFocus(control_handle h, api_bool focus) {
+  QWidget *w = reinterpret_cast<QWidget *>(h);
+  if (w && g_widgetToClient.count(h) > 0) { if (focus) w->setFocus(); else w->clearFocus(); }
+}
+
+static control_handle mock_GetFocusChildControl(const_control_handle h) {
+  const QWidget *w = reinterpret_cast<const QWidget *>(h);
+  return (w && g_widgetToClient.count(const_cast<control_handle>(h)) > 0) ? reinterpret_cast<control_handle>(w->focusWidget()) : nullptr;
+}
+
+static control_handle mock_GetChildControlToFocus(const_control_handle h) {
+  const QWidget *w = reinterpret_cast<const QWidget *>(h);
+  return (w && g_widgetToClient.count(const_cast<control_handle>(h)) > 0) ? reinterpret_cast<control_handle>(w->focusWidget()) : nullptr;
+}
+
+static control_handle mock_GetNextSiblingControlToFocus(const_control_handle h) {
+  const QWidget *w = reinterpret_cast<const QWidget *>(h);
+  return (w && g_widgetToClient.count(const_cast<control_handle>(h)) > 0) ? reinterpret_cast<control_handle>(w->nextInFocusChain()) : nullptr;
+}
+
+static void mock_SetNextSiblingControlToFocus(control_handle h, control_handle hNext) {
+  QWidget *w = reinterpret_cast<QWidget *>(h);
+  QWidget *wNext = reinterpret_cast<QWidget *>(hNext);
+  if (w && wNext && g_widgetToClient.count(h) > 0 && g_widgetToClient.count(hNext) > 0) QWidget::setTabOrder(w, wNext);
+}
+
+static api_bool mock_GetControlUpdatesEnabled(const_control_handle h) {
+  const QWidget *w = reinterpret_cast<const QWidget *>(h);
+  return w ? w->updatesEnabled() : true;
+}
+
+static void mock_SetControlUpdatesEnabled(control_handle h, api_bool enable) {
+  QWidget *w = reinterpret_cast<QWidget *>(h);
+  if (w) w->setUpdatesEnabled(enable != 0);
+}
+
+static void mock_UpdateControl(control_handle h) {
+  QWidget *w = reinterpret_cast<QWidget *>(h);
+  if (w) w->update();
+}
+
+static void mock_UpdateControlRect(control_handle h, int32 x, int32 y, int32 w_sz, int32 h_sz) {
+  QWidget *w = reinterpret_cast<QWidget *>(h);
+  if (w) w->update(x, y, w_sz, h_sz);
+}
+
+static void mock_RepaintControl(control_handle h) {
+  QWidget *w = reinterpret_cast<QWidget *>(h);
+  if (w) w->repaint();
+}
+
+static void mock_RepaintControlRect(control_handle h, int32 x, int32 y, int32 w_sz, int32 h_sz) {
+  QWidget *w = reinterpret_cast<QWidget *>(h);
+  if (w) w->repaint(x, y, w_sz, h_sz);
+}
+
+static void mock_RestyleControl(control_handle h) {
+  QWidget *w = reinterpret_cast<QWidget *>(h);
+  if (w) {
+    w->style()->unpolish(w);
+    w->style()->polish(w);
+    w->update();
+  }
+}
+
+static void mock_ScrollControl(control_handle h, int32 dx, int32 dy) {
+  QWidget *w = reinterpret_cast<QWidget *>(h);
+  if (w) w->scroll(dx, dy);
+}
+
+static void mock_ScrollControlRect(control_handle h, int32 dx, int32 dy, int32 x, int32 y, int32 w_sz, int32 h_sz) {
+  QWidget *w = reinterpret_cast<QWidget *>(h);
+  if (w) w->scroll(dx, dy, QRect(x, y, w_sz, h_sz));
+}
+
+static cursor_handle mock_GetControlCursor(const_control_handle h) {
+  const QWidget *w = reinterpret_cast<const QWidget *>(h);
+  return w ? reinterpret_cast<cursor_handle>(new QCursor(w->cursor())) : nullptr;
+}
+
+static void mock_SetControlCursor(control_handle h, const_cursor_handle c) {
+  QWidget *w = reinterpret_cast<QWidget *>(h);
+  const QCursor *cursor = reinterpret_cast<const QCursor *>(c);
+  if (w && cursor) w->setCursor(*cursor);
+}
+
+static void mock_SetControlCursorToParent(control_handle h) {
+  QWidget *w = reinterpret_cast<QWidget *>(h);
+  if (w) w->unsetCursor();
+}
+
+static api_bool mock_GetControlStyleSheet(const_control_handle h, char16_type *sheet, size_type *len) {
+  const QWidget *w = reinterpret_cast<const QWidget *>(h);
+  return copyStringToChar16(w ? w->styleSheet() : QString(), sheet, len);
+}
+
+static void mock_SetControlStyleSheet(control_handle h, const char16_type *sheet) {
+  QWidget *w = reinterpret_cast<QWidget *>(h);
+  if (w) w->setStyleSheet(sheet ? QString::fromUtf16(reinterpret_cast<const char16_t *>(sheet)) : QString());
+}
+
+static uint32 mock_GetControlBackgroundColor(const_control_handle h) {
+  const QWidget *w = reinterpret_cast<const QWidget *>(h);
+  return w ? w->palette().color(QPalette::Window).rgba() : 0xff000000;
+}
+
+static uint32 mock_GetControlForegroundColor(const_control_handle h) {
+  const QWidget *w = reinterpret_cast<const QWidget *>(h);
+  return w ? w->palette().color(QPalette::WindowText).rgba() : 0xff000000;
+}
+
+static void mock_SetControlForegroundColor(control_handle h, uint32 color) {
+  QWidget *w = reinterpret_cast<QWidget *>(h);
+  if (w) {
+    QPalette pal = w->palette();
+    pal.setColor(QPalette::WindowText, QColor::fromRgba(color));
+    w->setPalette(pal);
+  }
+}
+
+static uint32 mock_GetControlCanvasColor(const_control_handle h) {
+  const QWidget *w = reinterpret_cast<const QWidget *>(h);
+  return w ? w->palette().color(QPalette::Base).rgba() : 0xffffffff;
+}
+
+static void mock_SetControlCanvasColor(control_handle h, uint32 color) {
+  QWidget *w = reinterpret_cast<QWidget *>(h);
+  if (w) {
+    QPalette pal = w->palette();
+    pal.setColor(QPalette::Base, QColor::fromRgba(color));
+    w->setPalette(pal);
+  }
+}
+
+static uint32 mock_GetControlAlternateCanvasColor(const_control_handle h) {
+  const QWidget *w = reinterpret_cast<const QWidget *>(h);
+  return w ? w->palette().color(QPalette::AlternateBase).rgba() : 0xfff0f0f0;
+}
+
+static void mock_SetControlAlternateCanvasColor(control_handle h, uint32 color) {
+  QWidget *w = reinterpret_cast<QWidget *>(h);
+  if (w) {
+    QPalette pal = w->palette();
+    pal.setColor(QPalette::AlternateBase, QColor::fromRgba(color));
+    w->setPalette(pal);
+  }
+}
+
+static uint32 mock_GetControlButtonColor(const_control_handle h) {
+  const QWidget *w = reinterpret_cast<const QWidget *>(h);
+  return w ? w->palette().color(QPalette::Button).rgba() : 0xffe0e0e0;
+}
+
+static void mock_SetControlButtonColor(control_handle h, uint32 color) {
+  QWidget *w = reinterpret_cast<QWidget *>(h);
+  if (w) {
+    QPalette pal = w->palette();
+    pal.setColor(QPalette::Button, QColor::fromRgba(color));
+    w->setPalette(pal);
+  }
+}
+
+static uint32 mock_GetControlButtonTextColor(const_control_handle h) {
+  const QWidget *w = reinterpret_cast<const QWidget *>(h);
+  return w ? w->palette().color(QPalette::ButtonText).rgba() : 0xff000000;
+}
+
+static void mock_SetControlButtonTextColor(control_handle h, uint32 color) {
+  QWidget *w = reinterpret_cast<QWidget *>(h);
+  if (w) {
+    QPalette pal = w->palette();
+    pal.setColor(QPalette::ButtonText, QColor::fromRgba(color));
+    w->setPalette(pal);
+  }
+}
+
+static uint32 mock_GetControlHighlightColor(const_control_handle h) {
+  const QWidget *w = reinterpret_cast<const QWidget *>(h);
+  return w ? w->palette().color(QPalette::Highlight).rgba() : 0xff0000ff;
+}
+
+static void mock_SetControlHighlightColor(control_handle h, uint32 color) {
+  QWidget *w = reinterpret_cast<QWidget *>(h);
+  if (w) {
+    QPalette pal = w->palette();
+    pal.setColor(QPalette::Highlight, QColor::fromRgba(color));
+    w->setPalette(pal);
+  }
+}
+
+static uint32 mock_GetControlHighlightedTextColor(const_control_handle h) {
+  const QWidget *w = reinterpret_cast<const QWidget *>(h);
+  return w ? w->palette().color(QPalette::HighlightedText).rgba() : 0xffffffff;
+}
+
+static void mock_SetControlHighlightedTextColor(control_handle h, uint32 color) {
+  QWidget *w = reinterpret_cast<QWidget *>(h);
+  if (w) {
+    QPalette pal = w->palette();
+    pal.setColor(QPalette::HighlightedText, QColor::fromRgba(color));
+    w->setPalette(pal);
+  }
+}
+
+static void mock_GetWindowOpacity(const_control_handle h, double *op) {
+  const QWidget *w = reinterpret_cast<const QWidget *>(h);
+  if (op) *op = w ? w->windowOpacity() : 1.0;
+}
+
+static void mock_SetWindowOpacity(control_handle h, double op) {
+  QWidget *w = reinterpret_cast<QWidget *>(h);
+  if (w) w->setWindowOpacity(op);
+}
+
+static api_bool mock_GetInfoText(const_control_handle h, char16_type *text, size_type *len) {
+  const QWidget *w = reinterpret_cast<const QWidget *>(h);
+  return copyStringToChar16(w ? w->statusTip() : QString(), text, len);
+}
+
+static void mock_SetInfoText(control_handle h, const char16_type *text) {
+  QWidget *w = reinterpret_cast<QWidget *>(h);
+  if (w) w->setStatusTip(text ? QString::fromUtf16(reinterpret_cast<const char16_t *>(text)) : QString());
+}
+
+static api_bool mock_GetRealTimePreviewActive(const_control_handle h) {
+  return false;
+}
+
+static void mock_SetRealTimePreviewActive(control_handle h, api_bool active) {}
+
+static api_bool mock_GetTrackViewActive(const_control_handle h) {
+  return false;
+}
+
+static void mock_SetTrackViewActive(control_handle h, api_bool active) {}
+
+static api_bool mock_GetWindowToolTip(const_control_handle h, char16_type *text, size_type *len) {
+  const QWidget *w = reinterpret_cast<const QWidget *>(h);
+  return copyStringToChar16(w ? w->toolTip() : QString(), text, len);
+}
+
+static api_bool mock_GetControlDevicePixelRatio(const_control_handle h, double *ratio) {
+  const QWidget *w = reinterpret_cast<const QWidget *>(h);
+  if (ratio) *ratio = w ? w->devicePixelRatio() : 1.0;
+  return true;
+}
+
+// Class A Containers (Sizer, Dialog, Frame, GroupBox, TabBox)
+static control_handle mock_GetSizerParentControl(const_sizer_handle h) {
+  const QLayout *lay = reinterpret_cast<const QLayout *>(h);
+  return lay ? reinterpret_cast<control_handle>(lay->parentWidget()) : nullptr;
+}
+
+static api_bool mock_GetSizerOrientation(const_sizer_handle h) {
+  const QBoxLayout *lay = reinterpret_cast<const QBoxLayout *>(h);
+  return lay ? (lay->direction() == QBoxLayout::TopToBottom || lay->direction() == QBoxLayout::BottomToTop) : true;
+}
+
+static int32 mock_GetSizerCount(const_sizer_handle h) {
+  const QLayout *lay = reinterpret_cast<const QLayout *>(h);
+  return lay ? lay->count() : 0;
+}
+
+static int32 mock_GetSizerIndex(const_sizer_handle h, const_sizer_handle hChild) {
+  const QLayout *lay = reinterpret_cast<const QLayout *>(h);
+  const QLayout *child = reinterpret_cast<const QLayout *>(hChild);
+  if (!lay || !child) return -1;
+  for (int i = 0; i < lay->count(); ++i) {
+    if (lay->itemAt(i)->layout() == child) return i;
+  }
+  return -1;
+}
+
+static int32 mock_GetSizerControlIndex(const_sizer_handle h, const_control_handle hCtrl) {
+  const QLayout *lay = reinterpret_cast<const QLayout *>(h);
+  const QWidget *w = reinterpret_cast<const QWidget *>(hCtrl);
+  if (!lay || !w) return -1;
+  for (int i = 0; i < lay->count(); ++i) {
+    if (lay->itemAt(i)->widget() == w) return i;
+  }
+  return -1;
+}
+
+static void mock_RemoveSizer(sizer_handle h, sizer_handle childSizer) {
+  QLayout *lay = reinterpret_cast<QLayout *>(h);
+  QLayout *child = reinterpret_cast<QLayout *>(childSizer);
+  if (lay && child) lay->removeItem(child);
+}
+
+static void mock_RemoveSizerControl(sizer_handle h, control_handle c) {
+  QLayout *lay = reinterpret_cast<QLayout *>(h);
+  QWidget *w = reinterpret_cast<QWidget *>(c);
+  if (lay && w) lay->removeWidget(w);
+}
+
+static int32 mock_GetSizerMargin(const_sizer_handle h) {
+  const QLayout *lay = reinterpret_cast<const QLayout *>(h);
+  return lay ? lay->contentsMargins().left() : 0;
+}
+
+static int32 mock_GetSizerSpacing(const_sizer_handle h) {
+  const QLayout *lay = reinterpret_cast<const QLayout *>(h);
+  return lay ? lay->spacing() : 0;
+}
+
+static api_bool mock_GetSizerResourcePixelRatio(const_sizer_handle h, double *ratio) {
+  if (ratio) *ratio = 1.0;
+  return true;
+}
+
+static api_bool mock_GetSizerDevicePixelRatio(const_sizer_handle h, double *ratio) {
+  if (ratio) *ratio = 1.0;
+  return true;
+}
+
+static void mock_OpenDialog(control_handle h) {
+  QDialog *dlg = reinterpret_cast<QDialog *>(h);
+  if (dlg) dlg->show();
+}
+
+static api_bool mock_GetDialogResizable(const_control_handle h) {
+  const QWidget *w = reinterpret_cast<const QWidget *>(h);
+  return w ? (w->maximumSize() != w->minimumSize()) : true;
+}
+
+static void mock_SetDialogResizable(control_handle h, api_bool resizable) {
+  QWidget *w = reinterpret_cast<QWidget *>(h);
+  if (w && !resizable) {
+    w->setFixedSize(w->size());
+  }
+}
+
+static control_handle mock_CreateFrame(api_handle hModule, api_handle client, control_handle parent, uint32 flags) {
+  QWidget *parentW = reinterpret_cast<QWidget *>(parent);
+  QFrame *frame = new QFrame(parentW);
+  control_handle ch = reinterpret_cast<control_handle>(frame);
+  if (client) g_widgetToClient[ch] = client;
+  return ch;
+}
+
+static int32 mock_GetFrameStyle(const_control_handle h) {
+  const QFrame *f = reinterpret_cast<const QFrame *>(h);
+  return f ? f->frameStyle() : 0;
+}
+
+static void mock_SetFrameStyle(control_handle h, int32 style) {
+  QFrame *f = reinterpret_cast<QFrame *>(h);
+  if (f) f->setFrameStyle(style);
+}
+
+static int32 mock_GetFrameLineWidth(const_control_handle h) {
+  const QFrame *f = reinterpret_cast<const QFrame *>(h);
+  return f ? f->lineWidth() : 1;
+}
+
+static void mock_SetFrameLineWidth(control_handle h, int32 w) {
+  QFrame *f = reinterpret_cast<QFrame *>(h);
+  if (f) f->setLineWidth(w);
+}
+
+static int32 mock_GetFrameBorderWidth(const_control_handle h) {
+  const QFrame *f = reinterpret_cast<const QFrame *>(h);
+  return f ? f->frameWidth() : 1;
+}
+
+static api_bool mock_GetGroupBoxTitle(const_control_handle h, char16_type *title, size_type *len) {
+  const QGroupBox *gb = reinterpret_cast<const QGroupBox *>(h);
+  return copyStringToChar16(gb ? gb->title() : QString(), title, len);
+}
+
+static void mock_SetGroupBoxTitle(control_handle h, const char16_type *title) {
+  QGroupBox *gb = reinterpret_cast<QGroupBox *>(h);
+  if (gb) gb->setTitle(title ? QString::fromUtf16(reinterpret_cast<const char16_t *>(title)) : QString());
+}
+
+static api_bool mock_GetGroupBoxCheckable(const_control_handle h) {
+  const QGroupBox *gb = reinterpret_cast<const QGroupBox *>(h);
+  return gb ? gb->isCheckable() : false;
+}
+
+static void mock_SetGroupBoxCheckable(control_handle h, api_bool checkable) {
+  QGroupBox *gb = reinterpret_cast<QGroupBox *>(h);
+  if (gb) gb->setCheckable(checkable != 0);
+}
+
+static api_bool mock_GetGroupBoxChecked(const_control_handle h) {
+  const QGroupBox *gb = reinterpret_cast<const QGroupBox *>(h);
+  return gb ? gb->isChecked() : false;
+}
+
+static void mock_SetGroupBoxChecked(control_handle h, api_bool checked) {
+  QGroupBox *gb = reinterpret_cast<QGroupBox *>(h);
+  if (gb) gb->setChecked(checked != 0);
+}
+
+static control_handle mock_CreateTabBox(api_handle hModule, api_handle client, control_handle parent, uint32 flags) {
+  QWidget *p = reinterpret_cast<QWidget *>(parent);
+  QTabWidget *tabs = new QTabWidget(p);
+  control_handle ch = reinterpret_cast<control_handle>(tabs);
+  if (client) g_widgetToClient[ch] = client;
+  return ch;
+}
+
+static int32 mock_GetTabBoxLength(const_control_handle h) {
+  const QTabWidget *tabs = reinterpret_cast<const QTabWidget *>(h);
+  return tabs ? tabs->count() : 0;
+}
+
+static int32 mock_GetTabBoxCurrentPageIndex(const_control_handle h) {
+  const QTabWidget *tabs = reinterpret_cast<const QTabWidget *>(h);
+  return tabs ? tabs->currentIndex() : 0;
+}
+
+static void mock_SetTabBoxCurrentPageIndex(control_handle h, int32 idx) {
+  QTabWidget *tabs = reinterpret_cast<QTabWidget *>(h);
+  if (tabs) tabs->setCurrentIndex(idx);
+}
+
+static control_handle mock_GetTabBoxPageByIndex(const_control_handle h, int32 idx) {
+  const QTabWidget *tabs = reinterpret_cast<const QTabWidget *>(h);
+  return tabs ? reinterpret_cast<control_handle>(tabs->widget(idx)) : nullptr;
+}
+
+static void mock_InsertTabBoxPage(control_handle h, int32 idx, control_handle pageCtrl, const char16_type *label, const_bitmap_handle icon) {
+  QTabWidget *tabs = reinterpret_cast<QTabWidget *>(h);
+  QWidget *w = reinterpret_cast<QWidget *>(pageCtrl);
+  QString str = label ? QString::fromUtf16(reinterpret_cast<const char16_t *>(label)) : QString();
+  if (tabs && w) {
+    if (idx < 0) tabs->addTab(w, str);
+    else tabs->insertTab(idx, w, str);
+  }
+}
+
+static void mock_RemoveTabBoxPage(control_handle h, int32 idx) {
+  QTabWidget *tabs = reinterpret_cast<QTabWidget *>(h);
+  if (tabs) tabs->removeTab(idx);
+}
+
+static int32 mock_GetTabBoxPosition(const_control_handle h) {
+  const QTabWidget *tabs = reinterpret_cast<const QTabWidget *>(h);
+  return (tabs && tabs->tabPosition() == QTabWidget::South) ? 1 : 0;
+}
+
+static void mock_SetTabBoxPosition(control_handle h, int32 pos) {
+  QTabWidget *tabs = reinterpret_cast<QTabWidget *>(h);
+  if (tabs) tabs->setTabPosition(pos == 1 ? QTabWidget::South : QTabWidget::North);
+}
+
+static api_bool mock_GetTabBoxPageEnabled(const_control_handle h, int32 idx) {
+  const QTabWidget *tabs = reinterpret_cast<const QTabWidget *>(h);
+  return tabs ? tabs->isTabEnabled(idx) : false;
+}
+
+static void mock_SetTabBoxPageEnabled(control_handle h, int32 idx, api_bool enable) {
+  QTabWidget *tabs = reinterpret_cast<QTabWidget *>(h);
+  if (tabs) tabs->setTabEnabled(idx, enable != 0);
+}
+
+static api_bool mock_GetTabBoxPageLabel(const_control_handle h, int32 idx, char16_type *label, size_type *len) {
+  const QTabWidget *tabs = reinterpret_cast<const QTabWidget *>(h);
+  return copyStringToChar16(tabs ? tabs->tabText(idx) : QString(), label, len);
+}
+
+static void mock_SetTabBoxPageLabel(control_handle h, int32 idx, const char16_type *label) {
+  QTabWidget *tabs = reinterpret_cast<QTabWidget *>(h);
+  if (tabs) tabs->setTabText(idx, label ? QString::fromUtf16(reinterpret_cast<const char16_t *>(label)) : QString());
+}
+
+// Class B Interactive Widgets
+static control_handle mock_CreateRadioButton(api_handle hModule, api_handle client, const char16_type *text, control_handle parent, uint32 flags) {
+  QWidget *p = reinterpret_cast<QWidget *>(parent);
+  QString str = text ? QString::fromUtf16(reinterpret_cast<const char16_t *>(text)) : QString();
+  QRadioButton *rb = new QRadioButton(str, p);
+  control_handle ch = reinterpret_cast<control_handle>(rb);
+  if (client) g_widgetToClient[ch] = client;
+  return ch;
+}
+
+static api_bool mock_GetButtonText(const_control_handle h, char16_type *text, size_type *len) {
+  const QAbstractButton *btn = reinterpret_cast<const QAbstractButton *>(h);
+  return copyStringToChar16(btn ? btn->text() : QString(), text, len);
+}
+
+static api_bool mock_GetButtonPushed(const_control_handle h) {
+  const QAbstractButton *btn = reinterpret_cast<const QAbstractButton *>(h);
+  return btn ? btn->isDown() : false;
+}
+
+static void mock_SetButtonPushed(control_handle h, api_bool pushed) {
+  QAbstractButton *btn = reinterpret_cast<QAbstractButton *>(h);
+  if (btn) btn->setDown(pushed != 0);
+}
+
+static api_bool mock_GetButtonDefaultEnabled(const_control_handle h) {
+  const QPushButton *btn = reinterpret_cast<const QPushButton *>(h);
+  return btn ? btn->isDefault() : false;
+}
+
+static control_handle mock_CreateTextBox(api_handle hModule, api_handle client, const char16_type *text, control_handle parent, uint32 flags) {
+  QWidget *p = reinterpret_cast<QWidget *>(parent);
+  QString str = text ? QString::fromUtf16(reinterpret_cast<const char16_t *>(text)) : QString();
+  QTextEdit *tb = new QTextEdit(str, p);
+  control_handle ch = reinterpret_cast<control_handle>(tb);
+  if (client) g_widgetToClient[ch] = client;
+  return ch;
+}
+
+static api_bool mock_GetTextBoxText(const_control_handle h, char16_type *text, size_type *len) {
+  const QTextEdit *tb = reinterpret_cast<const QTextEdit *>(h);
+  return copyStringToChar16(tb ? tb->toPlainText() : QString(), text, len);
+}
+
+static void mock_SetTextBoxText(control_handle h, const char16_type *text) {
+  QTextEdit *tb = reinterpret_cast<QTextEdit *>(h);
+  if (tb) tb->setPlainText(text ? QString::fromUtf16(reinterpret_cast<const char16_t *>(text)) : QString());
+}
+
+static void mock_RemoveComboBoxItem(control_handle h, int32 idx) {
+  QComboBox *cb = reinterpret_cast<QComboBox *>(h);
+  if (cb) cb->removeItem(idx);
+}
+
+static control_handle mock_CreateBitmapBox(api_handle hModule, api_handle client, const_bitmap_handle bitmap, control_handle parent, uint32 flags) {
+  QWidget *p = reinterpret_cast<QWidget *>(parent);
+  QLabel *lbl = new QLabel(p);
+  control_handle ch = reinterpret_cast<control_handle>(lbl);
+  if (client) g_widgetToClient[ch] = client;
+  return ch;
+}
+
+static control_handle mock_CreateTreeBox(api_handle hModule, api_handle client, control_handle parent, uint32 flags) {
+  QWidget *p = reinterpret_cast<QWidget *>(parent);
+  QTreeWidget *tree = new QTreeWidget(p);
+  control_handle ch = reinterpret_cast<control_handle>(tree);
+  if (client) g_widgetToClient[ch] = client;
+  return ch;
+}
+
+static int32 mock_GetTreeBoxChildCount(const_control_handle h) {
+  const QTreeWidget *tree = reinterpret_cast<const QTreeWidget *>(h);
+  return tree ? tree->topLevelItemCount() : 0;
+}
+
+static void mock_ClearTreeBox(control_handle h) {
+  QTreeWidget *tree = reinterpret_cast<QTreeWidget *>(h);
+  if (tree) tree->clear();
+}
+
+static control_handle mock_CreateScrollBox(api_handle hModule, api_handle client, control_handle parent, uint32 flags) {
+  QWidget *p = reinterpret_cast<QWidget *>(parent);
+  QScrollArea *sa = new QScrollArea(p);
+  control_handle ch = reinterpret_cast<control_handle>(sa);
+  if (client) g_widgetToClient[ch] = client;
+  return ch;
+}
+
 static api_bool mock_GetSliderTrackingEnabled(const_control_handle h) {
   const QSlider *sl = reinterpret_cast<const QSlider *>(h);
   return sl ? sl->hasTracking() : true;
@@ -2446,20 +3530,253 @@ static api_bool mock_GetControlDisplayPixelRatio(const_control_handle h,
   return true;
 }
 
+static font_handle mock_CreateFontByFamily(api_handle hModule, int32 family,
+                                          double ptSize) {
+  QFont *qf = new QFont();
+  if (ptSize > 0) {
+    qf->setPointSizeF(ptSize);
+  }
+  qDebug() << "[PCL Bridge] CreateFontByFamily: family =" << family
+           << "ptSize =" << ptSize << "->" << qf;
+  return reinterpret_cast<font_handle>(qf);
+}
+
+static font_handle mock_CreateFontByFace(api_handle hModule,
+                                        const char16_type *face, double ptSize) {
+  QString faceStr =
+      face ? QString::fromUtf16(reinterpret_cast<const char16_t *>(face))
+           : QString();
+  QFont *qf = new QFont(faceStr);
+  if (ptSize > 0) {
+    qf->setPointSizeF(ptSize);
+  }
+  qDebug() << "[PCL Bridge] CreateFontByFace: face =" << faceStr
+           << "ptSize =" << ptSize << "->" << qf;
+  return reinterpret_cast<font_handle>(qf);
+}
+
+static font_handle mock_CloneFont(api_handle hModule, const_font_handle f) {
+  const QFont *src = reinterpret_cast<const QFont *>(f);
+  QFont *qf = new QFont(src ? *src : QApplication::font());
+  qDebug() << "[PCL Bridge] CloneFont: src =" << src << "->" << qf;
+  return reinterpret_cast<font_handle>(qf);
+}
+
+static api_bool mock_GetFontFace(const_font_handle f, char16_type *face,
+                                size_type *length) {
+  const QFont *qf = reinterpret_cast<const QFont *>(f);
+  QString faceStr = qf ? qf->family() : QApplication::font().family();
+  if (!length)
+    return false;
+  std::u16string str16 = faceStr.toStdU16String();
+  if (!face) {
+    *length = str16.length();
+    return true;
+  }
+  size_type copyLen =
+      std::min(*length, static_cast<size_type>(str16.length()));
+  std::memcpy(face, str16.c_str(), copyLen * sizeof(char16_type));
+  face[copyLen] = 0;
+  *length = copyLen;
+  return true;
+}
+
+static void mock_SetFontFace(font_handle f, const char16_type *face) {
+  QFont *qf = reinterpret_cast<QFont *>(f);
+  QString str =
+      face ? QString::fromUtf16(reinterpret_cast<const char16_t *>(face))
+           : QString();
+  qDebug() << "[PCL Bridge] SetFontFace: font =" << qf << "face =" << str;
+  if (qf) {
+    qf->setFamily(str);
+  }
+}
+
+static int32 mock_GetFontPixelSize(const_font_handle f) {
+  const QFont *qf = reinterpret_cast<const QFont *>(f);
+  int32 sz = qf ? qf->pixelSize() : -1;
+  qDebug() << "[PCL Bridge] GetFontPixelSize: font =" << qf << "->" << sz;
+  return sz;
+}
+
+static void mock_SetFontPixelSize(font_handle f, int32 size) {
+  QFont *qf = reinterpret_cast<QFont *>(f);
+  qDebug() << "[PCL Bridge] SetFontPixelSize: font =" << qf
+           << "size =" << size;
+  if (qf && size > 0) {
+    qf->setPixelSize(size);
+  }
+}
+
+static void mock_GetFontPointSize(const_font_handle f, double *size) {
+  const QFont *qf = reinterpret_cast<const QFont *>(f);
+  double sz = qf ? qf->pointSizeF() : 10.0;
+  qDebug() << "[PCL Bridge] GetFontPointSize: font =" << qf << "->" << sz;
+  if (size) {
+    *size = sz;
+  }
+}
+
+static void mock_SetFontPointSize(font_handle f, double size) {
+  QFont *qf = reinterpret_cast<QFont *>(f);
+  qDebug() << "[PCL Bridge] SetFontPointSize: font =" << qf
+           << "size =" << size;
+  if (qf && size > 0) {
+    qf->setPointSizeF(size);
+  }
+}
+
+static int32 mock_GetFontWeight(const_font_handle f) {
+  const QFont *qf = reinterpret_cast<const QFont *>(f);
+  int32 weight = qf ? static_cast<int32>(qf->weight()) : 50;
+  qDebug() << "[PCL Bridge] GetFontWeight: font =" << qf << "->" << weight;
+  return weight;
+}
+
+static void mock_SetFontWeight(font_handle f, int32 weight) {
+  QFont *qf = reinterpret_cast<QFont *>(f);
+  qDebug() << "[PCL Bridge] SetFontWeight: font =" << qf
+           << "weight =" << weight;
+  if (qf) {
+    qf->setWeight(static_cast<QFont::Weight>(qBound(1, weight, 1000)));
+  }
+}
+
+static api_bool mock_GetFontItalic(const_font_handle f) {
+  const QFont *qf = reinterpret_cast<const QFont *>(f);
+  bool it = qf ? qf->italic() : false;
+  qDebug() << "[PCL Bridge] GetFontItalic: font =" << qf << "->" << it;
+  return it;
+}
+
+static void mock_SetFontItalic(font_handle f, api_bool italic) {
+  QFont *qf = reinterpret_cast<QFont *>(f);
+  qDebug() << "[PCL Bridge] SetFontItalic: font =" << qf
+           << "italic =" << (bool)italic;
+  if (qf) {
+    qf->setItalic(italic != 0);
+  }
+}
+
+static api_bool mock_GetFontUnderline(const_font_handle f) {
+  const QFont *qf = reinterpret_cast<const QFont *>(f);
+  bool u = qf ? qf->underline() : false;
+  qDebug() << "[PCL Bridge] GetFontUnderline: font =" << qf << "->" << u;
+  return u;
+}
+
+static void mock_SetFontUnderline(font_handle f, api_bool underline) {
+  QFont *qf = reinterpret_cast<QFont *>(f);
+  qDebug() << "[PCL Bridge] SetFontUnderline: font =" << qf
+           << "underline =" << (bool)underline;
+  if (qf) {
+    qf->setUnderline(underline != 0);
+  }
+}
+
+static api_bool mock_GetFontStrikeOut(const_font_handle f) {
+  const QFont *qf = reinterpret_cast<const QFont *>(f);
+  bool s = qf ? qf->strikeOut() : false;
+  qDebug() << "[PCL Bridge] GetFontStrikeOut: font =" << qf << "->" << s;
+  return s;
+}
+
+static void mock_SetFontStrikeOut(font_handle f, api_bool strikeOut) {
+  QFont *qf = reinterpret_cast<QFont *>(f);
+  qDebug() << "[PCL Bridge] SetFontStrikeOut: font =" << qf
+           << "strikeOut =" << (bool)strikeOut;
+  if (qf) {
+    qf->setStrikeOut(strikeOut != 0);
+  }
+}
+
+static int32 mock_GetFontAscent(const_font_handle f) {
+  const QFont *qf = reinterpret_cast<const QFont *>(f);
+  QFont font = qf ? *qf : QApplication::font();
+  QFontMetrics fm(font);
+  int32 a = fm.ascent();
+  qDebug() << "[PCL Bridge] GetFontAscent: font =" << qf << "->" << a;
+  return a;
+}
+
+static int32 mock_GetFontDescent(const_font_handle f) {
+  const QFont *qf = reinterpret_cast<const QFont *>(f);
+  QFont font = qf ? *qf : QApplication::font();
+  QFontMetrics fm(font);
+  int32 d = fm.descent();
+  qDebug() << "[PCL Bridge] GetFontDescent: font =" << qf << "->" << d;
+  return d;
+}
+
+static int32 mock_GetFontHeight(const_font_handle f) {
+  const QFont *qf = reinterpret_cast<const QFont *>(f);
+  QFont font = qf ? *qf : QApplication::font();
+  QFontMetrics fm(font);
+  int32 h = fm.height();
+  qDebug() << "[PCL Bridge] GetFontHeight: font =" << qf << "->" << h;
+  return h;
+}
+
+static int32 mock_GetFontLineSpacing(const_font_handle f) {
+  const QFont *qf = reinterpret_cast<const QFont *>(f);
+  QFont font = qf ? *qf : QApplication::font();
+  QFontMetrics fm(font);
+  int32 ls = fm.lineSpacing();
+  qDebug() << "[PCL Bridge] GetFontLineSpacing: font =" << qf << "->" << ls;
+  return ls;
+}
+
 static font_handle mock_GetControlFont(const_control_handle h) {
-  qDebug() << "[PCL Bridge] GetControlFont:" << h;
-  return reinterpret_cast<font_handle>(1);
+  const QWidget *w = reinterpret_cast<const QWidget *>(h);
+  QFont font = w ? w->font() : QApplication::font();
+  QFont *qf = new QFont(font);
+  qDebug() << "[PCL Bridge] GetControlFont: widget =" << w << "->" << qf;
+  return reinterpret_cast<font_handle>(qf);
+}
+
+static void mock_SetControlFont(control_handle h, const_font_handle f) {
+  QWidget *w = reinterpret_cast<QWidget *>(h);
+  const QFont *qf = reinterpret_cast<const QFont *>(f);
+  qDebug() << "[PCL Bridge] SetControlFont: widget =" << w << "font =" << qf;
+  if (w && qf) {
+    w->setFont(*qf);
+  }
+}
+
+static uint32 mock_GetControlTextColor(const_control_handle h) {
+  const QWidget *w = reinterpret_cast<const QWidget *>(h);
+  uint32 col =
+      w ? w->palette().color(QPalette::WindowText).rgba() : 0xff000000;
+  qDebug() << "[PCL Bridge] GetControlTextColor:" << w << "->"
+           << QString::number(col, 16);
+  return col;
+}
+
+static void mock_SetControlTextColor(control_handle h, uint32 color) {
+  QWidget *w = reinterpret_cast<QWidget *>(h);
+  qDebug() << "[PCL Bridge] SetControlTextColor:" << w
+           << "color =" << QString::number(color, 16);
+  if (w) {
+    QPalette pal = w->palette();
+    QColor c = QColor::fromRgba(color);
+    pal.setColor(QPalette::WindowText, c);
+    pal.setColor(QPalette::ButtonText, c);
+    pal.setColor(QPalette::Text, c);
+    w->setPalette(pal);
+  }
 }
 
 static int32 mock_GetStringPixelWidth(const_font_handle f,
                                       const char16_type *text) {
+  const QFont *qf = reinterpret_cast<const QFont *>(f);
+  QFont font = qf ? *qf : QApplication::font();
+  QFontMetrics fm(font);
   QString str =
       text ? QString::fromUtf16(reinterpret_cast<const char16_t *>(text))
            : QString();
-  QFont font = QApplication::font();
-  QFontMetrics fm(font);
   int32 w = fm.horizontalAdvance(str);
-  qDebug() << "[PCL Bridge] GetStringPixelWidth: text =" << str << "->" << w;
+  qDebug() << "[PCL Bridge] GetStringPixelWidth: font =" << qf
+           << "text =" << str << "->" << w;
   return w;
 }
 
@@ -2474,9 +3791,21 @@ static void mock_SetButtonChecked(control_handle h, uint32 checked) {
   QAbstractButton *btn = reinterpret_cast<QAbstractButton *>(h);
   qDebug() << "[PCL Bridge] SetButtonChecked:" << btn << "checked =" << checked;
   if (btn) {
-    btn->blockSignals(true);
+    bool stateChangedInQt = (btn->isChecked() != (checked != 0));
     btn->setChecked(checked != 0);
-    btn->blockSignals(false);
+    if (!stateChangedInQt) {
+      QCheckBox *check = qobject_cast<QCheckBox *>(btn);
+      if (check) {
+        void *r = check->property("checkRoutine").value<void *>();
+        void *rec = check->property("checkReceiver").value<void *>();
+        void *snd = check->property("pclSender").value<void *>();
+        if (r && snd) {
+          auto callback = reinterpret_cast<pcl::button_check_event_routine>(r);
+          callback(reinterpret_cast<control_handle>(snd),
+                   reinterpret_cast<control_handle>(rec), checked ? 1 : 0);
+        }
+      }
+    }
   }
 }
 
@@ -2502,7 +3831,7 @@ static void mock_SetWindowToolTip(control_handle h, const char16_type *text) {
   QWidget *w = reinterpret_cast<QWidget *>(h);
   QString str =
       text ? QString::fromUtf16(reinterpret_cast<const char16_t *>(text))
-           : QString();
+            : QString();
   qDebug() << "[PCL Bridge] SetWindowToolTip:" << w << "text =" << str;
   if (w) {
     w->setToolTip(str);
@@ -2510,13 +3839,16 @@ static void mock_SetWindowToolTip(control_handle h, const char16_type *text) {
 }
 
 static void mock_GetControlPosition(const_control_handle h, int32 *x,
-                                    int32 *y) {
+                                     int32 *y) {
   const QWidget *w = reinterpret_cast<const QWidget *>(h);
-  if (w) {
+  if (w && g_widgetToClient.count(const_cast<control_handle>(h)) > 0) {
     if (x)
       *x = w->x();
     if (y)
       *y = w->y();
+  } else {
+    if (x) *x = 0;
+    if (y) *y = 0;
   }
   qDebug() << "[PCL Bridge] GetControlPosition:" << w << "->" << (x ? *x : 0)
            << "," << (y ? *y : 0);
@@ -2537,22 +3869,57 @@ static void mock_SetControlFocusStyle(control_handle h, int32 style) {
 }
 
 static int32 mock_GetCharPixelWidth(const_font_handle f, int32 charCode) {
-  QString str = QString(QChar(static_cast<char32_t>(charCode)));
-  QFont font = QApplication::font();
+  const QFont *qf = reinterpret_cast<const QFont *>(f);
+  QFont font = qf ? *qf : QApplication::font();
   QFontMetrics fm(font);
+  QString str = QString(QChar(static_cast<char32_t>(charCode)));
   int32 w = fm.horizontalAdvance(str);
-  qDebug() << "[PCL Bridge] GetCharPixelWidth: charCode =" << charCode << "->" << w;
+  qDebug() << "[PCL Bridge] GetCharPixelWidth: font =" << qf
+           << "charCode =" << charCode << "->" << w;
   return w;
 }
 
+static void mock_SetSizerAlignment(sizer_handle s, sizer_handle childSizer,
+                                    int32 alignment) {
+  QBoxLayout *lay = reinterpret_cast<QBoxLayout *>(s);
+  QLayout *childLay = reinterpret_cast<QLayout *>(childSizer);
+  qDebug() << "[PCL Bridge] SetSizerAlignment: layout =" << lay
+           << "child layout =" << childLay << "alignment =" << alignment;
+  if (lay && childLay) {
+    lay->setAlignment(childLay, Qt::Alignment(alignment));
+  }
+}
+
 static void mock_SetSizerControlAlignment(sizer_handle s, control_handle c,
-                                          int32 alignment) {
+                                           int32 alignment) {
   QBoxLayout *lay = reinterpret_cast<QBoxLayout *>(s);
   QWidget *w = reinterpret_cast<QWidget *>(c);
   qDebug() << "[PCL Bridge] SetSizerControlAlignment: layout =" << lay
            << "widget =" << w << "alignment =" << alignment;
   if (lay && w) {
     lay->setAlignment(w, Qt::Alignment(alignment));
+  }
+}
+
+static void mock_SetSizerStretchFactor(sizer_handle s, sizer_handle childSizer,
+                                        int32 stretch) {
+  QBoxLayout *lay = reinterpret_cast<QBoxLayout *>(s);
+  QLayout *childLay = reinterpret_cast<QLayout *>(childSizer);
+  qDebug() << "[PCL Bridge] SetSizerStretchFactor: layout =" << lay
+           << "child layout =" << childLay << "stretch =" << stretch;
+  if (lay && childLay) {
+    lay->setStretchFactor(childLay, stretch);
+  }
+}
+
+static void mock_SetSizerControlStretchFactor(sizer_handle s, control_handle c,
+                                               int32 stretch) {
+  QBoxLayout *lay = reinterpret_cast<QBoxLayout *>(s);
+  QWidget *w = reinterpret_cast<QWidget *>(c);
+  qDebug() << "[PCL Bridge] SetSizerControlStretchFactor: layout =" << lay
+           << "widget =" << w << "stretch =" << stretch;
+  if (lay && w) {
+    lay->setStretchFactor(w, stretch);
   }
 }
 
@@ -2649,6 +4016,7 @@ static void mock_GetViewLocks(const_view_handle hView, api_bool *readLocked,
 PCLBridge::PCLBridge(QObject *parent) : QObject(parent) {
   g_pclBridgeInstance = this;
   g_verbosePCL = (qEnvironmentVariableIntValue("BLASTRO_DEBUG_PCL") == 1);
+  setupOverrides();
 }
 
 PCLBridge::~PCLBridge() {
@@ -2766,6 +4134,12 @@ void PCLBridge::setupOverrides() {
                   reinterpret_cast<void *>(mock_SetControlBackgroundColor));
   overridePCLStub("Control/GetControlFont",
                   reinterpret_cast<void *>(mock_GetControlFont));
+  overridePCLStub("Control/SetControlFont",
+                  reinterpret_cast<void *>(mock_SetControlFont));
+  overridePCLStub("Control/GetControlTextColor",
+                  reinterpret_cast<void *>(mock_GetControlTextColor));
+  overridePCLStub("Control/SetControlTextColor",
+                  reinterpret_cast<void *>(mock_SetControlTextColor));
   overridePCLStub("Control/SetWindowTitle",
                   reinterpret_cast<void *>(mock_SetWindowTitle));
   overridePCLStub("Control/SetWindowToolTip",
@@ -2782,12 +4156,60 @@ void PCLBridge::setupOverrides() {
                   reinterpret_cast<void *>(mock_EnsureControlLayoutUpdated));
   overridePCLStub("Control/SetControlFocusStyle",
                   reinterpret_cast<void *>(mock_SetControlFocusStyle));
+  overridePCLStub("Font/CreateFontByFamily",
+                  reinterpret_cast<void *>(mock_CreateFontByFamily));
+  overridePCLStub("Font/CreateFontByFace",
+                  reinterpret_cast<void *>(mock_CreateFontByFace));
+  overridePCLStub("Font/CloneFont",
+                  reinterpret_cast<void *>(mock_CloneFont));
+  overridePCLStub("Font/GetFontFace",
+                  reinterpret_cast<void *>(mock_GetFontFace));
+  overridePCLStub("Font/SetFontFace",
+                  reinterpret_cast<void *>(mock_SetFontFace));
+  overridePCLStub("Font/GetFontPixelSize",
+                  reinterpret_cast<void *>(mock_GetFontPixelSize));
+  overridePCLStub("Font/SetFontPixelSize",
+                  reinterpret_cast<void *>(mock_SetFontPixelSize));
+  overridePCLStub("Font/GetFontPointSize",
+                  reinterpret_cast<void *>(mock_GetFontPointSize));
+  overridePCLStub("Font/SetFontPointSize",
+                  reinterpret_cast<void *>(mock_SetFontPointSize));
+  overridePCLStub("Font/GetFontWeight",
+                  reinterpret_cast<void *>(mock_GetFontWeight));
+  overridePCLStub("Font/SetFontWeight",
+                  reinterpret_cast<void *>(mock_SetFontWeight));
+  overridePCLStub("Font/GetFontItalic",
+                  reinterpret_cast<void *>(mock_GetFontItalic));
+  overridePCLStub("Font/SetFontItalic",
+                  reinterpret_cast<void *>(mock_SetFontItalic));
+  overridePCLStub("Font/GetFontUnderline",
+                  reinterpret_cast<void *>(mock_GetFontUnderline));
+  overridePCLStub("Font/SetFontUnderline",
+                  reinterpret_cast<void *>(mock_SetFontUnderline));
+  overridePCLStub("Font/GetFontStrikeOut",
+                  reinterpret_cast<void *>(mock_GetFontStrikeOut));
+  overridePCLStub("Font/SetFontStrikeOut",
+                  reinterpret_cast<void *>(mock_SetFontStrikeOut));
+  overridePCLStub("Font/GetFontAscent",
+                  reinterpret_cast<void *>(mock_GetFontAscent));
+  overridePCLStub("Font/GetFontDescent",
+                  reinterpret_cast<void *>(mock_GetFontDescent));
+  overridePCLStub("Font/GetFontHeight",
+                  reinterpret_cast<void *>(mock_GetFontHeight));
+  overridePCLStub("Font/GetFontLineSpacing",
+                  reinterpret_cast<void *>(mock_GetFontLineSpacing));
   overridePCLStub("Font/GetStringPixelWidth",
                   reinterpret_cast<void *>(mock_GetStringPixelWidth));
   overridePCLStub("Font/GetCharPixelWidth",
                   reinterpret_cast<void *>(mock_GetCharPixelWidth));
+  overridePCLStub("Sizer/SetSizerAlignment",
+                  reinterpret_cast<void *>(mock_SetSizerAlignment));
   overridePCLStub("Sizer/SetSizerControlAlignment",
                   reinterpret_cast<void *>(mock_SetSizerControlAlignment));
+  overridePCLStub("Sizer/SetSizerStretchFactor",
+                  reinterpret_cast<void *>(mock_SetSizerStretchFactor));
+  overridePCLStub("Sizer/SetSizerControlStretchFactor",
+                  reinterpret_cast<void *>(mock_SetSizerControlStretchFactor));
   overridePCLStub("Control/GetControlMinSize",
                   reinterpret_cast<void *>(mock_GetControlMinSize));
   overridePCLStub("Control/GetControlMaxSize",
@@ -2815,7 +4237,7 @@ void PCLBridge::setupOverrides() {
   overridePCLStub("Control/SetGetFocusEventRoutine",
                   reinterpret_cast<void *>(mock_SetEventRoutine));
   overridePCLStub("Control/SetHideEventRoutine",
-                  reinterpret_cast<void *>(mock_SetEventRoutine));
+                  reinterpret_cast<void *>(mock_SetHideEventRoutine));
   overridePCLStub("Control/SetKeyPressEventRoutine",
                   reinterpret_cast<void *>(mock_SetEventRoutine));
   overridePCLStub("Control/SetKeyReleaseEventRoutine",
@@ -2839,13 +4261,168 @@ void PCLBridge::setupOverrides() {
   overridePCLStub("Control/SetResizeEventRoutine",
                   reinterpret_cast<void *>(mock_SetEventRoutine));
   overridePCLStub("Control/SetShowEventRoutine",
-                  reinterpret_cast<void *>(mock_SetEventRoutine));
+                  reinterpret_cast<void *>(mock_SetShowEventRoutine));
   overridePCLStub("Control/SetViewDragEventRoutine",
                   reinterpret_cast<void *>(mock_SetEventRoutine));
   overridePCLStub("Control/SetViewDropEventRoutine",
                   reinterpret_cast<void *>(mock_SetEventRoutine));
   overridePCLStub("Control/SetWheelEventRoutine",
                   reinterpret_cast<void *>(mock_SetEventRoutine));
+
+  // Additional Control/ Overrides
+  overridePCLStub("Control/GetFrameRect", reinterpret_cast<void *>(mock_GetFrameRect));
+  overridePCLStub("Control/SetClientRect", reinterpret_cast<void *>(mock_SetClientRect));
+  overridePCLStub("Control/GetControlExpansionEnabled", reinterpret_cast<void *>(mock_GetControlExpansionEnabled));
+  overridePCLStub("Control/SetControlExpansionEnabled", reinterpret_cast<void *>(mock_SetControlExpansionEnabled));
+  overridePCLStub("Control/GetControlUnderMouseStatus", reinterpret_cast<void *>(mock_GetControlUnderMouseStatus));
+  overridePCLStub("Control/BringControlToFront", reinterpret_cast<void *>(mock_BringControlToFront));
+  overridePCLStub("Control/SendControlToBack", reinterpret_cast<void *>(mock_SendControlToBack));
+  overridePCLStub("Control/StackControls", reinterpret_cast<void *>(mock_StackControls));
+  overridePCLStub("Control/GetControlSizer", reinterpret_cast<void *>(mock_GetControlSizer));
+  overridePCLStub("Control/GlobalToLocal", reinterpret_cast<void *>(mock_GlobalToLocal));
+  overridePCLStub("Control/LocalToGlobal", reinterpret_cast<void *>(mock_LocalToGlobal));
+  overridePCLStub("Control/ParentToLocal", reinterpret_cast<void *>(mock_ParentToLocal));
+  overridePCLStub("Control/LocalToParent", reinterpret_cast<void *>(mock_LocalToParent));
+  overridePCLStub("Control/ControlToLocal", reinterpret_cast<void *>(mock_ControlToLocal));
+  overridePCLStub("Control/LocalToControl", reinterpret_cast<void *>(mock_LocalToControl));
+  overridePCLStub("Control/GetChildByPos", reinterpret_cast<void *>(mock_GetChildByPos));
+  overridePCLStub("Control/GetChildrenRect", reinterpret_cast<void *>(mock_GetChildrenRect));
+  overridePCLStub("Control/GetControlAncestry", reinterpret_cast<void *>(mock_GetControlAncestry));
+  overridePCLStub("Control/GetControlParent", reinterpret_cast<void *>(mock_GetControlParent));
+  overridePCLStub("Control/GetControlWindow", reinterpret_cast<void *>(mock_GetControlWindow));
+  overridePCLStub("Control/GetControlEnabled", reinterpret_cast<void *>(mock_GetControlEnabled));
+  overridePCLStub("Control/GetControlMouseTrackingEnabled", reinterpret_cast<void *>(mock_GetControlMouseTrackingEnabled));
+  overridePCLStub("Control/SetControlMouseTrackingEnabled", reinterpret_cast<void *>(mock_SetControlMouseTrackingEnabled));
+  overridePCLStub("Control/GetControlVisibleRect", reinterpret_cast<void *>(mock_GetControlVisibleRect));
+  overridePCLStub("Control/GetWindowState", reinterpret_cast<void *>(mock_GetWindowState));
+  overridePCLStub("Control/ActivateWindow", reinterpret_cast<void *>(mock_ActivateWindow));
+  overridePCLStub("Control/GetControlFocus", reinterpret_cast<void *>(mock_GetControlFocus));
+  overridePCLStub("Control/SetControlFocus", reinterpret_cast<void *>(mock_SetControlFocus));
+  overridePCLStub("Control/GetFocusChildControl", reinterpret_cast<void *>(mock_GetFocusChildControl));
+  overridePCLStub("Control/GetChildControlToFocus", reinterpret_cast<void *>(mock_GetChildControlToFocus));
+  overridePCLStub("Control/GetNextSiblingControlToFocus", reinterpret_cast<void *>(mock_GetNextSiblingControlToFocus));
+  overridePCLStub("Control/SetNextSiblingControlToFocus", reinterpret_cast<void *>(mock_SetNextSiblingControlToFocus));
+  overridePCLStub("Control/GetControlUpdatesEnabled", reinterpret_cast<void *>(mock_GetControlUpdatesEnabled));
+  overridePCLStub("Control/SetControlUpdatesEnabled", reinterpret_cast<void *>(mock_SetControlUpdatesEnabled));
+  overridePCLStub("Control/UpdateControl", reinterpret_cast<void *>(mock_UpdateControl));
+  overridePCLStub("Control/UpdateControlRect", reinterpret_cast<void *>(mock_UpdateControlRect));
+  overridePCLStub("Control/RepaintControl", reinterpret_cast<void *>(mock_RepaintControl));
+  overridePCLStub("Control/RepaintControlRect", reinterpret_cast<void *>(mock_RepaintControlRect));
+  overridePCLStub("Control/RestyleControl", reinterpret_cast<void *>(mock_RestyleControl));
+  overridePCLStub("Control/ScrollControl", reinterpret_cast<void *>(mock_ScrollControl));
+  overridePCLStub("Control/ScrollControlRect", reinterpret_cast<void *>(mock_ScrollControlRect));
+  overridePCLStub("Control/GetControlCursor", reinterpret_cast<void *>(mock_GetControlCursor));
+  overridePCLStub("Control/SetControlCursor", reinterpret_cast<void *>(mock_SetControlCursor));
+  overridePCLStub("Control/SetControlCursorToParent", reinterpret_cast<void *>(mock_SetControlCursorToParent));
+  overridePCLStub("Control/GetControlStyleSheet", reinterpret_cast<void *>(mock_GetControlStyleSheet));
+  overridePCLStub("Control/SetControlStyleSheet", reinterpret_cast<void *>(mock_SetControlStyleSheet));
+  overridePCLStub("Control/GetControlBackgroundColor", reinterpret_cast<void *>(mock_GetControlBackgroundColor));
+  overridePCLStub("Control/GetControlForegroundColor", reinterpret_cast<void *>(mock_GetControlForegroundColor));
+  overridePCLStub("Control/SetControlForegroundColor", reinterpret_cast<void *>(mock_SetControlForegroundColor));
+  overridePCLStub("Control/GetControlCanvasColor", reinterpret_cast<void *>(mock_GetControlCanvasColor));
+  overridePCLStub("Control/SetControlCanvasColor", reinterpret_cast<void *>(mock_SetControlCanvasColor));
+  overridePCLStub("Control/GetControlAlternateCanvasColor", reinterpret_cast<void *>(mock_GetControlAlternateCanvasColor));
+  overridePCLStub("Control/SetControlAlternateCanvasColor", reinterpret_cast<void *>(mock_SetControlAlternateCanvasColor));
+  overridePCLStub("Control/GetControlButtonColor", reinterpret_cast<void *>(mock_GetControlButtonColor));
+  overridePCLStub("Control/SetControlButtonColor", reinterpret_cast<void *>(mock_SetControlButtonColor));
+  overridePCLStub("Control/GetControlButtonTextColor", reinterpret_cast<void *>(mock_GetControlButtonTextColor));
+  overridePCLStub("Control/SetControlButtonTextColor", reinterpret_cast<void *>(mock_SetControlButtonTextColor));
+  overridePCLStub("Control/GetControlHighlightColor", reinterpret_cast<void *>(mock_GetControlHighlightColor));
+  overridePCLStub("Control/SetControlHighlightColor", reinterpret_cast<void *>(mock_SetControlHighlightColor));
+  overridePCLStub("Control/GetControlHighlightedTextColor", reinterpret_cast<void *>(mock_GetControlHighlightedTextColor));
+  overridePCLStub("Control/SetControlHighlightedTextColor", reinterpret_cast<void *>(mock_SetControlHighlightedTextColor));
+  overridePCLStub("Control/GetWindowOpacity", reinterpret_cast<void *>(mock_GetWindowOpacity));
+  overridePCLStub("Control/SetWindowOpacity", reinterpret_cast<void *>(mock_SetWindowOpacity));
+  overridePCLStub("Control/GetInfoText", reinterpret_cast<void *>(mock_GetInfoText));
+  overridePCLStub("Control/SetInfoText", reinterpret_cast<void *>(mock_SetInfoText));
+  overridePCLStub("Control/GetRealTimePreviewActive", reinterpret_cast<void *>(mock_GetRealTimePreviewActive));
+  overridePCLStub("Control/SetRealTimePreviewActive", reinterpret_cast<void *>(mock_SetRealTimePreviewActive));
+  overridePCLStub("Control/GetTrackViewActive", reinterpret_cast<void *>(mock_GetTrackViewActive));
+  overridePCLStub("Control/SetTrackViewActive", reinterpret_cast<void *>(mock_SetTrackViewActive));
+  overridePCLStub("Control/GetWindowToolTip", reinterpret_cast<void *>(mock_GetWindowToolTip));
+  overridePCLStub("Control/GetControlDevicePixelRatio", reinterpret_cast<void *>(mock_GetControlDevicePixelRatio));
+
+  // Class A Layout & Container Overrides
+  overridePCLStub("Sizer/GetSizerParentControl", reinterpret_cast<void *>(mock_GetSizerParentControl));
+  overridePCLStub("Sizer/GetSizerOrientation", reinterpret_cast<void *>(mock_GetSizerOrientation));
+  overridePCLStub("Sizer/GetSizerCount", reinterpret_cast<void *>(mock_GetSizerCount));
+  overridePCLStub("Sizer/GetSizerIndex", reinterpret_cast<void *>(mock_GetSizerIndex));
+  overridePCLStub("Sizer/GetSizerControlIndex", reinterpret_cast<void *>(mock_GetSizerControlIndex));
+  overridePCLStub("Sizer/RemoveSizer", reinterpret_cast<void *>(mock_RemoveSizer));
+  overridePCLStub("Sizer/RemoveSizerControl", reinterpret_cast<void *>(mock_RemoveSizerControl));
+  overridePCLStub("Sizer/GetSizerMargin", reinterpret_cast<void *>(mock_GetSizerMargin));
+  overridePCLStub("Sizer/GetSizerSpacing", reinterpret_cast<void *>(mock_GetSizerSpacing));
+  overridePCLStub("Sizer/GetSizerResourcePixelRatio", reinterpret_cast<void *>(mock_GetSizerResourcePixelRatio));
+  overridePCLStub("Sizer/GetSizerDevicePixelRatio", reinterpret_cast<void *>(mock_GetSizerDevicePixelRatio));
+  overridePCLStub("Dialog/OpenDialog", reinterpret_cast<void *>(mock_OpenDialog));
+  overridePCLStub("Dialog/GetDialogResizable", reinterpret_cast<void *>(mock_GetDialogResizable));
+  overridePCLStub("Dialog/SetDialogResizable", reinterpret_cast<void *>(mock_SetDialogResizable));
+  overridePCLStub("Frame/CreateFrame", reinterpret_cast<void *>(mock_CreateFrame));
+  overridePCLStub("Frame/GetFrameStyle", reinterpret_cast<void *>(mock_GetFrameStyle));
+  overridePCLStub("Frame/SetFrameStyle", reinterpret_cast<void *>(mock_SetFrameStyle));
+  overridePCLStub("Frame/GetFrameLineWidth", reinterpret_cast<void *>(mock_GetFrameLineWidth));
+  overridePCLStub("Frame/SetFrameLineWidth", reinterpret_cast<void *>(mock_SetFrameLineWidth));
+  overridePCLStub("Frame/GetFrameBorderWidth", reinterpret_cast<void *>(mock_GetFrameBorderWidth));
+  overridePCLStub("GroupBox/GetGroupBoxTitle", reinterpret_cast<void *>(mock_GetGroupBoxTitle));
+  overridePCLStub("GroupBox/SetGroupBoxTitle", reinterpret_cast<void *>(mock_SetGroupBoxTitle));
+  overridePCLStub("GroupBox/GetGroupBoxCheckable", reinterpret_cast<void *>(mock_GetGroupBoxCheckable));
+  overridePCLStub("GroupBox/SetGroupBoxCheckable", reinterpret_cast<void *>(mock_SetGroupBoxCheckable));
+  overridePCLStub("GroupBox/GetGroupBoxChecked", reinterpret_cast<void *>(mock_GetGroupBoxChecked));
+  overridePCLStub("GroupBox/SetGroupBoxChecked", reinterpret_cast<void *>(mock_SetGroupBoxChecked));
+  overridePCLStub("TabBox/CreateTabBox", reinterpret_cast<void *>(mock_CreateTabBox));
+  overridePCLStub("TabBox/GetTabBoxLength", reinterpret_cast<void *>(mock_GetTabBoxLength));
+  overridePCLStub("TabBox/GetTabBoxCurrentPageIndex", reinterpret_cast<void *>(mock_GetTabBoxCurrentPageIndex));
+  overridePCLStub("TabBox/SetTabBoxCurrentPageIndex", reinterpret_cast<void *>(mock_SetTabBoxCurrentPageIndex));
+  overridePCLStub("TabBox/GetTabBoxPageByIndex", reinterpret_cast<void *>(mock_GetTabBoxPageByIndex));
+  overridePCLStub("TabBox/InsertTabBoxPage", reinterpret_cast<void *>(mock_InsertTabBoxPage));
+  overridePCLStub("TabBox/RemoveTabBoxPage", reinterpret_cast<void *>(mock_RemoveTabBoxPage));
+  overridePCLStub("TabBox/GetTabBoxPosition", reinterpret_cast<void *>(mock_GetTabBoxPosition));
+  overridePCLStub("TabBox/SetTabBoxPosition", reinterpret_cast<void *>(mock_SetTabBoxPosition));
+  overridePCLStub("TabBox/GetTabBoxPageEnabled", reinterpret_cast<void *>(mock_GetTabBoxPageEnabled));
+  overridePCLStub("TabBox/SetTabBoxPageEnabled", reinterpret_cast<void *>(mock_SetTabBoxPageEnabled));
+  overridePCLStub("TabBox/GetTabBoxPageLabel", reinterpret_cast<void *>(mock_GetTabBoxPageLabel));
+  overridePCLStub("TabBox/SetTabBoxPageLabel", reinterpret_cast<void *>(mock_SetTabBoxPageLabel));
+
+  // Class B Interactive Widgets Overrides
+  overridePCLStub("Button/CreateRadioButton", reinterpret_cast<void *>(mock_CreateRadioButton));
+  overridePCLStub("Button/GetButtonText", reinterpret_cast<void *>(mock_GetButtonText));
+  overridePCLStub("Button/SetButtonText", reinterpret_cast<void *>(mock_SetButtonText));
+  overridePCLStub("Button/GetButtonPushed", reinterpret_cast<void *>(mock_GetButtonPushed));
+  overridePCLStub("Button/SetButtonPushed", reinterpret_cast<void *>(mock_SetButtonPushed));
+  overridePCLStub("Button/GetButtonDefaultEnabled", reinterpret_cast<void *>(mock_GetButtonDefaultEnabled));
+  overridePCLStub("Edit/CreateEdit", reinterpret_cast<void *>(mock_CreateEdit));
+  overridePCLStub("Edit/GetEditText", reinterpret_cast<void *>(mock_GetEditText));
+  overridePCLStub("Edit/SetEditText", reinterpret_cast<void *>(mock_SetEditText));
+  overridePCLStub("Edit/GetEditReadOnly", reinterpret_cast<void *>(mock_GetEditReadOnly));
+  overridePCLStub("Edit/SetEditReadOnly", reinterpret_cast<void *>(mock_SetEditReadOnly));
+  overridePCLStub("Edit/GetEditCaretPosition", reinterpret_cast<void *>(mock_GetEditCaretPosition));
+  overridePCLStub("TextBox/CreateTextBox", reinterpret_cast<void *>(mock_CreateTextBox));
+  overridePCLStub("TextBox/GetTextBoxText", reinterpret_cast<void *>(mock_GetTextBoxText));
+  overridePCLStub("TextBox/SetTextBoxText", reinterpret_cast<void *>(mock_SetTextBoxText));
+  overridePCLStub("ComboBox/CreateComboBox", reinterpret_cast<void *>(mock_CreateComboBox));
+  overridePCLStub("ComboBox/GetComboBoxCurrentItem", reinterpret_cast<void *>(mock_GetComboBoxCurrentItem));
+  overridePCLStub("ComboBox/SetComboBoxCurrentItem", reinterpret_cast<void *>(mock_SetComboBoxCurrentItem));
+  overridePCLStub("ComboBox/InsertComboBoxItem", reinterpret_cast<void *>(mock_InsertComboBoxItem));
+  overridePCLStub("ComboBox/RemoveComboBoxItem", reinterpret_cast<void *>(mock_RemoveComboBoxItem));
+  overridePCLStub("ComboBox/ClearComboBox", reinterpret_cast<void *>(mock_ClearComboBox));
+  overridePCLStub("Slider/CreateSlider", reinterpret_cast<void *>(mock_CreateSlider));
+  overridePCLStub("Slider/GetSliderValue", reinterpret_cast<void *>(mock_GetSliderValue));
+  overridePCLStub("Slider/SetSliderValue", reinterpret_cast<void *>(mock_SetSliderValue));
+  overridePCLStub("Slider/GetSliderRange", reinterpret_cast<void *>(mock_GetSliderRange));
+  overridePCLStub("Slider/SetSliderRange", reinterpret_cast<void *>(mock_SetSliderRange));
+  overridePCLStub("SpinBox/CreateSpinBox", reinterpret_cast<void *>(mock_CreateSpinBox));
+  overridePCLStub("SpinBox/GetSpinBoxValue", reinterpret_cast<void *>(mock_GetSpinBoxValue));
+  overridePCLStub("SpinBox/SetSpinBoxValue", reinterpret_cast<void *>(mock_SetSpinBoxValue));
+  overridePCLStub("SpinBox/GetSpinBoxRange", reinterpret_cast<void *>(mock_GetSpinBoxRange));
+  overridePCLStub("SpinBox/SetSpinBoxRange", reinterpret_cast<void *>(mock_SetSpinBoxRange));
+  overridePCLStub("Label/CreateLabel", reinterpret_cast<void *>(mock_CreateLabel));
+  overridePCLStub("Label/GetLabelText", reinterpret_cast<void *>(mock_GetLabelText));
+  overridePCLStub("Label/SetLabelText", reinterpret_cast<void *>(mock_SetLabelText));
+  overridePCLStub("BitmapBox/CreateBitmapBox", reinterpret_cast<void *>(mock_CreateBitmapBox));
+  overridePCLStub("TreeBox/CreateTreeBox", reinterpret_cast<void *>(mock_CreateTreeBox));
+  overridePCLStub("TreeBox/GetTreeBoxChildCount", reinterpret_cast<void *>(mock_GetTreeBoxChildCount));
+  overridePCLStub("TreeBox/ClearTreeBox", reinterpret_cast<void *>(mock_ClearTreeBox));
+  overridePCLStub("ScrollBox/CreateScrollBox", reinterpret_cast<void *>(mock_CreateScrollBox));
 
   overridePCLStub("Dialog/CreateDialog",
                   reinterpret_cast<void *>(mock_CreateDialog));
@@ -2928,10 +4505,24 @@ void PCLBridge::setupOverrides() {
 
   overridePCLStub("Label/CreateLabel",
                   reinterpret_cast<void *>(mock_CreateLabel));
+  overridePCLStub("Label/GetLabelText",
+                  reinterpret_cast<void *>(mock_GetLabelText));
   overridePCLStub("Label/SetLabelText",
                   reinterpret_cast<void *>(mock_SetLabelText));
   overridePCLStub("Label/SetLabelAlignment",
                   reinterpret_cast<void *>(mock_SetLabelAlignment));
+  overridePCLStub("Label/SetLabelWordWrappingEnabled",
+                  reinterpret_cast<void *>(mock_SetLabelWordWrappingEnabled));
+  overridePCLStub("Label/GetLabelWordWrappingEnabled",
+                  reinterpret_cast<void *>(mock_GetLabelWordWrappingEnabled));
+  overridePCLStub("Label/GetLabelMargin",
+                  reinterpret_cast<void *>(mock_GetLabelMargin));
+  overridePCLStub("Label/SetLabelMargin",
+                  reinterpret_cast<void *>(mock_SetLabelMargin));
+  overridePCLStub("Label/GetLabelRichTextEnabled",
+                  reinterpret_cast<void *>(mock_GetLabelRichTextEnabled));
+  overridePCLStub("Label/SetLabelRichTextEnabled",
+                  reinterpret_cast<void *>(mock_SetLabelRichTextEnabled));
 
   overridePCLStub("Slider/CreateSlider",
                   reinterpret_cast<void *>(mock_CreateSlider));
@@ -3237,6 +4828,29 @@ void PCLBridge::setupOverrides() {
   overridePCLStub(
       "InterfaceDefinition/ExitInterfaceDefinitionContext",
       reinterpret_cast<void *>(mock_ExitInterfaceDefinitionContext));
+
+  // Critical Process & Interface Binding Routines
+  overridePCLStub(
+      "InterfaceDefinition/SetInterfaceProcessInstantiationRoutine",
+      reinterpret_cast<void *>(mock_SetInterfaceProcessInstantiationRoutine));
+  overridePCLStub(
+      "ProcessDefinition/SetProcessSetServerHandleRoutine",
+      reinterpret_cast<void *>(mock_SetProcessSetServerHandleRoutine));
+  overridePCLStub(
+      "ProcessDefinition/SetProcessClonationRoutine",
+      reinterpret_cast<void *>(mock_SetProcessClonationRoutine));
+  overridePCLStub(
+      "ProcessDefinition/SetProcessAssignmentRoutine",
+      reinterpret_cast<void *>(mock_SetProcessAssignmentRoutine));
+  overridePCLStub(
+      "Process/CreateProcessInstance",
+      reinterpret_cast<void *>(mock_CreateProcessInstance));
+  overridePCLStub(
+      "Process/CloneProcessInstance",
+      reinterpret_cast<void *>(mock_CloneProcessInstance));
+  overridePCLStub(
+      "Process/AssignProcessInstance",
+      reinterpret_cast<void *>(mock_AssignProcessInstance));
 }
 
 static bool downloadAndExtractTensorFlow() {
@@ -3602,8 +5216,7 @@ bool PCLBridge::loadModule(const QString &path) {
           << "[PCL Bridge] Invoking process execution preferences routine for:"
           << pair.second.id;
       pair.second.executionPreferencesFn(pair.first);
-      qDebug()
-          << "[PCL Bridge] Process execution preferences routine finished.";
+      qDebug() << "[PCL Bridge] Process execution preferences routine finished.";
     }
   }
 
@@ -3690,6 +5303,11 @@ bool PCLBridge::executeProcess(const QString &processId,
   if (!hProcess) {
     qWarning() << "[PCL Bridge] Failed to instantiate process:" << processId;
     return false;
+  }
+
+  if (hProcess && info.setServerHandleFn) {
+    qDebug() << "[PCL Bridge] Injecting server handle into process instance...";
+    info.setServerHandleFn(hProcess, hProcess);
   }
 
   if (info.initFn) {
@@ -3833,6 +5451,33 @@ bool PCLBridge::executeProcessInstance(const QString &processId, void *hProcess,
   return success;
 }
 
+class MDIShrinkFilter : public QObject {
+public:
+    explicit MDIShrinkFilter(QObject *parent = nullptr) : QObject(parent) {}
+protected:
+    bool eventFilter(QObject *obj, QEvent *event) override {
+        if (event->type() == QEvent::LayoutRequest || event->type() == QEvent::Resize) {
+            QWidget *w = qobject_cast<QWidget*>(obj);
+            if (w) {
+                QWidget *p = w->parentWidget();
+                while (p) {
+                    if (p->inherits("QMdiSubWindow")) {
+                        qDebug() << "[MDIShrinkFilter] hostWidget sizeHint:" << w->sizeHint() 
+                                 << "MDI window current size:" << p->size();
+                        // Queue the adjustSize so the layout has time to finish evaluating
+                        QTimer::singleShot(0, p, [p]() {
+                            p->adjustSize();
+                        });
+                        break;
+                    }
+                    p = p->parentWidget();
+                }
+            }
+        }
+        return QObject::eventFilter(obj, event);
+    }
+};
+
 bool PCLBridge::launchInterface(const QString &processId,
                                 QWidget *parentWindow) {
   if (!m_initialized) {
@@ -3862,7 +5507,7 @@ bool PCLBridge::launchInterface(const QString &processId,
   // Create the host widget (main MDI window content)
   QWidget *hostWidget = new QWidget();
   hostWidget->setWindowTitle(processId + " Process Interface");
-  hostWidget->resize(600, 450);
+  hostWidget->installEventFilter(new MDIShrinkFilter(hostWidget));
 
   // Create a container widget specifically for the plugin's controls
   QWidget *pluginContainer = new QWidget(hostWidget);
@@ -3890,10 +5535,10 @@ bool PCLBridge::launchInterface(const QString &processId,
   QVBoxLayout *mainLayout = new QVBoxLayout(hostWidget);
   mainLayout->setContentsMargins(10, 10, 10, 10);
   mainLayout->setSpacing(10);
+  mainLayout->setSizeConstraint(QLayout::SetFixedSize); // Lock window to fit content perfectly
 
   // Add the plugin container and the apply button to the main layout
-  mainLayout->addWidget(pluginContainer,
-                        1); // Give plugin container stretch factor 1
+  mainLayout->addWidget(pluginContainer, 0); // No stretch factor needed now that we are FixedSize
 
   // Create a horizontal layout for the bottom button bar
   QHBoxLayout *buttonBar = new QHBoxLayout();
@@ -3966,85 +5611,124 @@ bool PCLBridge::launchInterface(const QString &processId,
       "-4px 0; border-radius: 7px; }"
       "QSlider::handle:horizontal:disabled { background: #555555; }");
 
-  // 1. Call the interface's initialization callback!
-  // The C-API initialization routine expects (interface_handle, control_handle)
   interface_handle hInterface = const_cast<void *>(hMeta);
   control_handle hParentControl =
       reinterpret_cast<control_handle>(pluginContainer);
 
-  qDebug()
-      << "[PCL Bridge] Calling interface initialization callback (initFn)...";
-  info.initFn(hInterface, hParentControl);
-  qDebug() << "[PCL Bridge] Interface initialization callback completed.";
+  std::cout << "[PCL Bridge] launchInterface: processId = " << processId.toStdString() << " hInterface = " << hInterface << std::endl;
 
-  // If the interface registered a global preferences updated callback, notify
-  // it at startup so it can initialize its licensing and other global
-  // preference-dependent states.
-  if (info.globalPrefUpdatedFn) {
-    qDebug() << "[PCL Bridge] Calling interface global preferences updated "
-                "notification...";
-    info.globalPrefUpdatedFn(hInterface);
-    qDebug() << "[PCL Bridge] Interface global preferences updated "
-                "notification completed.";
-  }
+  g_interfaceControls[idStr] = hParentControl;
 
-  // Instantiate process handle
-  auto procIdIt = g_processIdToHandle.find(idStr);
-  meta_process_handle hMetaProcess = nullptr;
+  // 1. Ensure a valid hProcess (instance) exists before initializing the interface
   process_handle hProcess = nullptr;
-  if (procIdIt != g_processIdToHandle.end()) {
-    hMetaProcess = procIdIt->second;
+  meta_process_handle hMetaProcess = nullptr;
+  auto procIt = g_processIdToHandle.find(processId.toStdString());
+  if (procIt != g_processIdToHandle.end()) {
+    hMetaProcess = procIt->second;
     const auto &procInfo = g_processes[hMetaProcess];
     if (procInfo.createFn) {
+      std::cout << "[PCL Bridge] Instantiating process instance for interface launch..." << std::endl;
       hProcess = procInfo.createFn(hMetaProcess);
-      if (procInfo.initFn) {
-        procInfo.initFn(hProcess);
-      }
+    }
+    if (hProcess && procInfo.setServerHandleFn) {
+      std::cout << "[PCL Bridge] Injecting server handle into process instance..." << std::endl;
+      procInfo.setServerHandleFn(hProcess, hProcess);
+    }
+    if (hProcess && procInfo.initFn) {
+      procInfo.initFn(hProcess);
     }
   }
 
-  // 2. Call the interface's launch routine (launchFn) if present!
+  // 2. Call the interface's initialization callback with a valid hProcess in place!
+  std::cout << "[PCL Bridge] Calling interface initialization callback (initFn)..." << std::endl;
+  info.initFn(hInterface, hParentControl);
+  std::cout << "[PCL Bridge] Interface initialization callback completed." << std::endl;
+
+  // 3. Call the interface's launch routine (launchFn) if present!
   if (info.launchFn) {
-    qDebug() << "[PCL Bridge] Calling interface launch routine (launchFn)...";
+    std::cout << "[PCL Bridge] Calling interface launch routine (launchFn)..." << std::endl;
     api_bool dynamic = false;
     uint32 flags = 0;
     bool launchOk =
         info.launchFn(hInterface, hMetaProcess, hProcess, &dynamic, &flags);
-    qDebug() << "[PCL Bridge] Interface launch routine returned:" << launchOk
-             << ", dynamic:" << (bool)dynamic;
+    std::cout << "[PCL Bridge] Interface launch routine returned: " << launchOk
+              << ", dynamic: " << (bool)dynamic << std::endl;
+  }
 
-    // 3. Import the process parameters into the interface!
-    if (launchOk && info.importProcessFn && hProcess) {
-      qDebug() << "[PCL Bridge] Calling interface process import routine "
-                  "(importProcessFn)...";
-      info.importProcessFn(hInterface, hProcess);
-      qDebug() << "[PCL Bridge] Interface process import routine completed.";
-
-      // Perform process validation at startup so the plugin runs its
-      // license-check and unlocks!
-      if (info.validateProcessFn) {
-        qDebug() << "[PCL Bridge] Calling interface process validation routine "
-                    "(validateProcessFn)...";
-        std::vector<char16_type> errorBuf(1024, 0);
-        api_bool valid = info.validateProcessFn(
-            hInterface, hProcess, errorBuf.data(), errorBuf.size() - 1);
-        qDebug()
-            << "[PCL Bridge] Interface process validation routine returned:"
-            << (bool)valid;
+  // Resolve any show/hide routines that were registered on hInterface during initFn or launchFn!
+  auto pendIt = g_pendingInterfaceRoutines.find(hInterface);
+  if (pendIt != g_pendingInterfaceRoutines.end()) {
+    QWidget *targetWidget = nullptr;
+    api_handle clientPtr = nullptr;
+    getWidgetAndClientForHandle(hInterface, targetWidget, clientPtr);
+    if (targetWidget) {
+      if (pendIt->second.showRoutine) {
+        std::cout << "[PCL Bridge] Binding pending showRoutine for hInterface to targetWidget = " << targetWidget << " sender = " << clientPtr << std::endl;
+        targetWidget->setProperty("showRoutine", QVariant::fromValue(reinterpret_cast<void *>(pendIt->second.showRoutine)));
+        targetWidget->setProperty("showReceiver", QVariant::fromValue(reinterpret_cast<void *>(pendIt->second.showReceiver)));
+        targetWidget->setProperty("pclSender", QVariant::fromValue(clientPtr));
+        static PCLEventFilter filter;
+        targetWidget->installEventFilter(&filter);
       }
-
-      // Perform process-interface validation!
-      if (hMetaProcess) {
-        const auto &procInfo = g_processes[hMetaProcess];
-        if (procInfo.validateInterfaceFn) {
-          qDebug() << "[PCL Bridge] Calling process-interface validation "
-                      "routine (validateInterfaceFn)...";
-          api_bool valid = procInfo.validateInterfaceFn(hProcess, hInterface);
-          qDebug()
-              << "[PCL Bridge] Process-interface validation routine returned:"
-              << (bool)valid;
-        }
+      if (pendIt->second.hideRoutine) {
+        std::cout << "[PCL Bridge] Binding pending hideRoutine for hInterface to targetWidget = " << targetWidget << " sender = " << clientPtr << std::endl;
+        targetWidget->setProperty("hideRoutine", QVariant::fromValue(reinterpret_cast<void *>(pendIt->second.hideRoutine)));
+        targetWidget->setProperty("hideReceiver", QVariant::fromValue(reinterpret_cast<void *>(pendIt->second.hideReceiver)));
+        targetWidget->setProperty("pclSender", QVariant::fromValue(clientPtr));
+        static PCLEventFilter filter;
+        targetWidget->installEventFilter(&filter);
       }
+    }
+  }
+
+  // 4. Import the process parameters into the interface!
+  if (info.importProcessFn && hProcess) {
+    std::cout << "[PCL Bridge] Calling interface process import routine (importProcessFn)..." << std::endl;
+    info.importProcessFn(hInterface, hProcess);
+    std::cout << "[PCL Bridge] Interface process import routine completed." << std::endl;
+  }
+
+  // Fire top-level showRoutine if present on targetWidget to force layout sync!
+  QWidget *targetWidget = nullptr;
+  api_handle clientPtr = nullptr;
+  getWidgetAndClientForHandle(hInterface, targetWidget, clientPtr);
+  if (targetWidget) {
+    void *r = targetWidget->property("showRoutine").value<void *>();
+    void *rec = targetWidget->property("showReceiver").value<void *>();
+    void *snd = targetWidget->property("pclSender").value<void *>();
+    if (r && snd) {
+      std::cout << "[PCL Bridge] Explicitly firing top-level ShowEventRoutine post-import for sender = " << snd << std::endl;
+      auto callback = reinterpret_cast<pcl::control_event_routine>(r);
+      callback(reinterpret_cast<control_handle>(snd), reinterpret_cast<control_handle>(rec));
+    }
+    targetWidget->updateGeometry();
+    if (targetWidget->layout()) {
+      targetWidget->layout()->activate();
+      targetWidget->layout()->update();
+    }
+    targetWidget->adjustSize();
+  }
+
+  // 5. Run post-import global preference update & validation calls to synchronize control visibility & states!
+  if (info.globalPrefUpdatedFn) {
+    std::cout << "[PCL Bridge] Calling interface global preferences updated notification..." << std::endl;
+    info.globalPrefUpdatedFn(hInterface);
+    std::cout << "[PCL Bridge] Interface global preferences updated notification completed." << std::endl;
+  }
+
+  if (info.validateProcessFn && hProcess) {
+    std::cout << "[PCL Bridge] Calling interface process validation routine (validateProcessFn)..." << std::endl;
+    std::vector<char16_type> errorBuf(1024, 0);
+    api_bool valid = info.validateProcessFn(hInterface, hProcess, errorBuf.data(), errorBuf.size() - 1);
+    std::cout << "[PCL Bridge] Interface process validation routine returned: " << (bool)valid << std::endl;
+  }
+
+  if (hMetaProcess && hProcess) {
+    const auto &procInfo = g_processes[hMetaProcess];
+    if (procInfo.validateInterfaceFn) {
+      std::cout << "[PCL Bridge] Calling process-interface validation routine (validateInterfaceFn)..." << std::endl;
+      api_bool valid = procInfo.validateInterfaceFn(hProcess, hInterface);
+      std::cout << "[PCL Bridge] Process-interface validation routine returned: " << (bool)valid << std::endl;
     }
   }
 
