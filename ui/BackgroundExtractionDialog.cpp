@@ -335,6 +335,7 @@ void BackgroundExtractionDialog::onApplyClicked() {
         return;
     }
 
+    // Clear preview before applying
     if (m_previewChk->isChecked()) {
         win->restoreOriginalImage();
         m_previewChk->blockSignals(true);
@@ -343,7 +344,10 @@ void BackgroundExtractionDialog::onApplyClicked() {
         m_updatePreviewBtn->setEnabled(false);
     }
 
-    emit algorithmExecuted(algorithmName(), getConfig());
+    // Output same as input: in-place mutation via undo checkpoint + setElement
+    auto config = getConfig();
+    config["output_name"] = config.at("input_name"); // Ensure same name
+    emit algorithmExecuted(algorithmName(), config);
 }
 
 void BackgroundExtractionDialog::onPrefsClicked() {
@@ -462,9 +466,24 @@ void BackgroundExtractionDialog::onClearPointsClicked() {
 void BackgroundExtractionDialog::onSubWindowActivated(QMdiSubWindow* sub) {
     if (sub) {
         if (auto* win = qobject_cast<WorkspaceImageWindow*>(sub->widget())) {
-            // Only track image windows (not the dialog itself or the log window)
-            if (!win->hasPreviewActive() || m_currentTrackedSub == sub) {
-                m_currentTrackedSub = sub;
+            // Only update if the tracked window actually changed
+            if (m_currentTrackedSub != sub) {
+                // If a preview was active on the old window, clear it
+                bool wasPreviewActive = m_previewChk && m_previewChk->isChecked();
+                if (wasPreviewActive) {
+                    if (m_currentTrackedSub) {
+                        if (auto* oldWin = qobject_cast<WorkspaceImageWindow*>(m_currentTrackedSub->widget())) {
+                            oldWin->restoreOriginalImage();
+                        }
+                    }
+                    m_previewChk->blockSignals(true);
+                    m_previewChk->setChecked(false);
+                    m_previewChk->blockSignals(false);
+                    m_updatePreviewBtn->setEnabled(false);
+                }
+                if (!win->hasPreviewActive() || m_currentTrackedSub == sub) {
+                    m_currentTrackedSub = sub;
+                }
             }
         }
     }
@@ -474,25 +493,16 @@ void BackgroundExtractionDialog::onSubWindowActivated(QMdiSubWindow* sub) {
 void BackgroundExtractionDialog::updateBgeModes() {
     auto* mdi = findWorkspaceArea();
     if (!mdi) return;
-    
+
     auto* activeWin = getActiveImageWindow();
-    bool wasPreviewActive = m_previewChk && m_previewChk->isChecked();
-    
+
     for (auto* sub : mdi->subWindowList()) {
         if (auto* win = qobject_cast<WorkspaceImageWindow*>(sub->widget())) {
             if (win->imageView()) {
                 win->imageView()->setBgeMode(win == activeWin);
             }
-            if (wasPreviewActive && win != activeWin) {
-                win->restoreOriginalImage();
-            }
         }
     }
-
-    m_previewChk->blockSignals(true);
-    m_previewChk->setChecked(false);
-    m_previewChk->blockSignals(false);
-    m_updatePreviewBtn->setEnabled(false);
 }
 
 void BackgroundExtractionDialog::disableAllBgeModes() {

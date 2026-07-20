@@ -999,7 +999,9 @@ void MainWindow::executeAlgorithmSlot(const std::string& name, const std::map<st
     }
 
     std::map<std::string, std::string> resolvedConfig = config;
-    if (resolvedConfig.count("output_name")) {
+    bool isInPlace = resolvedConfig.count("input_name") && resolvedConfig.count("output_name")
+                     && resolvedConfig.at("input_name") == resolvedConfig.at("output_name");
+    if (!isInPlace && resolvedConfig.count("output_name")) {
         std::string outName = resolvedConfig.at("output_name");
         if (m_workspace.contains(outName)) {
             std::string base = outName;
@@ -1034,7 +1036,7 @@ void MainWindow::executeAlgorithmSlot(const std::string& name, const std::map<st
 
     // Wire up thread start and finish
     connect(thread, &QThread::started, worker, &AlgorithmWorker::run);
-    connect(worker, &AlgorithmWorker::finished, this, [this, thread, worker, name, resolvedConfig](bool success, const QString& errorMsg) {
+    connect(worker, &AlgorithmWorker::finished, this, [this, thread, worker, name, resolvedConfig, isInPlace](bool success, const QString& errorMsg) {
         // Stop thread event loop and wait for completion
         thread->quit();
         thread->wait();
@@ -1053,32 +1055,50 @@ void MainWindow::executeAlgorithmSlot(const std::string& name, const std::map<st
 
         if (success) {
             try {
-                if (resolvedConfig.count("input_name")) {
-                    QString qInputName = QString::fromStdString(resolvedConfig.at("input_name"));
-                    WorkspaceImageWindow* win = m_workspaceArea->getImageWindow(qInputName);
+                std::string outName = resolvedConfig.count("output_name") ? resolvedConfig.at("output_name") : "";
+                QString qOutName = QString::fromStdString(outName);
+
+                if (isInPlace && !outName.empty()) {
+                    // In-place: the algorithm already replaced the element in the workspace.
+                    // Save undo state BEFORE refreshing the window's element pointer so the
+                    // undo stack has the pre-apply version, then call setElement to reload.
+                    WorkspaceImageWindow* win = m_workspaceArea->getImageWindow(qOutName);
                     if (win) {
-                        win->notifyImageUpdated();
-                    }
-                }
-                if (resolvedConfig.count("output_name")) {
-                    std::string outName = resolvedConfig.at("output_name");
-                    QString qOutName = QString::fromStdString(outName);
-                    
-                    if (name == "BackgroundExtraction") {
-                        WorkspaceImageWindow* win = m_workspaceArea->getImageWindow(qOutName);
-                        if (win) {
+                        win->saveUndoState();
+                        if (m_workspace.contains(outName)) {
+                            win->setElement(m_workspace.getElement(outName));
+                        }
+                        if (name == "BackgroundExtraction") {
                             if (ImageView* iv = win->imageView()) {
                                 iv->setShowBgeControlPoints(false);
                             }
                         }
                     }
-
-                    showStatusMessage(QString("Successfully completed %1: %2").arg(QString::fromStdString(name)).arg(qOutName), 5000);
                 } else {
-                    showStatusMessage(QString("Successfully completed %1").arg(QString::fromStdString(name)), 5000);
+                    if (resolvedConfig.count("input_name")) {
+                        QString qInputName = QString::fromStdString(resolvedConfig.at("input_name"));
+                        WorkspaceImageWindow* win = m_workspaceArea->getImageWindow(qInputName);
+                        if (win) {
+                            win->notifyImageUpdated();
+                        }
+                    }
+                    if (!outName.empty()) {
+                        if (name == "BackgroundExtraction") {
+                            WorkspaceImageWindow* win = m_workspaceArea->getImageWindow(qOutName);
+                            if (win) {
+                                if (ImageView* iv = win->imageView()) {
+                                    iv->setShowBgeControlPoints(false);
+                                }
+                            }
+                        }
+                    }
                 }
+
+                showStatusMessage(outName.empty()
+                    ? QString("Successfully completed %1").arg(QString::fromStdString(name))
+                    : QString("Successfully completed %1: %2").arg(QString::fromStdString(name)).arg(qOutName), 5000);
             } catch (const std::exception& e) {
-                QMessageBox::critical(this, "Display Error", 
+                QMessageBox::critical(this, "Display Error",
                                      QString("Algorithm finished successfully, but failed to retrieve or display the output element:\n%1").arg(e.what()));
             }
         } else {
