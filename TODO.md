@@ -28,10 +28,5 @@
 
 ## PCL Bridge
 
-* [x] Font/SetFontWeight
-* [x] Font/GetFontHeight
-* [x] Sizer/SetSizerAlignment
-* [x] Control/SetControlFont
-* [x] Complete Control/ functionality (geometry, hierarchy, visibility, focus, stylesheets, palette colors, transformations, event routines, window properties)
-* [x] Class A Containers (Sizer, Dialog, Frame, GroupBox, TabBox)
-* [x] Class B Interactive Widgets & Controls (Button, Edit, TextBox, ComboBox, Slider, SpinBox, Label, BitmapBox, TreeBox, ScrollBox)
+* Keep adding necessary unimplemented functions
+* There are all sorts of init functions not being called, but they don't _seem_ to be necessary
