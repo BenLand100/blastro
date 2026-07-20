@@ -1,6 +1,6 @@
 # TODO
 
-* Double check pixel rejection when dithering (satellite trail in lion nebula data)
+* Double check pixel rejection when drizzle is enabled (satellite trail in lion nebula data)
 * Test OSC workflow
  
 ## Core
