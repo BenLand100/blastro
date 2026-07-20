@@ -25,6 +25,8 @@
 #include "io/FitsIO.h"
 #include <stdexcept>
 #include <iostream>
+#include <atomic>
+#include <cmath>
 #include <omp.h>
 #include <QDebug>
 #include <QElapsedTimer>
@@ -187,14 +189,17 @@ void AlignAlgorithm::execute(WorkspaceRegistry& workspace,
     std::vector<std::string> filepaths(count);
     std::vector<FrameMetadata> finalMetadata(count);
 
-    // 2. Warp each frame sequentially and write to disk
-    for (int i = 0; i < count; ++i) {
-        if (PreprocessingPipeline::isCancelled()) {
-            throw std::runtime_error("Preprocessing cancelled by user.");
-        }
+    // 2. Warp each frame in parallel and write to disk
+    std::atomic<int> completedFrames(0);
+    bool cancelled = false;
 
-        if (progress) {
-            progress(static_cast<int>(100.0 * i / count));
+    #pragma omp parallel for num_threads(threads) schedule(dynamic) shared(cancelled)
+    for (int i = 0; i < count; ++i) {
+        if (cancelled) continue;
+
+        if (PreprocessingPipeline::isCancelled()) {
+            cancelled = true;
+            continue;
         }
 
         // We only warp selected frames.
@@ -202,143 +207,199 @@ void AlignAlgorithm::execute(WorkspaceRegistry& workspace,
             names[i] = batch->frameName(i) + "_unselected";
             filepaths[i] = batch->frameFilepath(i);
             finalMetadata[i] = batch->frameMetadata(i);
+            int localCompleted = ++completedFrames;
+            if (progress) {
+                progress(static_cast<int>(100.0 * localCompleted / count));
+            }
             continue;
         }
 
         FrameMetadata meta = batch->frameMetadata(i);
         if (!meta.registered) {
-            Logger::warning("Align", QString("Frame %1 (%2) is selected but not registered. Skipping.")
-                            .arg(i).arg(QString::fromStdString(batch->frameName(i))));
+            Logger::warning("Align", QString("Frame %1/%2 (%3) is selected but not registered. Skipping.")
+                            .arg(i + 1).arg(count).arg(QString::fromStdString(batch->frameName(i))));
             names[i] = batch->frameName(i) + "_unregistered";
             filepaths[i] = batch->frameFilepath(i);
             finalMetadata[i] = meta;
+            int localCompleted = ++completedFrames;
+            if (progress) {
+                progress(static_cast<int>(100.0 * localCompleted / count));
+            }
             continue;
         }
 
-        ImageVariant frame = batch->getImage(i);
-        ImageVariant alignedFrame;
+        try {
+            QElapsedTimer frameTimer;
+            frameTimer.start();
 
-        // Adjust offsets if a reference frame is selected
-        std::array<double, 6> targetTransform = meta.transform;
+            ImageVariant frame = batch->getImage(i);
+            ImageVariant alignedFrame;
 
-        if (hasRef) {
-            std::array<double, 6> invRef = invertAffine(T_ref);
-            targetTransform = multiplyAffine(invRef, meta.transform);
-        }
+            // Adjust offsets if a reference frame is selected
+            std::array<double, 6> targetTransform = meta.transform;
 
-        double targetDx = targetTransform[2];
-        double targetDy = targetTransform[5];
-        double targetTheta = std::atan2(targetTransform[3] - targetTransform[1], targetTransform[0] + targetTransform[4]);
-
-        // Perform warping (backward-mapping interpolation, applying drizzle)
-        if (std::holds_alternative<GrayscaleImagePtr>(frame)) {
-            auto gray = std::get<GrayscaleImagePtr>(frame);
-            if (interpolation == "drizzle") {
-                double dropShrink = config.count("drop_shrink") ? std::stod(config.at("drop_shrink")) : 1.0;
-                auto drizzleResult = Warping::warpDrizzleGrayscale(gray, targetTransform, drizzleScale, dropShrink);
-                auto dataImg = drizzleResult.first;
-                auto weightImg = drizzleResult.second;
-                if (dataImg && weightImg) {
-                    dataImg->setMetadata(gray->metadata());
-                    weightImg->setMetadata(gray->metadata());
-                    
-                    std::string origPath = batch->frameFilepath(i);
-                    std::string outFilename = TempDirectory::getIntermediateFileName(origPath, "_aligned", i);
-                    std::string fullOutPath = tempDir + "/" + outFilename;
-
-                    FitsIO writer;
-                    if (!writer.writeDrizzleImage(fullOutPath, dataImg, weightImg)) {
-                        throw std::runtime_error("Failed to write temporary aligned drizzle frame to " + fullOutPath);
-                    }
-                    
-                    names[i] = batch->frameName(i) + "_aligned";
-                    filepaths[i] = fullOutPath;
-                    
-                    FrameMetadata finalMeta = meta;
-                    finalMeta.dx = targetDx;
-                    finalMeta.dy = targetDy;
-                    finalMeta.theta = targetTheta;
-                    finalMeta.transform = targetTransform;
-                    finalMetadata[i] = finalMeta;
-
-                    if (evictCache) {
-                        batch->clearCache(i);
-                    }
-                    continue;
-                }
-            } else {
-                auto warped = Warping::warpGrayscale(gray, targetTransform, drizzleScale, interpolation);
-                warped->setMetadata(gray->metadata());
-                alignedFrame = warped;
+            if (hasRef) {
+                std::array<double, 6> invRef = invertAffine(T_ref);
+                targetTransform = multiplyAffine(invRef, meta.transform);
             }
-        } else if (std::holds_alternative<RGBImagePtr>(frame)) {
-            auto rgb = std::get<RGBImagePtr>(frame);
-            if (interpolation == "drizzle") {
-                double dropShrink = config.count("drop_shrink") ? std::stod(config.at("drop_shrink")) : 1.0;
-                
-                auto rResult = Warping::warpDrizzleGrayscale(rgb->r(), targetTransform, drizzleScale, dropShrink);
-                auto gResult = Warping::warpDrizzleGrayscale(rgb->g(), targetTransform, drizzleScale, dropShrink);
-                auto bResult = Warping::warpDrizzleGrayscale(rgb->b(), targetTransform, drizzleScale, dropShrink);
-                
-                if (rResult.first && gResult.first && bResult.first) {
-                    std::string origPath = batch->frameFilepath(i);
-                    std::string outFilename = TempDirectory::getIntermediateFileName(origPath, "_aligned", i);
-                    std::string fullOutPath = tempDir + "/" + outFilename;
 
-                    FitsIO writer;
-                    if (!writer.writeDrizzleRGBImage(fullOutPath, 
-                            rResult.first, rResult.second,
-                            gResult.first, gResult.second,
-                            bResult.first, bResult.second)) {
-                        throw std::runtime_error("Failed to write temporary aligned RGB drizzle frame to " + fullOutPath);
-                    }
-                    
-                    names[i] = batch->frameName(i) + "_aligned";
-                    filepaths[i] = fullOutPath;
-                    
-                    FrameMetadata finalMeta = meta;
-                    finalMeta.dx = targetDx;
-                    finalMeta.dy = targetDy;
-                    finalMeta.theta = targetTheta;
-                    finalMeta.transform = targetTransform;
-                    finalMetadata[i] = finalMeta;
+            double targetDx = targetTransform[2];
+            double targetDy = targetTransform[5];
+            double targetTheta = std::atan2(targetTransform[3] - targetTransform[1], targetTransform[0] + targetTransform[4]);
 
-                    if (evictCache) {
-                        batch->clearCache(i);
+            // Perform warping (backward-mapping interpolation, applying drizzle)
+            if (std::holds_alternative<GrayscaleImagePtr>(frame)) {
+                auto gray = std::get<GrayscaleImagePtr>(frame);
+                if (interpolation == "drizzle") {
+                    double dropShrink = config.count("drop_shrink") ? std::stod(config.at("drop_shrink")) : 1.0;
+                    auto drizzleResult = Warping::warpDrizzleGrayscale(gray, targetTransform, drizzleScale, dropShrink);
+                    auto dataImg = drizzleResult.first;
+                    auto weightImg = drizzleResult.second;
+                    if (dataImg && weightImg) {
+                        dataImg->setMetadata(gray->metadata());
+                        weightImg->setMetadata(gray->metadata());
+                        
+                        std::string origPath = batch->frameFilepath(i);
+                        std::string outFilename = TempDirectory::getIntermediateFileName(origPath, "_aligned", i);
+                        std::string fullOutPath = tempDir + "/" + outFilename;
+
+                        FitsIO writer;
+                        if (!writer.writeDrizzleImage(fullOutPath, dataImg, weightImg)) {
+                            throw std::runtime_error("Failed to write temporary aligned drizzle frame to " + fullOutPath);
+                        }
+                        
+                        names[i] = batch->frameName(i) + "_aligned";
+                        filepaths[i] = fullOutPath;
+                        
+                        FrameMetadata finalMeta = meta;
+                        finalMeta.dx = targetDx;
+                        finalMeta.dy = targetDy;
+                        finalMeta.theta = targetTheta;
+                        finalMeta.transform = targetTransform;
+                        finalMetadata[i] = finalMeta;
+
+                        if (evictCache) {
+                            batch->clearCache(i);
+                        }
+
+                        int localCompleted = ++completedFrames;
+                        Logger::info("Align", QString("[%1/%2] Aligned frame '%3' (drizzle %4x): dx=%5, dy=%6, theta=%7 deg in %8 ms")
+                                     .arg(localCompleted).arg(count)
+                                     .arg(QString::fromStdString(batch->frameName(i)))
+                                     .arg(drizzleScale)
+                                     .arg(targetDx, 0, 'f', 2).arg(targetDy, 0, 'f', 2).arg(targetTheta * 180.0 / M_PI, 0, 'f', 3)
+                                     .arg(frameTimer.elapsed()));
+
+                        if (progress) {
+                            progress(static_cast<int>(100.0 * localCompleted / count));
+                        }
+                        continue;
                     }
-                    continue;
+                } else {
+                    auto warped = Warping::warpGrayscale(gray, targetTransform, drizzleScale, interpolation);
+                    warped->setMetadata(gray->metadata());
+                    alignedFrame = warped;
                 }
-            } else {
-                auto warped = Warping::warpRGB(rgb, targetTransform, drizzleScale, interpolation);
-                warped->setMetadata(rgb->metadata());
-                alignedFrame = warped;
+            } else if (std::holds_alternative<RGBImagePtr>(frame)) {
+                auto rgb = std::get<RGBImagePtr>(frame);
+                if (interpolation == "drizzle") {
+                    double dropShrink = config.count("drop_shrink") ? std::stod(config.at("drop_shrink")) : 1.0;
+                    
+                    auto rResult = Warping::warpDrizzleGrayscale(rgb->r(), targetTransform, drizzleScale, dropShrink);
+                    auto gResult = Warping::warpDrizzleGrayscale(rgb->g(), targetTransform, drizzleScale, dropShrink);
+                    auto bResult = Warping::warpDrizzleGrayscale(rgb->b(), targetTransform, drizzleScale, dropShrink);
+                    
+                    if (rResult.first && gResult.first && bResult.first) {
+                        std::string origPath = batch->frameFilepath(i);
+                        std::string outFilename = TempDirectory::getIntermediateFileName(origPath, "_aligned", i);
+                        std::string fullOutPath = tempDir + "/" + outFilename;
+
+                        FitsIO writer;
+                        if (!writer.writeDrizzleRGBImage(fullOutPath, 
+                                rResult.first, rResult.second,
+                                gResult.first, gResult.second,
+                                bResult.first, bResult.second)) {
+                            throw std::runtime_error("Failed to write temporary aligned RGB drizzle frame to " + fullOutPath);
+                        }
+                        
+                        names[i] = batch->frameName(i) + "_aligned";
+                        filepaths[i] = fullOutPath;
+                        
+                        FrameMetadata finalMeta = meta;
+                        finalMeta.dx = targetDx;
+                        finalMeta.dy = targetDy;
+                        finalMeta.theta = targetTheta;
+                        finalMeta.transform = targetTransform;
+                        finalMetadata[i] = finalMeta;
+
+                        if (evictCache) {
+                            batch->clearCache(i);
+                        }
+
+                        int localCompleted = ++completedFrames;
+                        Logger::info("Align", QString("[%1/%2] Aligned frame '%3' (RGB drizzle %4x): dx=%5, dy=%6, theta=%7 deg in %8 ms")
+                                     .arg(localCompleted).arg(count)
+                                     .arg(QString::fromStdString(batch->frameName(i)))
+                                     .arg(drizzleScale)
+                                     .arg(targetDx, 0, 'f', 2).arg(targetDy, 0, 'f', 2).arg(targetTheta * 180.0 / M_PI, 0, 'f', 3)
+                                     .arg(frameTimer.elapsed()));
+
+                        if (progress) {
+                            progress(static_cast<int>(100.0 * localCompleted / count));
+                        }
+                        continue;
+                    }
+                } else {
+                    auto warped = Warping::warpRGB(rgb, targetTransform, drizzleScale, interpolation);
+                    warped->setMetadata(rgb->metadata());
+                    alignedFrame = warped;
+                }
             }
+
+            // Save aligned frame to a temporary FITS file
+            std::string origPath = batch->frameFilepath(i);
+            std::string outFilename = TempDirectory::getIntermediateFileName(origPath, "_aligned", i);
+            std::string fullOutPath = tempDir + "/" + outFilename;
+
+            FitsIO writer;
+            if (!writer.writeImage(fullOutPath, alignedFrame)) {
+                throw std::runtime_error("Failed to write temporary aligned frame to " + fullOutPath);
+            }
+
+            names[i] = batch->frameName(i) + "_aligned";
+            filepaths[i] = fullOutPath;
+            
+            FrameMetadata finalMeta = meta;
+            finalMeta.dx = targetDx;
+            finalMeta.dy = targetDy;
+            finalMeta.theta = targetTheta;
+            finalMeta.transform = targetTransform;
+            finalMetadata[i] = finalMeta;
+
+            // Memory optimization: evict the loaded source frame from RAM
+            if (evictCache) {
+                batch->clearCache(i);
+            }
+
+            int localCompleted = ++completedFrames;
+            Logger::info("Align", QString("[%1/%2] Aligned frame '%3': dx=%4, dy=%5, theta=%6 deg in %7 ms")
+                         .arg(localCompleted).arg(count)
+                         .arg(QString::fromStdString(batch->frameName(i)))
+                         .arg(targetDx, 0, 'f', 2).arg(targetDy, 0, 'f', 2).arg(targetTheta * 180.0 / M_PI, 0, 'f', 3)
+                         .arg(frameTimer.elapsed()));
+
+            if (progress) {
+                progress(static_cast<int>(100.0 * localCompleted / count));
+            }
+        } catch (const std::exception& e) {
+            cancelled = true;
+            Logger::error("Align", QString("Error aligning frame %1 (%2): %3")
+                          .arg(i + 1).arg(QString::fromStdString(batch->frameName(i))).arg(e.what()));
         }
+    }
 
-        // Save aligned frame to a temporary FITS file
-        std::string origPath = batch->frameFilepath(i);
-        std::string outFilename = TempDirectory::getIntermediateFileName(origPath, "_aligned", i);
-        std::string fullOutPath = tempDir + "/" + outFilename;
-
-        FitsIO writer;
-        if (!writer.writeImage(fullOutPath, alignedFrame)) {
-            throw std::runtime_error("Failed to write temporary aligned frame to " + fullOutPath);
-        }
-
-        names[i] = batch->frameName(i) + "_aligned";
-        filepaths[i] = fullOutPath;
-        
-        FrameMetadata finalMeta = meta;
-        finalMeta.dx = targetDx;
-        finalMeta.dy = targetDy;
-        finalMeta.theta = targetTheta;
-        finalMeta.transform = targetTransform;
-        finalMetadata[i] = finalMeta;
-
-        // Memory optimization: evict the loaded source frame from RAM
-        if (evictCache) {
-            batch->clearCache(i);
-        }
+    if (cancelled) {
+        throw std::runtime_error("Image alignment failed or was cancelled by user.");
     }
 
     // 3. Create a new disk-backed ImageBatch pointing to the aligned FITS files
@@ -360,10 +421,11 @@ void AlignAlgorithm::execute(WorkspaceRegistry& workspace,
 
     if (progress) progress(100);
     
+    bool visible = config.count("visible") ? (config.at("visible") == "true") : true;
     if (workspace.contains(outputName)) {
         workspace.unregisterElement(outputName);
     }
-    workspace.registerElement(outputName, alignedBatch);
+    workspace.registerElement(outputName, alignedBatch, visible);
     Logger::success("Align", QString("Finished alignment. Aligned %1 frames in %2 ms (avg %3 ms per frame). Registered output batch: %4")
                     .arg(count).arg(totalTimer.elapsed()).arg(totalTimer.elapsed() / (count > 0 ? count : 1))
                     .arg(QString::fromStdString(outputName)));

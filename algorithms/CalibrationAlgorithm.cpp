@@ -367,13 +367,15 @@ void CalibrationAlgorithm::execute(WorkspaceRegistry& workspace,
             calibBatch->setFrameMetadata(i, inputBatch->frameMetadata(i));
         }
 
+        bool visible = config.count("visible") ? (config.at("visible") == "true") : true;
         if (progress) progress(100);
-        workspace.registerElement(outputName, calibBatch);
+        workspace.registerElement(outputName, calibBatch, visible);
         Logger::success("Calibration", QString("Batch calibration of %1 frames completed in %2 ms (avg %3 ms per frame)")
                         .arg(count).arg(totalTimer.elapsed()).arg(totalTimer.elapsed() / (count > 0 ? count : 1)));
     } else {
         // Single image calibration
         Logger::info("Calibration", "Calibrating single image...");
+        bool visible = config.count("visible") ? (config.at("visible") == "true") : true;
         bool isRGB = std::holds_alternative<RGBImagePtr>(inputElem);
         if (isRGB) {
             auto rgb = std::get<RGBImagePtr>(inputElem);
@@ -382,12 +384,12 @@ void CalibrationAlgorithm::execute(WorkspaceRegistry& workspace,
             auto calB = calibrateChannel(rgb->b(), biasB, darkB, flatB, flatMeanB, [progress](int p) { if (progress) progress(66 + p / 3); });
             auto calRGB = std::make_shared<RGBImage>(calR, calG, calB);
             calRGB->setMetadata(rgb->metadata());
-            workspace.registerElement(outputName, calRGB);
+            workspace.registerElement(outputName, calRGB, visible);
         } else {
             auto gray = std::get<GrayscaleImagePtr>(inputElem);
             auto calGray = calibrateChannel(gray, biasR, darkR, flatR, flatMeanR, progress);
             calGray->setMetadata(gray->metadata());
-            workspace.registerElement(outputName, calGray);
+            workspace.registerElement(outputName, calGray, visible);
         }
         Logger::success("Calibration", QString("Single image calibration completed in %1 ms").arg(totalTimer.elapsed()));
     }

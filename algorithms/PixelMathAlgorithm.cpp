@@ -445,10 +445,11 @@ void PixelMathAlgorithm::execute(WorkspaceRegistry& workspace,
     }
 
     // 6. Register back to the workspace (removing any existing element with same name first)
+    bool visible = config.count("visible") ? (config.at("visible") == "true") : true;
     if (workspace.contains(outputName)) {
         workspace.unregisterElement(outputName);
     }
-    workspace.registerElement(outputName, outputElem);
+    workspace.registerElement(outputName, outputElem, visible);
     if (progress) progress(100);
     Logger::success("PixelMath", QString("Finished execution in %1 ms. Registered output: %2")
                     .arg(totalTimer.elapsed()).arg(QString::fromStdString(outputName)));

@@ -622,15 +622,17 @@ void StackingAlgorithm::execute(WorkspaceRegistry& workspace,
             progress(100);
         }
 
+        bool visible = config.count("visible") ? (config.at("visible") == "true") : true;
         ImageVariant finalMaster = fits.readImage(tempOutPath);
         WorkspaceElement elem = std::visit([](auto&& arg) -> WorkspaceElement {
             return arg;
         }, finalMaster);
-        workspace.registerElement(outputName, elem);
+        workspace.registerElement(outputName, elem, visible);
         Logger::success("Stacking", QString("Finished chunked stacking of %1 frames in %2 ms. Registered output master: %3")
                         .arg(numSelected).arg(totalTimer.elapsed())
                         .arg(QString::fromStdString(outputName)));
     } else {
+        bool visible = config.count("visible") ? (config.at("visible") == "true") : true;
         if (isRGB) {
                     std::vector<GrayscaleImagePtr> rChannels;
                     std::vector<GrayscaleImagePtr> gChannels;
@@ -681,7 +683,7 @@ void StackingAlgorithm::execute(WorkspaceRegistry& workspace,
 
                     auto stackedRGB = std::make_shared<RGBImage>(stackedR, stackedG, stackedB);
                     stackedRGB->setMetadata(coalesced);
-                    workspace.registerElement(outputName, stackedRGB);
+                    workspace.registerElement(outputName, stackedRGB, visible);
         } else {
             std::vector<GrayscaleImagePtr> channels;
             channels.reserve(numSelected);
@@ -712,7 +714,7 @@ void StackingAlgorithm::execute(WorkspaceRegistry& workspace,
 
             auto stackedGray = stackChannels(channels, weightChannels, coeffAG, coeffBG, method, rejection, sigmaLow, sigmaHigh, quantileLow, quantileHigh, progress);
             stackedGray->setMetadata(coalesced);
-            workspace.registerElement(outputName, stackedGray);
+            workspace.registerElement(outputName, stackedGray, visible);
         }
         Logger::success("Stacking", QString("Finished RAM stacking of %1 frames in %2 ms. Registered output master: %3")
                         .arg(numSelected).arg(totalTimer.elapsed())

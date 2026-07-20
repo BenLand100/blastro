@@ -282,13 +282,15 @@ void DebayerAlgorithm::execute(WorkspaceRegistry& workspace,
             debayeredBatch->setFrameMetadata(i, inputBatch->frameMetadata(i));
         }
 
+        bool visible = config.count("visible") ? (config.at("visible") == "true") : true;
         if (progress) progress(100);
-        workspace.registerElement(outputName, debayeredBatch);
+        workspace.registerElement(outputName, debayeredBatch, visible);
         Logger::success("Debayer", QString("Finished batch debayering (%1 frames) in %2 ms (avg %3 ms per frame). Registered output: %4")
                         .arg(count).arg(totalTimer.elapsed()).arg(totalTimer.elapsed() / (count > 0 ? count : 1))
                         .arg(QString::fromStdString(outputName)));
     } else {
         // Single image debayering
+        bool visible = config.count("visible") ? (config.at("visible") == "true") : true;
         GrayscaleImagePtr gray = nullptr;
         if (std::holds_alternative<GrayscaleImagePtr>(inputElem)) {
             gray = std::get<GrayscaleImagePtr>(inputElem);
@@ -303,7 +305,7 @@ void DebayerAlgorithm::execute(WorkspaceRegistry& workspace,
         if (workspace.contains(outputName)) {
             workspace.unregisterElement(outputName);
         }
-        workspace.registerElement(outputName, debRGB);
+        workspace.registerElement(outputName, debRGB, visible);
         if (progress) progress(100);
     }
     Logger::success("Debayer", QString("Finished debayering in %1 ms. Registered output: %2")

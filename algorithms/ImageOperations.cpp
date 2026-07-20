@@ -20,6 +20,8 @@
 #include <cstring>
 #include <algorithm>
 #include <stdexcept>
+#include <cmath>
+#include <stack>
 
 namespace blastro {
 namespace ImageOperations {
@@ -213,17 +215,173 @@ ImageVariant rotate90CCW(const ImageVariant& img) {
 ImageVariant crop(const ImageVariant& img, const QRect& rect) {
     if (std::holds_alternative<GrayscaleImagePtr>(img)) {
         auto src = std::get<GrayscaleImagePtr>(img);
-        return std::make_shared<GrayscaleImage>(crop(src->buffer(), rect));
+        if (!src) return ImageVariant();
+        auto croppedBuf = crop(src->buffer(), rect);
+        if (!croppedBuf) return ImageVariant();
+        auto newImg = std::make_shared<GrayscaleImage>(croppedBuf);
+        ImageMetadata meta = src->metadata();
+        if (meta.fitsKeywords.count("CRPIX1")) {
+            try { meta.fitsKeywords["CRPIX1"] = std::to_string(std::stod(meta.fitsKeywords["CRPIX1"]) - rect.x()); } catch (...) {}
+        }
+        if (meta.fitsKeywords.count("CRPIX2")) {
+            try { meta.fitsKeywords["CRPIX2"] = std::to_string(std::stod(meta.fitsKeywords["CRPIX2"]) - rect.y()); } catch (...) {}
+        }
+        newImg->setMetadata(meta);
+        return newImg;
     } else if (std::holds_alternative<RGBImagePtr>(img)) {
         auto src = std::get<RGBImagePtr>(img);
-        return std::make_shared<RGBImage>(
-            std::make_shared<GrayscaleImage>(crop(src->r()->buffer(), rect)),
-            std::make_shared<GrayscaleImage>(crop(src->g()->buffer(), rect)),
-            std::make_shared<GrayscaleImage>(crop(src->b()->buffer(), rect))
-        );
+        if (!src) return ImageVariant();
+        auto rBuf = crop(src->r()->buffer(), rect);
+        auto gBuf = crop(src->g()->buffer(), rect);
+        auto bBuf = crop(src->b()->buffer(), rect);
+        if (!rBuf || !gBuf || !bBuf) return ImageVariant();
+        
+        ImageMetadata meta = src->metadata();
+        if (meta.fitsKeywords.count("CRPIX1")) {
+            try { meta.fitsKeywords["CRPIX1"] = std::to_string(std::stod(meta.fitsKeywords["CRPIX1"]) - rect.x()); } catch (...) {}
+        }
+        if (meta.fitsKeywords.count("CRPIX2")) {
+            try { meta.fitsKeywords["CRPIX2"] = std::to_string(std::stod(meta.fitsKeywords["CRPIX2"]) - rect.y()); } catch (...) {}
+        }
+
+        auto newR = std::make_shared<GrayscaleImage>(rBuf);
+        auto newG = std::make_shared<GrayscaleImage>(gBuf);
+        auto newB = std::make_shared<GrayscaleImage>(bBuf);
+        newR->setMetadata(meta);
+        newG->setMetadata(meta);
+        newB->setMetadata(meta);
+
+        auto newRgb = std::make_shared<RGBImage>(newR, newG, newB);
+        newRgb->setMetadata(meta);
+        return newRgb;
     }
     return ImageVariant();
 }
 
+QRect findLargestBoundingRectangle(const std::vector<FrameTransformInfo>& frames,
+                                   int targetW, int targetH,
+                                   double drizzleScale) {
+    if (frames.empty() || targetW <= 0 || targetH <= 0) {
+        return QRect(0, 0, 0, 0);
+    }
+    if (drizzleScale <= 0.0) drizzleScale = 1.0;
+
+    struct InvertedFrame {
+        double inv_a, inv_b, inv_tx;
+        double inv_c, inv_d, inv_ty;
+        double minX_src, maxX_src;
+        double minY_src, maxY_src;
+    };
+
+    std::vector<InvertedFrame> invFrames;
+    invFrames.reserve(frames.size());
+
+    for (const auto& f : frames) {
+        if (f.width <= 0 || f.height <= 0) continue;
+        double a = f.transform[0];
+        double b = f.transform[1];
+        double tx = f.transform[2];
+        double c = f.transform[3];
+        double d = f.transform[4];
+        double ty = f.transform[5];
+
+        double det = a * d - b * c;
+        if (std::abs(det) < 1e-9) continue;
+
+        double inv_det = 1.0 / det;
+        InvertedFrame inv;
+        inv.inv_a = d * inv_det;
+        inv.inv_b = -b * inv_det;
+        inv.inv_tx = (-d * tx + b * ty) * inv_det;
+        inv.inv_c = -c * inv_det;
+        inv.inv_d = a * inv_det;
+        inv.inv_ty = (-a * ty + c * tx) * inv_det;
+
+        inv.minX_src = 1.0;
+        inv.maxX_src = f.width - 2.0;
+        inv.minY_src = 1.0;
+        inv.maxY_src = f.height - 2.0;
+
+        invFrames.push_back(inv);
+    }
+
+    if (invFrames.empty()) {
+        return QRect(0, 0, targetW, targetH);
+    }
+
+    std::vector<int> heights(targetW, 0);
+    int maxArea = 0;
+    QRect bestRect(0, 0, 0, 0);
+
+    for (int y = 0; y < targetH; ++y) {
+        double yt = y / drizzleScale;
+
+        int rowStart = 0;
+        int rowEnd = targetW - 1;
+
+        for (const auto& f : invFrames) {
+            double Mx = f.inv_a / drizzleScale;
+            double Cx = f.inv_b * yt + f.inv_tx;
+
+            double My = f.inv_c / drizzleScale;
+            double Cy = f.inv_d * yt + f.inv_ty;
+
+            // Solve L <= M * X + C <= U
+            auto updateRange = [&](double M, double C, double L, double U) {
+                if (std::abs(M) < 1e-12) {
+                    if (C < L || C > U) {
+                        rowStart = targetW; // Invalid
+                    }
+                } else if (M > 0.0) {
+                    int minX = static_cast<int>(std::ceil((L - C) / M));
+                    int maxX = static_cast<int>(std::floor((U - C) / M));
+                    rowStart = std::max(rowStart, minX);
+                    rowEnd = std::min(rowEnd, maxX);
+                } else {
+                    int minX = static_cast<int>(std::ceil((U - C) / M));
+                    int maxX = static_cast<int>(std::floor((L - C) / M));
+                    rowStart = std::max(rowStart, minX);
+                    rowEnd = std::min(rowEnd, maxX);
+                }
+            };
+
+            updateRange(Mx, Cx, f.minX_src, f.maxX_src);
+            updateRange(My, Cy, f.minY_src, f.maxY_src);
+
+            if (rowStart > rowEnd) break;
+        }
+
+        // Update heights for monotonic stack
+        for (int x = 0; x < targetW; ++x) {
+            if (x >= rowStart && x <= rowEnd && rowStart <= rowEnd) {
+                heights[x] += 1;
+            } else {
+                heights[x] = 0;
+            }
+        }
+
+        // Monotonic stack to find max rectangle ending at row y
+        std::stack<int> st;
+        for (int x = 0; x <= targetW; ++x) {
+            int h = (x < targetW) ? heights[x] : 0;
+            while (!st.empty() && h < heights[st.top()]) {
+                int topH = heights[st.top()];
+                st.pop();
+                int leftX = st.empty() ? 0 : (st.top() + 1);
+                int currentW = x - leftX;
+                int area = topH * currentW;
+                if (area > maxArea) {
+                    maxArea = area;
+                    bestRect = QRect(leftX, y - topH + 1, currentW, topH);
+                }
+            }
+            st.push(x);
+        }
+    }
+
+    return bestRect;
+}
+
 } // namespace ImageOperations
 } // namespace blastro
+

@@ -245,10 +245,10 @@ void BackgroundExtractionAlgorithm::execute(WorkspaceRegistry& workspace,
             outBatch->setFrameMetadata(i, inputBatch->frameMetadata(i));
         }
 
-        if (progress) progress(100);
+        bool visible = config.count("visible") ? (config.at("visible") == "true") : true;
         if (workspace.contains(outputName))
             workspace.unregisterElement(outputName);
-        workspace.registerElement(outputName, outBatch);
+        workspace.registerElement(outputName, outBatch, visible);
 
         Logger::success("BackgroundExtraction", QString("Finished batch BGE (%1 frames) in %2 ms. Registered output: %3")
                         .arg(count).arg(totalTimer.elapsed()).arg(QString::fromStdString(outputName)));
@@ -277,9 +277,10 @@ void BackgroundExtractionAlgorithm::execute(WorkspaceRegistry& workspace,
         throw std::runtime_error("Background extraction is not supported on this element type");
     }
 
+    bool visible = config.count("visible") ? (config.at("visible") == "true") : true;
     if (workspace.contains(outputName))
         workspace.unregisterElement(outputName);
-    workspace.registerElement(outputName, outputElem);
+    workspace.registerElement(outputName, outputElem, visible);
 
     if (progress) progress(100);
     Logger::success("BackgroundExtraction", QString("Finished BGE in %1 ms. Registered output: %2")

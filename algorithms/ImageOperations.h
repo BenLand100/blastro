@@ -48,5 +48,18 @@ ImageVariant rotate90CW(const ImageVariant& img);
 ImageVariant rotate90CCW(const ImageVariant& img);
 ImageVariant crop(const ImageVariant& img, const QRect& rect);
 
+struct FrameTransformInfo {
+    std::array<double, 6> transform = {1.0, 0.0, 0.0, 0.0, 1.0, 0.0};
+    int width = 0;
+    int height = 0;
+};
+
+// Calculates the largest axis-aligned rectangle contained within the transformed bounds
+// of every provided frame info across target dimensions targetW x targetH.
+QRect findLargestBoundingRectangle(const std::vector<FrameTransformInfo>& frames,
+                                   int targetW, int targetH,
+                                   double drizzleScale = 1.0);
+
 } // namespace ImageOperations
 } // namespace blastro
+

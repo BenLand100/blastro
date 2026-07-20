@@ -2530,6 +2530,88 @@ static void mock_SetControlPosition(control_handle h, int32 x, int32 y) {
     w->move(x, y);
   }
 }
+
+static void mock_SetControlFocusStyle(control_handle h, int32 style) {
+  QWidget *widget = reinterpret_cast<QWidget *>(h);
+  qDebug() << "[PCL Bridge] SetControlFocusStyle:" << widget << "style =" << style;
+}
+
+static int32 mock_GetCharPixelWidth(const_font_handle f, int32 charCode) {
+  QString str = QString(QChar(static_cast<char32_t>(charCode)));
+  QFont font = QApplication::font();
+  QFontMetrics fm(font);
+  int32 w = fm.horizontalAdvance(str);
+  qDebug() << "[PCL Bridge] GetCharPixelWidth: charCode =" << charCode << "->" << w;
+  return w;
+}
+
+static void mock_SetSizerControlAlignment(sizer_handle s, control_handle c,
+                                          int32 alignment) {
+  QBoxLayout *lay = reinterpret_cast<QBoxLayout *>(s);
+  QWidget *w = reinterpret_cast<QWidget *>(c);
+  qDebug() << "[PCL Bridge] SetSizerControlAlignment: layout =" << lay
+           << "widget =" << w << "alignment =" << alignment;
+  if (lay && w) {
+    lay->setAlignment(w, Qt::Alignment(alignment));
+  }
+}
+
+static void mock_GetControlMinSize(const_control_handle h, int32 *w, int32 *h_size) {
+  const QWidget *widget = reinterpret_cast<const QWidget *>(h);
+  if (widget) {
+    if (w)
+      *w = widget->minimumWidth();
+    if (h_size)
+      *h_size = widget->minimumHeight();
+  } else {
+    if (w)
+      *w = 0;
+    if (h_size)
+      *h_size = 0;
+  }
+  qDebug() << "[PCL Bridge] GetControlMinSize:" << widget
+           << "->" << (w ? *w : 0) << "," << (h_size ? *h_size : 0);
+}
+
+static void mock_GetControlMaxSize(const_control_handle h, int32 *w, int32 *h_size) {
+  const QWidget *widget = reinterpret_cast<const QWidget *>(h);
+  if (widget) {
+    if (w)
+      *w = widget->maximumWidth();
+    if (h_size)
+      *h_size = widget->maximumHeight();
+  } else {
+    if (w)
+      *w = 0;
+    if (h_size)
+      *h_size = 0;
+  }
+  qDebug() << "[PCL Bridge] GetControlMaxSize:" << widget
+           << "->" << (w ? *w : 0) << "," << (h_size ? *h_size : 0);
+}
+
+static void mock_SetControlSize(control_handle h, int32 w, int32 h_size) {
+  QWidget *widget = reinterpret_cast<QWidget *>(h);
+  qDebug() << "[PCL Bridge] SetControlSize:" << widget << "width =" << w
+           << "height =" << h_size;
+  if (widget) {
+    if (w >= 0 && h_size >= 0) {
+      widget->resize(w, h_size);
+    } else if (w >= 0) {
+      widget->resize(w, widget->height());
+    } else if (h_size >= 0) {
+      widget->resize(widget->width(), h_size);
+    }
+  }
+}
+
+static api_bool mock_GetControlVisible(const_control_handle h) {
+  const QWidget *widget = reinterpret_cast<const QWidget *>(h);
+  bool visible = widget ? widget->isVisible() : false;
+  qDebug() << "[PCL Bridge] GetControlVisible:" << widget << "->" << visible;
+  return visible;
+}
+
 static api_bool mock_GetViewId(const_view_handle hView, char *id,
                                pcl::size_type *length) {
   if (!hView)
@@ -2698,8 +2780,22 @@ void PCLBridge::setupOverrides() {
                   reinterpret_cast<void *>(mock_SetControlEnabled));
   overridePCLStub("Control/EnsureControlLayoutUpdated",
                   reinterpret_cast<void *>(mock_EnsureControlLayoutUpdated));
+  overridePCLStub("Control/SetControlFocusStyle",
+                  reinterpret_cast<void *>(mock_SetControlFocusStyle));
   overridePCLStub("Font/GetStringPixelWidth",
                   reinterpret_cast<void *>(mock_GetStringPixelWidth));
+  overridePCLStub("Font/GetCharPixelWidth",
+                  reinterpret_cast<void *>(mock_GetCharPixelWidth));
+  overridePCLStub("Sizer/SetSizerControlAlignment",
+                  reinterpret_cast<void *>(mock_SetSizerControlAlignment));
+  overridePCLStub("Control/GetControlMinSize",
+                  reinterpret_cast<void *>(mock_GetControlMinSize));
+  overridePCLStub("Control/GetControlMaxSize",
+                  reinterpret_cast<void *>(mock_GetControlMaxSize));
+  overridePCLStub("Control/SetControlSize",
+                  reinterpret_cast<void *>(mock_SetControlSize));
+  overridePCLStub("Control/GetControlVisible",
+                  reinterpret_cast<void *>(mock_GetControlVisible));
   overridePCLStub("Control/SetChildControlToFocus",
                   reinterpret_cast<void *>(mock_SetChildControlToFocus));
   overridePCLStub("Control/SetChildCreateEventRoutine",

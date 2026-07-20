@@ -28,9 +28,13 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QElapsedTimer>
 #include <CCfits/CCfits>
 #include <cmath>
+#include <atomic>
+#include <omp.h>
 #include <stdexcept>
+#include "PreprocessingPipeline.h"
 
 namespace blastro {
 
@@ -189,6 +193,8 @@ void PlatesolveAlgorithm::execute(WorkspaceRegistry& workspace,
     };
 
     if (std::holds_alternative<GrayscaleImagePtr>(elem)) {
+        QElapsedTimer timer;
+        timer.start();
         auto img = std::get<GrayscaleImagePtr>(elem);
         std::string tempDir = TempDirectory::createTempDir("platesolve");
         std::string tempFits = tempDir + "/target.fits";
@@ -197,12 +203,18 @@ void PlatesolveAlgorithm::execute(WorkspaceRegistry& workspace,
             ImageMetadata meta = img->metadata();
             if (solveFile(tempFits, meta)) {
                 img->setMetadata(meta);
-                Logger::success("Platesolve", "Successfully solved grayscale image!");
+                Logger::success("Platesolve", QString("Successfully solved grayscale image '%1' (RA=%2 deg, DEC=%3 deg) in %4 ms")
+                                .arg(QString::fromStdString(inputName))
+                                .arg(meta.wcsRaCenter, 0, 'f', 4)
+                                .arg(meta.wcsDecCenter, 0, 'f', 4)
+                                .arg(timer.elapsed()));
             } else {
                 throw std::runtime_error("Platesolver failed to solve image.");
             }
         }
     } else if (std::holds_alternative<RGBImagePtr>(elem)) {
+        QElapsedTimer timer;
+        timer.start();
         auto img = std::get<RGBImagePtr>(elem);
         std::string tempDir = TempDirectory::createTempDir("platesolve");
         std::string tempFits = tempDir + "/target.fits";
@@ -211,7 +223,11 @@ void PlatesolveAlgorithm::execute(WorkspaceRegistry& workspace,
             ImageMetadata meta = img->metadata();
             if (solveFile(tempFits, meta)) {
                 img->setMetadata(meta);
-                Logger::success("Platesolve", "Successfully solved RGB image!");
+                Logger::success("Platesolve", QString("Successfully solved RGB image '%1' (RA=%2 deg, DEC=%3 deg) in %4 ms")
+                                .arg(QString::fromStdString(inputName))
+                                .arg(meta.wcsRaCenter, 0, 'f', 4)
+                                .arg(meta.wcsDecCenter, 0, 'f', 4)
+                                .arg(timer.elapsed()));
             } else {
                 throw std::runtime_error("Platesolver failed to solve image.");
             }
@@ -219,29 +235,76 @@ void PlatesolveAlgorithm::execute(WorkspaceRegistry& workspace,
     } else if (std::holds_alternative<ImageBatchPtr>(elem)) {
         auto batch = std::get<ImageBatchPtr>(elem);
         int count = batch->count();
-        int solvedCount = 0;
+        std::atomic<int> solvedCount(0);
+        std::atomic<int> completedCount(0);
+        bool cancelled = false;
+
+        int threads = Preferences::instance().getThreadCount();
+        if (threads <= 0) threads = 4;
+
+        #pragma omp parallel for num_threads(threads) schedule(dynamic) shared(cancelled)
         for (int i = 0; i < count; ++i) {
-            if (batch->isFrameSelected(i)) {
-                std::string path = batch->frameFilepath(i);
-                bool isTemp = false;
-                if (path.empty()) {
-                    std::string tempDir = TempDirectory::createTempDir("platesolve");
-                    path = tempDir + "/target_frame.fits";
-                    FitsIO writer;
-                    writer.writeImage(path, batch->getImage(i));
-                    isTemp = true;
-                }
-                FrameMetadata meta = batch->frameMetadata(i);
-                if (solveFile(path, meta.baseMetadata)) {
-                    batch->setFrameMetadata(i, meta);
-                    solvedCount++;
-                }
-                if (isTemp) {
-                    QFile::remove(QString::fromStdString(path));
-                }
+            if (cancelled) continue;
+            if (PreprocessingPipeline::isCancelled()) {
+                cancelled = true;
+                continue;
+            }
+
+            if (!batch->isFrameSelected(i)) {
+                int c = ++completedCount;
+                if (progress) progress(static_cast<int>(100.0 * c / count));
+                continue;
+            }
+
+            QElapsedTimer frameTimer;
+            frameTimer.start();
+
+            std::string path = batch->frameFilepath(i);
+            bool isTemp = false;
+            if (path.empty()) {
+                std::string tempDir = TempDirectory::createTempDir("platesolve");
+                path = tempDir + "/target_frame_" + std::to_string(i) + ".fits";
+                FitsIO writer;
+                writer.writeImage(path, batch->getImage(i));
+                isTemp = true;
+            }
+
+            FrameMetadata meta = batch->frameMetadata(i);
+            bool success = solveFile(path, meta.baseMetadata);
+            if (success) {
+                batch->setFrameMetadata(i, meta);
+                solvedCount++;
+            }
+
+            if (isTemp) {
+                QFile::remove(QString::fromStdString(path));
+            }
+
+            int c = ++completedCount;
+            if (success) {
+                Logger::info("Platesolve", QString("[%1/%2] Solved frame '%3' (RA=%4 deg, DEC=%5 deg) in %6 ms")
+                             .arg(c).arg(count)
+                             .arg(QString::fromStdString(batch->frameName(i)))
+                             .arg(meta.baseMetadata.wcsRaCenter, 0, 'f', 4)
+                             .arg(meta.baseMetadata.wcsDecCenter, 0, 'f', 4)
+                             .arg(frameTimer.elapsed()));
+            } else {
+                Logger::warning("Platesolve", QString("[%1/%2] Failed to solve frame '%3' after %4 ms")
+                                .arg(c).arg(count)
+                                .arg(QString::fromStdString(batch->frameName(i)))
+                                .arg(frameTimer.elapsed()));
+            }
+
+            if (progress) {
+                progress(static_cast<int>(100.0 * c / count));
             }
         }
-        Logger::success("Platesolve", QString("Solved %1 / %2 frames in batch!").arg(solvedCount).arg(count));
+
+        if (cancelled) {
+            throw std::runtime_error("Platesolving was cancelled by user.");
+        }
+
+        Logger::success("Platesolve", QString("Finished platesolving batch. Solved %1 / %2 frames.").arg(solvedCount.load()).arg(count));
     }
 }
 
