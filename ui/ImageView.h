@@ -80,7 +80,13 @@ public:
     void setStretchParams(const std::array<double, 3>& b, const std::array<double, 3>& w, const std::array<double, 3>& m);
     void setPreviewImage(const ImageVariant& previewImage);
     void clearPreviewImage();
-    bool hasPreviewImage() const { return m_previewImage.index() != 0 && std::get<0>(m_previewImage) != nullptr; }
+    bool hasPreviewImage() const {
+        if (std::holds_alternative<GrayscaleImagePtr>(m_previewImage))
+            return std::get<GrayscaleImagePtr>(m_previewImage) != nullptr;
+        if (std::holds_alternative<RGBImagePtr>(m_previewImage))
+            return std::get<RGBImagePtr>(m_previewImage) != nullptr;
+        return false;
+    }
 
     void setLivePreview(const std::vector<std::vector<unsigned char>>& liveLut,
                         const std::vector<unsigned char>& liveSatLut = std::vector<unsigned char>(),
