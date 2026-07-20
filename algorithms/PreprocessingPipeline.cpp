@@ -17,6 +17,7 @@
  */
 
 #include "PreprocessingPipeline.h"
+#include "ImageOperations.h"
 #include "StackingAlgorithm.h"
 #include "CalibrationAlgorithm.h"
 #include "DebayerAlgorithm.h"
@@ -188,6 +189,8 @@ void PreprocessingPipeline::execute(WorkspaceRegistry& workspace,
     double dropShrink = config.count("drop_shrink") ? std::stod(config.at("drop_shrink")) : 1.0;
     bool keepIntermediate = config.count("keep_intermediate") ? (config.at("keep_intermediate") == "true") : false;
     bool overwriteMasters = config.count("overwrite_masters") ? (config.at("overwrite_masters") == "true") : false;
+    bool openCalibStacks = config.count("open_calib_stacks") ? (config.at("open_calib_stacks") == "true") : false;
+    bool openLightMasters = config.count("open_light_masters") ? (config.at("open_light_masters") == "true") : true;
 
     FitsIO fits;
 
@@ -342,7 +345,7 @@ void PreprocessingPipeline::execute(WorkspaceRegistry& workspace,
                     Logger::info("Preprocessing", QString("Found cached master bias at %1. Loading it.").arg(QString::fromStdString(masterPath)));
                     Logger::info("Preprocessing", QString("Step '%1' skipped: using cached master.").arg(QString::fromStdString(steps[currentStepIndex])));
                     auto masterImg = fits.readImage(masterPath);
-                    workspace.registerElement(masterName, std::visit([](auto&& arg) -> WorkspaceElement { return arg; }, masterImg));
+                    workspace.registerElement(masterName, std::visit([](auto&& arg) -> WorkspaceElement { return arg; }, masterImg), openCalibStacks);
                     masterBiasNames[key] = masterName;
                     if (m_stepCallback) {
                         m_stepCallback(currentStepIndex, 100, 0.0, true, true, true);
@@ -356,12 +359,13 @@ void PreprocessingPipeline::execute(WorkspaceRegistry& workspace,
 
                     auto batch = fits.readBatch(g.filepaths);
                     std::string tempBatchName = "temp_bias_batch_" + key;
-                    workspace.registerElement(tempBatchName, batch);
+                    workspace.registerElement(tempBatchName, batch, false);
 
                     StackingAlgorithm stacker;
                     runStep(stacker, {
                         {"input_name", tempBatchName},
                         {"output_name", masterName},
+                        {"visible", openCalibStacks ? "true" : "false"},
                         {"method", config.count("bias_dark_stack_method") ? config.at("bias_dark_stack_method") : "average"},
                         {"rejection", config.count("bias_dark_rejection") ? config.at("bias_dark_rejection") : "sigmaclip"},
                         {"sigma_low", config.count("bias_dark_sigma_low") ? config.at("bias_dark_sigma_low") : "3.0"},
@@ -392,7 +396,7 @@ void PreprocessingPipeline::execute(WorkspaceRegistry& workspace,
                     Logger::info("Preprocessing", QString("Found cached master dark at %1. Loading it.").arg(QString::fromStdString(masterPath)));
                     Logger::info("Preprocessing", QString("Step '%1' skipped: using cached master.").arg(QString::fromStdString(steps[currentStepIndex])));
                     auto masterImg = fits.readImage(masterPath);
-                    workspace.registerElement(masterName, std::visit([](auto&& arg) -> WorkspaceElement { return arg; }, masterImg));
+                    workspace.registerElement(masterName, std::visit([](auto&& arg) -> WorkspaceElement { return arg; }, masterImg), openCalibStacks);
                     masterDarkNames[key] = masterName;
                     if (m_stepCallback) {
                         m_stepCallback(currentStepIndex, 100, 0.0, true, true, true);
@@ -406,12 +410,13 @@ void PreprocessingPipeline::execute(WorkspaceRegistry& workspace,
 
                     auto batch = fits.readBatch(g.filepaths);
                     std::string tempBatchName = "temp_dark_batch_" + key;
-                    workspace.registerElement(tempBatchName, batch);
+                    workspace.registerElement(tempBatchName, batch, false);
 
                     StackingAlgorithm stacker;
                     runStep(stacker, {
                         {"input_name", tempBatchName},
                         {"output_name", masterName},
+                        {"visible", openCalibStacks ? "true" : "false"},
                         {"method", config.count("bias_dark_stack_method") ? config.at("bias_dark_stack_method") : "average"},
                         {"rejection", config.count("bias_dark_rejection") ? config.at("bias_dark_rejection") : "sigmaclip"},
                         {"sigma_low", config.count("bias_dark_sigma_low") ? config.at("bias_dark_sigma_low") : "3.0"},
@@ -441,7 +446,7 @@ void PreprocessingPipeline::execute(WorkspaceRegistry& workspace,
                 if (!overwriteMasters && QFileInfo::exists(QString::fromStdString(masterPath))) {
                     Logger::info("Preprocessing", QString("Found cached master flat at %1. Loading it.").arg(QString::fromStdString(masterPath)));
                     auto masterImg = fits.readImage(masterPath);
-                    workspace.registerElement(masterName, std::visit([](auto&& arg) -> WorkspaceElement { return arg; }, masterImg));
+                    workspace.registerElement(masterName, std::visit([](auto&& arg) -> WorkspaceElement { return arg; }, masterImg), openCalibStacks);
                     masterFlatNames[key] = masterName;
                     for (int step = 0; step < 2; ++step) {
                         Logger::info("Preprocessing", QString("Step '%1' skipped: using cached master.").arg(QString::fromStdString(steps[currentStepIndex])));
@@ -492,7 +497,7 @@ void PreprocessingPipeline::execute(WorkspaceRegistry& workspace,
 
                     auto batch = fits.readBatch(g.filepaths);
                     std::string tempBatchName = "temp_flat_batch_" + key;
-                    workspace.registerElement(tempBatchName, batch);
+                    workspace.registerElement(tempBatchName, batch, false);
 
                     std::string calibBatchName = "calib_flat_batch_" + key;
 
@@ -505,6 +510,7 @@ void PreprocessingPipeline::execute(WorkspaceRegistry& workspace,
                     runStep(calibrator, {
                         {"input_name", tempBatchName},
                         {"output_name", calibBatchName},
+                        {"visible", "false"},
                         {"bias_name", finalBias},
                         {"dark_name", finalDark},
                         {"flat_name", ""} // No flat for flats
@@ -519,6 +525,7 @@ void PreprocessingPipeline::execute(WorkspaceRegistry& workspace,
                     runStep(stacker, {
                         {"input_name", calibBatchName},
                         {"output_name", masterName},
+                        {"visible", openCalibStacks ? "true" : "false"},
                         {"method", config.count("flat_stack_method") ? config.at("flat_stack_method") : "average"},
                         {"rejection", config.count("flat_rejection") ? config.at("flat_rejection") : "sigmaclip"},
                         {"sigma_low", config.count("flat_sigma_low") ? config.at("flat_sigma_low") : "3.0"},
@@ -602,12 +609,13 @@ void PreprocessingPipeline::execute(WorkspaceRegistry& workspace,
 
                 auto batch = fits.readBatch(g.filepaths);
                 std::string tempBatchName = "temp_light_batch_" + key;
-                workspace.registerElement(tempBatchName, batch);
+                workspace.registerElement(tempBatchName, batch, false);
 
                 CalibrationAlgorithm calibrator;
                 runStep(calibrator, {
                     {"input_name", tempBatchName},
                     {"output_name", calibBatchName},
+                    {"visible", "false"},
                     {"bias_name", finalBias},
                     {"dark_name", finalDark},
                     {"flat_name", flatMaster}
@@ -628,6 +636,7 @@ void PreprocessingPipeline::execute(WorkspaceRegistry& workspace,
                     runStep(debayerer, {
                         {"input_name", calibBatchName},
                         {"output_name", debayerBatchName},
+                        {"visible", "false"},
                         {"pattern", bayerPattern},
                         {"method", debayerMethod},
                         {"green_equalize", config.count("green_equalize") ? config.at("green_equalize") : "false"}
@@ -946,6 +955,7 @@ void PreprocessingPipeline::execute(WorkspaceRegistry& workspace,
                 std::map<std::string, std::string> bgeConfig = {
                     {"input_name", name},
                     {"output_name", bgeBatchName},
+                    {"visible", "false"},
                     {"order", config.count("bge_poly_order") ? config.at("bge_poly_order") : "3"},
                     {"grid_size", std::to_string(gridSize)},
                     {"method", config.count("bge_model_method") ? config.at("bge_model_method") : "Polynomial"},
@@ -965,6 +975,9 @@ void PreprocessingPipeline::execute(WorkspaceRegistry& workspace,
             }
         }
 
+        std::vector<std::string> finalMasterNames;
+        std::vector<std::vector<ImageOperations::FrameTransformInfo>> allBatchFrameTransforms;
+
         // 3. Align and Stack Phase: Align and stack each batch
         for (size_t k = 0; k < currentBatchNames.size(); ++k) {
             std::string name = currentBatchNames[k];
@@ -981,6 +994,7 @@ void PreprocessingPipeline::execute(WorkspaceRegistry& workspace,
             std::map<std::string, std::string> alignConfig = {
                 {"input_name", name},
                 {"output_name", alignedBatchName},
+                {"visible", "false"},
                 {"drizzle_scale", std::to_string(drizzleScale)},
                 {"reference_mode", alignRefMode},
                 {"interpolation_method", interpMethod},
@@ -1000,6 +1014,34 @@ void PreprocessingPipeline::execute(WorkspaceRegistry& workspace,
                 }
             });
 
+            std::vector<ImageOperations::FrameTransformInfo> batchFrames;
+            std::string sourceBatchName = workspace.contains(alignedBatchName) ? alignedBatchName : (workspace.contains(name) ? name : "");
+            if (!sourceBatchName.empty()) {
+                auto batch = std::get<ImageBatchPtr>(workspace.getElement(sourceBatchName));
+                int count = batch->count();
+                for (int i = 0; i < count; ++i) {
+                    if (batch->isFrameSelected(i)) {
+                        FrameMetadata meta = batch->frameMetadata(i);
+                        if (meta.registered) {
+                            std::array<double, 6> T_target = meta.transform;
+                            auto imgVar = batch->getImage(i);
+                            int w = 0, h = 0;
+                            if (std::holds_alternative<GrayscaleImagePtr>(imgVar)) {
+                                auto g = std::get<GrayscaleImagePtr>(imgVar);
+                                if (g) { w = g->width(); h = g->height(); }
+                            } else if (std::holds_alternative<RGBImagePtr>(imgVar)) {
+                                auto rgb = std::get<RGBImagePtr>(imgVar);
+                                if (rgb) { w = rgb->width(); h = rgb->height(); }
+                            }
+                            if (w > 0 && h > 0) {
+                                batchFrames.push_back({T_target, w, h});
+                            }
+                        }
+                    }
+                }
+            }
+            allBatchFrameTransforms.push_back(batchFrames);
+
             std::string finalMasterName = origName + "_stacked";
             if (workspace.contains(finalMasterName)) {
                 std::string base = finalMasterName;
@@ -1011,20 +1053,23 @@ void PreprocessingPipeline::execute(WorkspaceRegistry& workspace,
                 }
                 finalMasterName = candidate;
             }
+            finalMasterNames.push_back(finalMasterName);
 
             Logger::info("Preprocessing", QString("Stacking final preprocessed master light for batch %1...").arg(QString::fromStdString(name)));
             
             bool scaleAdditive = config.count("light_scale_additive") ? (config.at("light_scale_additive") == "true") : true;
             bool scaleMultiplicative = config.count("light_scale_multiplicative") ? (config.at("light_scale_multiplicative") == "true") : true;
+            bool autocrop = config.count("autocrop") ? (config.at("autocrop") == "true") : false;
             bool correctPedestal = config.count("correct_pedestal") ? (config.at("correct_pedestal") == "true") : false;
             bool clampMax = config.count("clamp_max") ? (config.at("clamp_max") == "true") : false;
             bool platesolveStacks = config.count("platesolve_stacks") ? (config.at("platesolve_stacks") == "true") : false;
-            bool saveInStacking = !correctPedestal && !clampMax && !platesolveStacks;
+            bool saveInStacking = !autocrop && !correctPedestal && !clampMax && !platesolveStacks;
 
             StackingAlgorithm stacker;
             runStep(stacker, {
                 {"input_name", alignedBatchName},
                 {"output_name", finalMasterName},
+                {"visible", openLightMasters ? "true" : "false"},
                 {"method", config.count("light_stack_method") ? config.at("light_stack_method") : "average"},
                 {"rejection", config.count("light_rejection") ? config.at("light_rejection") : "winsorized"},
                 {"sigma_low", config.count("light_sigma_low") ? config.at("light_sigma_low") : "3.0"},
@@ -1036,10 +1081,15 @@ void PreprocessingPipeline::execute(WorkspaceRegistry& workspace,
                 {"scale_multiplicative", scaleMultiplicative ? "true" : "false"}
             }, [&]() {
                 if (!keepIntermediate) {
-                    workspace.unregisterElement(alignedBatchName);
-                }
-                if (runBGE && !keepIntermediate) {
-                    workspace.unregisterElement(name);
+                    if (workspace.contains(alignedBatchName)) {
+                        workspace.unregisterElement(alignedBatchName);
+                    }
+                    if (workspace.contains(name)) {
+                        workspace.unregisterElement(name);
+                    }
+                    if (workspace.contains(origName) && origName != finalMasterName) {
+                        workspace.unregisterElement(origName);
+                    }
                 }
                 if (saveInStacking) {
                     auto masterElem = workspace.getElement(finalMasterName);
@@ -1048,8 +1098,183 @@ void PreprocessingPipeline::execute(WorkspaceRegistry& workspace,
                     Logger::info("Preprocessing", QString("Saved final stacked master light to: %1").arg(QString::fromStdString(finalOutPath)));
                 }
             });
+        }
 
-            if (correctPedestal || clampMax) {
+        bool autocrop = config.count("autocrop") ? (config.at("autocrop") == "true") : false;
+        bool correctPedestal = config.count("correct_pedestal") ? (config.at("correct_pedestal") == "true") : false;
+        bool clampMax = config.count("clamp_max") ? (config.at("clamp_max") == "true") : false;
+        bool platesolveStacks = config.count("platesolve_stacks") ? (config.at("platesolve_stacks") == "true") : false;
+
+        auto toWorkspaceElement = [](const ImageVariant& var) -> WorkspaceElement {
+            if (std::holds_alternative<GrayscaleImagePtr>(var)) {
+                return std::get<GrayscaleImagePtr>(var);
+            } else if (std::holds_alternative<RGBImagePtr>(var)) {
+                return std::get<RGBImagePtr>(var);
+            }
+            return WorkspaceElement();
+        };
+
+        auto toImageVariant = [](const WorkspaceElement& elem) -> ImageVariant {
+            if (std::holds_alternative<GrayscaleImagePtr>(elem)) {
+                return std::get<GrayscaleImagePtr>(elem);
+            } else if (std::holds_alternative<RGBImagePtr>(elem)) {
+                return std::get<RGBImagePtr>(elem);
+            }
+            return ImageVariant();
+        };
+
+        // 4. Autocrop Phase
+        if (autocrop) {
+            if (alignMutually) {
+                if (m_cancelCallback && m_cancelCallback()) {
+                    throw std::runtime_error("Preprocessing cancelled by user.");
+                }
+                if (m_stepCallback) {
+                    m_stepCallback(currentStepIndex, 0, 0.0, false, false, false);
+                }
+                stepTimer.start();
+
+                try {
+                    std::vector<ImageOperations::FrameTransformInfo> allFrames;
+                    int targetW = 0;
+                    int targetH = 0;
+
+                    for (size_t k = 0; k < currentBatchNames.size(); ++k) {
+                        if (k < allBatchFrameTransforms.size()) {
+                            for (const auto& ft : allBatchFrameTransforms[k]) {
+                                allFrames.push_back(ft);
+                            }
+                        }
+
+                        if (targetW == 0 && targetH == 0 && k < finalMasterNames.size() && workspace.contains(finalMasterNames[k])) {
+                            auto masterElem = workspace.getElement(finalMasterNames[k]);
+                            if (std::holds_alternative<GrayscaleImagePtr>(masterElem)) {
+                                targetW = std::get<GrayscaleImagePtr>(masterElem)->width();
+                                targetH = std::get<GrayscaleImagePtr>(masterElem)->height();
+                            } else if (std::holds_alternative<RGBImagePtr>(masterElem)) {
+                                targetW = std::get<RGBImagePtr>(masterElem)->width();
+                                targetH = std::get<RGBImagePtr>(masterElem)->height();
+                            }
+                        }
+                    }
+
+                    QRect cropRect = ImageOperations::findLargestBoundingRectangle(allFrames, targetW, targetH, drizzleScale);
+
+                    bool performCrop = (cropRect.width() > 0 && cropRect.height() > 0 &&
+                                        (cropRect.width() < targetW || cropRect.height() < targetH || cropRect.x() > 0 || cropRect.y() > 0));
+
+                    if (performCrop) {
+                        Logger::info("Preprocessing", QString("Autocrop (mutually aligned): Crop rectangle (%1, %2, %3x%4) out of target (%5x%6), keeping %7% area")
+                                     .arg(cropRect.x()).arg(cropRect.y()).arg(cropRect.width()).arg(cropRect.height())
+                                     .arg(targetW).arg(targetH)
+                                     .arg(QString::number(100.0 * (cropRect.width() * cropRect.height()) / (targetW * targetH), 'f', 1)));
+
+                        for (const auto& masterName : finalMasterNames) {
+                            if (workspace.contains(masterName)) {
+                                auto masterElem = workspace.getElement(masterName);
+                                auto croppedVar = ImageOperations::crop(toImageVariant(masterElem), cropRect);
+                                workspace.registerElement(masterName, toWorkspaceElement(croppedVar), openLightMasters);
+
+                                if (!correctPedestal && !clampMax && !platesolveStacks) {
+                                    std::string finalOutPath = outDir + "/" + masterName + ".fits";
+                                    fits.writeImage(finalOutPath, croppedVar);
+                                    Logger::info("Preprocessing", QString("Saved autocropped stacked master light to: %1").arg(QString::fromStdString(finalOutPath)));
+                                }
+                            }
+                        }
+                    } else {
+                        Logger::info("Preprocessing", "Autocrop (mutually aligned): Full frame is covered across all stacks, no crop needed.");
+                    }
+
+                    if (m_stepCallback) {
+                        m_stepCallback(currentStepIndex, 100, stepTimer.elapsed() / 1000.0, true, true, false);
+                    }
+                    if (progress) {
+                        progress((currentStepIndex + 1) * 100 / totalSteps);
+                    }
+                    currentStepIndex++;
+                } catch (...) {
+                    if (m_stepCallback) {
+                        m_stepCallback(currentStepIndex, 100, stepTimer.elapsed() / 1000.0, true, false, false);
+                    }
+                    throw;
+                }
+            } else {
+                for (size_t k = 0; k < currentBatchNames.size(); ++k) {
+                    if (m_cancelCallback && m_cancelCallback()) {
+                        throw std::runtime_error("Preprocessing cancelled by user.");
+                    }
+                    if (m_stepCallback) {
+                        m_stepCallback(currentStepIndex, 0, 0.0, false, false, false);
+                    }
+                    stepTimer.start();
+
+                    try {
+                        std::string masterName = finalMasterNames[k];
+
+                        std::vector<ImageOperations::FrameTransformInfo> stackFrames;
+                        if (k < allBatchFrameTransforms.size()) {
+                            stackFrames = allBatchFrameTransforms[k];
+                        }
+                        int targetW = 0;
+                        int targetH = 0;
+
+                        if (workspace.contains(masterName)) {
+                            auto masterElem = workspace.getElement(masterName);
+                            if (std::holds_alternative<GrayscaleImagePtr>(masterElem)) {
+                                targetW = std::get<GrayscaleImagePtr>(masterElem)->width();
+                                targetH = std::get<GrayscaleImagePtr>(masterElem)->height();
+                            } else if (std::holds_alternative<RGBImagePtr>(masterElem)) {
+                                targetW = std::get<RGBImagePtr>(masterElem)->width();
+                                targetH = std::get<RGBImagePtr>(masterElem)->height();
+                            }
+                        }
+
+                        QRect cropRect = ImageOperations::findLargestBoundingRectangle(stackFrames, targetW, targetH, drizzleScale);
+
+                        bool performCrop = (cropRect.width() > 0 && cropRect.height() > 0 &&
+                                            (cropRect.width() < targetW || cropRect.height() < targetH || cropRect.x() > 0 || cropRect.y() > 0));
+
+                        if (performCrop && workspace.contains(masterName)) {
+                            Logger::info("Preprocessing", QString("Autocrop (%1): Crop rectangle (%2, %3, %4x%5) out of target (%6x%7), keeping %8% area")
+                                         .arg(QString::fromStdString(masterName))
+                                         .arg(cropRect.x()).arg(cropRect.y()).arg(cropRect.width()).arg(cropRect.height())
+                                         .arg(targetW).arg(targetH)
+                                         .arg(QString::number(100.0 * (cropRect.width() * cropRect.height()) / (targetW * targetH), 'f', 1)));
+
+                            auto masterElem = workspace.getElement(masterName);
+                            auto croppedVar = ImageOperations::crop(toImageVariant(masterElem), cropRect);
+                            workspace.registerElement(masterName, toWorkspaceElement(croppedVar), openLightMasters);
+
+                            if (!correctPedestal && !clampMax && !platesolveStacks) {
+                                std::string finalOutPath = outDir + "/" + masterName + ".fits";
+                                fits.writeImage(finalOutPath, croppedVar);
+                                Logger::info("Preprocessing", QString("Saved autocropped stacked master light to: %1").arg(QString::fromStdString(finalOutPath)));
+                            }
+                        } else {
+                            Logger::info("Preprocessing", QString("Autocrop (%1): Full frame is covered, no crop needed.").arg(QString::fromStdString(masterName)));
+                        }
+
+                        if (m_stepCallback) {
+                            m_stepCallback(currentStepIndex, 100, stepTimer.elapsed() / 1000.0, true, true, false);
+                        }
+                        if (progress) {
+                            progress((currentStepIndex + 1) * 100 / totalSteps);
+                        }
+                        currentStepIndex++;
+                    } catch (...) {
+                        if (m_stepCallback) {
+                            m_stepCallback(currentStepIndex, 100, stepTimer.elapsed() / 1000.0, true, false, false);
+                        }
+                        throw;
+                    }
+                }
+            }
+        }
+
+        // 5. Pedestal / Clamp Max Phase
+        if (correctPedestal || clampMax) {
+            for (const auto& finalMasterName : finalMasterNames) {
                 if (m_cancelCallback && m_cancelCallback()) {
                     throw std::runtime_error("Preprocessing cancelled by user.");
                 }
@@ -1134,8 +1359,11 @@ void PreprocessingPipeline::execute(WorkspaceRegistry& workspace,
                     throw;
                 }
             }
+        }
 
-            if (platesolveStacks) {
+        // 6. Platesolve Phase
+        if (platesolveStacks) {
+            for (const auto& finalMasterName : finalMasterNames) {
                 Logger::info("Preprocessing", QString("Platesolving stacked master '%1'...").arg(QString::fromStdString(finalMasterName)));
                 bool blindSolve = config.count("platesolve_blind") ? (config.at("platesolve_blind") == "true") : true;
                 std::string raHint = blindSolve ? "-1.0" : (config.count("platesolve_ra_hint") ? config.at("platesolve_ra_hint") : "-1.0");
@@ -1307,7 +1535,8 @@ std::vector<std::string> PreprocessingPipeline::getPlannedSteps(const std::map<s
             }
         }
 
-        // 3. Align, Stack, Postprocess, and Platesolve per filter
+        // 3. Align, Stack, Autocrop, Postprocess, and Platesolve
+        bool autocrop = config.count("autocrop") ? (config.at("autocrop") == "true") : false;
         bool correctPedestal = config.count("correct_pedestal") ? (config.at("correct_pedestal") == "true") : false;
         bool clampMax = config.count("clamp_max") ? (config.at("clamp_max") == "true") : false;
         bool platesolveStacks = config.count("platesolve_stacks") ? (config.at("platesolve_stacks") == "true") : false;
@@ -1315,11 +1544,24 @@ std::vector<std::string> PreprocessingPipeline::getPlannedSteps(const std::map<s
         for (const auto& filter : filters) {
             steps.push_back("Align " + filter + " Frames");
             steps.push_back("Stack " + filter + " Frames");
-            if (correctPedestal || clampMax) {
-                steps.push_back("Stack (Postprocess) " + filter);
+        }
+        if (autocrop) {
+            if (alignMutually) {
+                steps.push_back("Autocrop Stacks");
+            } else {
+                for (const auto& filter : filters) {
+                    steps.push_back("Autocrop " + filter);
+                }
             }
-            if (platesolveStacks) {
-                steps.push_back("Stack (Platesolve) " + filter);
+        }
+        if (correctPedestal || clampMax) {
+            for (const auto& filter : filters) {
+                steps.push_back("Postprocess " + filter);
+            }
+        }
+        if (platesolveStacks) {
+            for (const auto& filter : filters) {
+                steps.push_back("Platesolve " + filter);
             }
         }
     }

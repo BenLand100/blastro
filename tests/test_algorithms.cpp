@@ -17,6 +17,7 @@
  */
 
 #include "algorithms/StarFinder.h"
+#include "algorithms/ImageOperations.h"
 #include "algorithms/ConstellationMatcher.h"
 #include "algorithms/StackingAlgorithm.h"
 #include "algorithms/CalibrationAlgorithm.h"
@@ -1661,6 +1662,8 @@ void testMutualStackAlignment() {
     // Run stage 2 with align_mutually = false
     workspace.unregisterElement("preprocessed_lights_Ha_stacked");
     workspace.unregisterElement("preprocessed_lights_OIII_stacked");
+    workspace.registerElement("preprocessed_lights_Ha", batchHa);
+    workspace.registerElement("preprocessed_lights_OIII", batchOiii);
 
     configAlign["align_mutually"] = "false";
     pipeline.execute(workspace, configAlign);
@@ -2096,11 +2099,11 @@ void testPreprocessingPostprocessing() {
     auto steps = PreprocessingPipeline::getPlannedSteps(config);
     bool foundPostprocessStep = false;
     for (const auto& step : steps) {
-        if (step == "Stack (Postprocess) L") {
+        if (step == "Postprocess L") {
             foundPostprocessStep = true;
         }
     }
-    assert(foundPostprocessStep && "Planned steps missing 'Stack (Postprocess) L'");
+    assert(foundPostprocessStep && "Planned steps missing 'Postprocess L'");
 
     PreprocessingPipeline pipeline;
     pipeline.execute(workspace, config);
@@ -2129,6 +2132,80 @@ void testPreprocessingPostprocessing() {
     QDir(QString::fromStdString(tempDir)).removeRecursively();
 }
 
+void testAutocropPostprocessing() {
+    std::cout << "Running Autocrop Postprocessing Test..." << std::endl;
+
+    // 1. Test direct math of findLargestBoundingRectangle
+    std::vector<ImageOperations::FrameTransformInfo> frames = {
+        {{1.0, 0.0, 0.0, 0.0, 1.0, 0.0}, 100, 100},
+        {{1.0, 0.0, 10.0, 0.0, 1.0, -5.0}, 100, 100}
+    };
+    QRect cropRect = ImageOperations::findLargestBoundingRectangle(frames, 100, 100, 1.0);
+    assert(cropRect.x() == 11);
+    assert(cropRect.y() == 1);
+    assert(cropRect.width() == 88);
+    assert(cropRect.height() == 93);
+    std::cout << "  findLargestBoundingRectangle math check passed: ("
+              << cropRect.x() << ", " << cropRect.y() << ", "
+              << cropRect.width() << "x" << cropRect.height() << ")" << std::endl;
+
+    // 2. Test pipeline integration
+    std::string tempDir = TempDirectory::createTempDir("autocrop_test");
+    std::string lightFile1 = tempDir + "/light_001.fits";
+    std::string lightFile2 = tempDir + "/light_002.fits";
+    createDummyFitsWithHeader(lightFile1, "LIGHT", 10.0, "Ha", true);
+    createDummyFitsWithHeader(lightFile2, "LIGHT", 10.0, "Ha", true);
+
+    WorkspaceRegistry workspace;
+    auto loader = [lightFile1](int) -> ImageVariant {
+        FitsIO io;
+        return io.readImage(lightFile1);
+    };
+    auto batch = std::make_shared<ImageBatch>(2, loader, std::vector<std::string>{"f1", "f2"}, std::vector<std::string>{lightFile1, lightFile2});
+    batch->setFrameSelected(0, true);
+    batch->setFrameSelected(1, true);
+
+    FrameMetadata m0;
+    m0.registered = true;
+    m0.transform = {1.0, 0.0, 0.0, 0.0, 1.0, 0.0};
+    m0.snr = 20.0;
+    batch->setFrameMetadata(0, m0);
+
+    FrameMetadata m1;
+    m1.registered = true;
+    m1.transform = {1.0, 0.0, 10.0, 0.0, 1.0, 5.0};
+    m1.snr = 18.0;
+    batch->setFrameMetadata(1, m1);
+
+    workspace.registerElement("preprocessed_lights_Ha", batch);
+
+    PreprocessingPipeline pipeline;
+    std::map<std::string, std::string> config = {
+        {"stage", "align_stack"},
+        {"registered_light_batch_name", "preprocessed_lights_Ha"},
+        {"drizzle_scale", "1.0"},
+        {"align_ref_mode", "registration"},
+        {"align_mutually", "true"},
+        {"run_bge", "false"},
+        {"autocrop", "true"},
+        {"keep_intermediate", "false"},
+        {"out_dir", tempDir}
+    };
+    pipeline.execute(workspace, config);
+
+    assert(workspace.contains("preprocessed_lights_Ha_stacked"));
+    auto masterElem = workspace.getElement("preprocessed_lights_Ha_stacked");
+    assert(std::holds_alternative<GrayscaleImagePtr>(masterElem));
+    auto masterImg = std::get<GrayscaleImagePtr>(masterElem);
+
+    assert(masterImg->width() == 500);
+    assert(masterImg->height() == 505);
+    std::cout << "  Pipeline Autocrop master size: " << masterImg->width() << "x" << masterImg->height() << std::endl;
+
+    std::cout << "[+] Autocrop Postprocessing Test PASSED." << std::endl << std::endl;
+    QDir(QString::fromStdString(tempDir)).removeRecursively();
+}
+
 int main() {
     std::cout << "========================================" << std::endl;
     std::cout << "Starting Blastro Algorithm Unit Tests..." << std::endl;
@@ -2152,6 +2229,7 @@ int main() {
     testPixelMathPrecedence();
     testDrizzleReadWrite();
     testPreprocessingPostprocessing();
+    testAutocropPostprocessing();
 
     std::cout << "========================================" << std::endl;
     std::cout << "All Blastro Algorithm Unit Tests PASSED!" << std::endl;
