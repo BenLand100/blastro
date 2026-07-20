@@ -22,6 +22,7 @@
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QInputDialog>
+#include <QCloseEvent>
 
 namespace blastro {
 
@@ -802,6 +803,11 @@ void WorkspaceImageWindow::restoreWindowState(const QJsonObject& obj) {
         m_linkedBtn->setChecked(m_imageView->channelsLinked());
         onStretchParamsChangedInView(m_imageView->blackpoints(), m_imageView->whitepoints(), m_imageView->midpoints());
     }
+}
+
+void WorkspaceImageWindow::closeEvent(QCloseEvent* event) {
+    emit closeRequested(m_name);
+    QWidget::closeEvent(event);
 }
 
 } // namespace blastro

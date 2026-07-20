@@ -128,6 +128,7 @@ PreprocessingWizardDialog::PreprocessingWizardDialog(WorkspaceRegistry& workspac
       m_lightScaleAdditiveChk(new QCheckBox(this)),
       m_lightScaleMultiplicativeChk(new QCheckBox(this)),
       // Postprocessing
+      m_autocropChk(new QCheckBox("Autocrop Stacks (Crop to common bounding rectangle)", this)),
       m_correctPedestalChk(new QCheckBox("Correct Pedestal (Remove Negative Values)", this)),
       m_clampMaxChk(new QCheckBox("Clamp Maximum Values to 1.0", this)),
       m_platesolveStacksChk(new QCheckBox("Platesolve Stacks", this)),
@@ -650,6 +651,9 @@ PreprocessingWizardDialog::PreprocessingWizardDialog(WorkspaceRegistry& workspac
         controlLayout->addWidget(hdr);
         controlLayout->addWidget(body);
 
+        m_autocropChk->setChecked(true);
+        form->addRow("", m_autocropChk);
+
         m_correctPedestalChk->setChecked(false);
         form->addRow("", m_correctPedestalChk);
 
@@ -846,6 +850,25 @@ PreprocessingWizardDialog::PreprocessingWizardDialog(WorkspaceRegistry& workspac
     connect(m_strictDarkChk, &QCheckBox::checkStateChanged, this, &PreprocessingWizardDialog::updatePreview);
     connect(m_expToleranceSpin, qOverload<double>(&QDoubleSpinBox::valueChanged), this, &PreprocessingWizardDialog::updatePreview);
     connect(m_debayerChk, &QCheckBox::checkStateChanged, this, &PreprocessingWizardDialog::updatePreview);
+
+    auto triggerPlanUpdate = [this]() {
+        if (!m_activeWorker && !m_stage1Completed) {
+            updateStepsPlan("calibrate_register");
+        }
+    };
+
+    connect(m_tabs, &QTabWidget::currentChanged, this, [this, triggerPlanUpdate](int index) {
+        if (m_tabs->tabText(index) == "Execute") {
+            triggerPlanUpdate();
+        }
+    });
+
+    connect(m_autocropChk, &QCheckBox::toggled, this, triggerPlanUpdate);
+    connect(m_correctPedestalChk, &QCheckBox::toggled, this, triggerPlanUpdate);
+    connect(m_clampMaxChk, &QCheckBox::toggled, this, triggerPlanUpdate);
+    connect(m_platesolveStacksChk, &QCheckBox::toggled, this, triggerPlanUpdate);
+    connect(m_runBgeChk, &QCheckBox::toggled, this, triggerPlanUpdate);
+    connect(m_alignMutuallyChk, &QCheckBox::toggled, this, triggerPlanUpdate);
     connect(m_plotWidget, &StatsPlotWidget::rangeChanged, this, [this](double minVal, double maxVal) {
         m_minSpin->blockSignals(true);
         m_maxSpin->blockSignals(true);
@@ -1047,7 +1070,11 @@ void PreprocessingWizardDialog::onRemoveSelected() {
 void PreprocessingWizardDialog::onClearAll() {
     m_stagedFiles.clear();
     m_filesTable->setRowCount(0);
-    updatePreview();
+    if (m_stage1Completed) {
+        onCancel();
+    } else {
+        updatePreview();
+    }
 }
 
 void PreprocessingWizardDialog::updatePreview() {
@@ -1476,6 +1503,8 @@ void PreprocessingWizardDialog::onRunCalibrationRegister() {
     // Build configuration
     std::map<std::string, std::string> config;
     config["stage"] = "calibrate_register";
+    config["open_calib_stacks"] = m_openCalibStacksChk->isChecked() ? "true" : "false";
+    config["open_light_masters"] = m_openLightMastersChk->isChecked() ? "true" : "false";
     config["strict_dark"] = m_strictDarkChk->isChecked() ? "true" : "false";
     config["exp_tolerance"] = QString::number(m_expToleranceSpin->value()).toStdString();
     config["debayer"] = m_debayerChk->isChecked() ? "true" : "false";
@@ -1524,6 +1553,7 @@ void PreprocessingWizardDialog::onRunCalibrationRegister() {
     config["overwrite_masters"] = m_overwriteMastersChk->isChecked() ? "true" : "false";
 
     m_runningStage = "calibrate_register";
+    m_stage1Completed = false;
 
     m_progressBar->setRange(0, 0); // Pulse
 
@@ -1583,10 +1613,10 @@ void PreprocessingWizardDialog::onRunCalibrationRegister() {
         // Restore UI state
         m_progressBar->setRange(0, 100);
         m_progressBar->setValue(success ? 100 : 0);
-        m_runBtn->setEnabled(true);
+        m_runBtn->setEnabled(!success);
         m_alignStackBtn->setEnabled(success);
         m_resumeBtn->setEnabled(success);
-        m_cancelBtn->setEnabled(false);
+        m_cancelBtn->setEnabled(success);
         m_cancelBtn->setStyleSheet("");
 
         for (int i = 0; i < m_tabs->count(); ++i) {
@@ -1600,6 +1630,7 @@ void PreprocessingWizardDialog::onRunCalibrationRegister() {
         }
 
         if (success) {
+            m_stage1Completed = true;
             logMessage("[PPW] Calibration & Registration stage finished successfully.");
 
             int frameSelRow = m_stage1StepCount;
@@ -1628,10 +1659,9 @@ void PreprocessingWizardDialog::onRunCalibrationRegister() {
             if (m_openCalibStacksChk->isChecked()) {
                 if (auto* mw = qobject_cast<MainWindow*>(mainWin)) {
                     for (const auto& name : m_workspace.elementNames()) {
-                        if (name.find("master_bias_") != std::string::npos || name.find("master_dark_") != std::string::npos || name.find("master_flat_") != std::string::npos) {
+                        if (name.find("master_bias") != std::string::npos || name.find("master_dark") != std::string::npos || name.find("master_flat") != std::string::npos) {
                             QString qName = QString::fromStdString(name);
-                            mw->m_workspaceArea->removeElementView(qName);
-                            mw->m_workspaceArea->addElementView(qName, m_workspace.getElement(name));
+                            mw->m_workspaceArea->showElementView(qName);
                         }
                     }
                 }
@@ -1803,6 +1833,8 @@ void PreprocessingWizardDialog::onResumeStacking() {
 
     std::map<std::string, std::string> config;
     config["stage"] = "align_stack";
+    config["open_calib_stacks"] = m_openCalibStacksChk->isChecked() ? "true" : "false";
+    config["open_light_masters"] = m_openLightMastersChk->isChecked() ? "true" : "false";
     config["registered_light_batch_name"] = joinedNames;
     std::string alignMethod = m_alignMethodCombo->currentData().toString().toStdString();
     if (alignMethod == "drizzle") {
@@ -1845,10 +1877,13 @@ void PreprocessingWizardDialog::onResumeStacking() {
     config["light_rejection"]    = m_lightRejectionCombo->currentData().toString().toStdString();
     config["light_sigma_low"]    = QString::number(m_lightSigmaLowSpin->value()).toStdString();
     config["light_sigma_high"]   = QString::number(m_lightSigmaHighSpin->value()).toStdString();
-    config["scale_additive"]     = m_lightScaleAdditiveChk->isChecked() ? "true" : "false";
-    config["scale_multiplicative"] = m_lightScaleMultiplicativeChk->isChecked() ? "true" : "false";
+    config["light_scale_additive"]       = m_lightScaleAdditiveChk->isChecked() ? "true" : "false";
+    config["light_scale_multiplicative"] = m_lightScaleMultiplicativeChk->isChecked() ? "true" : "false";
+    config["scale_additive"]             = m_lightScaleAdditiveChk->isChecked() ? "true" : "false";
+    config["scale_multiplicative"]       = m_lightScaleMultiplicativeChk->isChecked() ? "true" : "false";
 
     // Postprocessing settings
+    config["autocrop"] = m_autocropChk->isChecked() ? "true" : "false";
     config["correct_pedestal"] = m_correctPedestalChk->isChecked() ? "true" : "false";
     config["clamp_max"] = m_clampMaxChk->isChecked() ? "true" : "false";
     config["platesolve_stacks"] = m_platesolveStacksChk->isChecked() ? "true" : "false";
@@ -1916,10 +1951,10 @@ void PreprocessingWizardDialog::onResumeStacking() {
         // Restore UI state
         m_progressBar->setRange(0, 100);
         m_progressBar->setValue(success ? 100 : 0);
-        m_runBtn->setEnabled(true);
+        m_runBtn->setEnabled(false);
         m_alignStackBtn->setEnabled(success);
         m_resumeBtn->setEnabled(success);
-        m_cancelBtn->setEnabled(false);
+        m_cancelBtn->setEnabled(true);
         m_cancelBtn->setStyleSheet("");
 
         for (int i = 0; i < m_tabs->count(); ++i) {
@@ -1962,8 +1997,7 @@ void PreprocessingWizardDialog::onResumeStacking() {
                     }
                     if (m_openLightMastersChk->isChecked() && m_workspace.contains(finalMasterName)) {
                         QString qName = QString::fromStdString(finalMasterName);
-                        mw->m_workspaceArea->removeElementView(qName);
-                        mw->m_workspaceArea->addElementView(qName, m_workspace.getElement(finalMasterName));
+                        mw->m_workspaceArea->showElementView(qName);
                     }
                 }
             }
@@ -2126,6 +2160,24 @@ void PreprocessingWizardDialog::onCancel() {
             worker->cancel();
         }
         m_cancelBtn->setEnabled(false);
+    } else {
+        logMessage("[PPW] Resetting completion state...");
+        m_stage1Completed = false;
+        m_runningStage = "";
+
+        int selIndex = getTabIndex("Frame Selection");
+        if (selIndex != -1) {
+            m_tabs->removeTab(selIndex);
+        }
+
+        m_runBtn->setEnabled(true);
+        m_alignStackBtn->setEnabled(false);
+        m_resumeBtn->setEnabled(false);
+        m_cancelBtn->setEnabled(false);
+        m_cancelBtn->setStyleSheet("");
+
+        m_progressBar->setValue(0);
+        updateStepsPlan("calibrate_register");
     }
 }
 
@@ -2174,10 +2226,12 @@ int PreprocessingWizardDialog::getTabIndex(const QString& label) const {
 }
 
 static QString getStageFromStepName(const std::string& stepName) {
-    if (stepName.rfind("Stack (Postprocess)", 0) == 0) {
+    if (stepName.rfind("Autocrop", 0) == 0 ||
+        stepName.rfind("Postprocess", 0) == 0 ||
+        stepName.rfind("Platesolve", 0) == 0 ||
+        stepName.rfind("Stack (Postprocess)", 0) == 0 ||
+        stepName.rfind("Stack (Platesolve)", 0) == 0) {
         return "Stack (Postprocess)";
-    } else if (stepName.rfind("Stack (Platesolve)", 0) == 0) {
-        return "Stack (Platesolve)";
     } else if (stepName.rfind("Stack ", 0) == 0 &&
         (stepName.find("master_bias") != std::string::npos ||
          stepName.find("master_dark") != std::string::npos ||
@@ -2243,6 +2297,7 @@ void PreprocessingWizardDialog::updateStepsPlan(const std::string& dummyStage) {
 
     config["stage"] = "align_stack";
     config["run_bge"] = m_runBgeChk->isChecked() ? "true" : "false";
+    config["autocrop"] = m_autocropChk->isChecked() ? "true" : "false";
     config["correct_pedestal"] = m_correctPedestalChk->isChecked() ? "true" : "false";
     config["clamp_max"] = m_clampMaxChk->isChecked() ? "true" : "false";
     config["platesolve_stacks"] = m_platesolveStacksChk->isChecked() ? "true" : "false";
@@ -2555,6 +2610,7 @@ QJsonObject PreprocessingWizardDialog::serializeControlState() const {
     obj["scale_additive"] = m_lightScaleAdditiveChk->isChecked();
     obj["scale_multiplicative"] = m_lightScaleMultiplicativeChk->isChecked();
     // Postprocessing
+    obj["autocrop"] = m_autocropChk->isChecked();
     obj["correct_pedestal"] = m_correctPedestalChk->isChecked();
     obj["clamp_max"] = m_clampMaxChk->isChecked();
     obj["platesolve_stacks"] = m_platesolveStacksChk->isChecked();
@@ -2634,6 +2690,7 @@ void PreprocessingWizardDialog::restoreControlState(const QJsonObject& obj) {
     if (obj.contains("bge_max_structure")) m_bgeMaxStructureSpin->setValue(obj["bge_max_structure"].toDouble());
     if (obj.contains("scale_additive")) m_lightScaleAdditiveChk->setChecked(obj["scale_additive"].toBool());
     if (obj.contains("scale_multiplicative")) m_lightScaleMultiplicativeChk->setChecked(obj["scale_multiplicative"].toBool());
+    if (obj.contains("autocrop")) m_autocropChk->setChecked(obj["autocrop"].toBool());
     if (obj.contains("correct_pedestal")) m_correctPedestalChk->setChecked(obj["correct_pedestal"].toBool());
     if (obj.contains("clamp_max")) m_clampMaxChk->setChecked(obj["clamp_max"].toBool());
     if (obj.contains("platesolve_stacks")) m_platesolveStacksChk->setChecked(obj["platesolve_stacks"].toBool());

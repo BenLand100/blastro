@@ -25,6 +25,7 @@
 #include <QPushButton>
 #include <QButtonGroup>
 #include <QLabel>
+#include <QCloseEvent>
 
 namespace blastro {
 
@@ -72,6 +73,7 @@ public:
 
 signals:
     void renameRequested(const QString& oldName, const QString& newName);
+    void closeRequested(const QString& name);
     void undoRedoStateChanged();
     void imageUpdated();
 
@@ -127,6 +129,7 @@ private:
 
 protected:
     void resizeEvent(QResizeEvent* event) override;
+    void closeEvent(QCloseEvent* event) override;
 
 private:
     void onExpandHistClicked();

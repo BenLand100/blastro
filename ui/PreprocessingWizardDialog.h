@@ -172,6 +172,7 @@ private:
     QCheckBox* m_lightScaleMultiplicativeChk;
 
     // Control Tab — Postprocessing section
+    QCheckBox* m_autocropChk;
     QCheckBox* m_correctPedestalChk;
     QCheckBox* m_clampMaxChk;
     QCheckBox* m_platesolveStacksChk;
@@ -225,6 +226,7 @@ private:
     std::vector<QString> m_activeFilters;
     std::string m_runningStage;
     int m_stage1StepCount = 0;
+    bool m_stage1Completed = false;
 
     std::pair<double, double> getAbsoluteRangeForBatch(ImageBatchPtr batch, const std::string& metric);
     std::map<std::string, std::pair<double, double>> m_filterRanges;

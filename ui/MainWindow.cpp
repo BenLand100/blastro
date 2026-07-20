@@ -162,17 +162,18 @@ MainWindow::MainWindow(QWidget* parent)
         m_workspace.unregisterElement(name.toStdString());
     });
 
-    m_workspace.setElementRegisteredCallback([this](const std::string& name) {
+    m_workspace.setElementRegisteredCallback([this](const std::string& name, bool visible) {
         QString qName = QString::fromStdString(name);
-        QMetaObject::invokeMethod(this, [this, qName]() {
+        QMetaObject::invokeMethod(this, [this, qName, visible]() {
             if (!m_workspace.contains(qName.toStdString())) return;
             WorkspaceElement element = m_workspace.getElement(qName.toStdString());
             WorkspaceImageWindow* win = m_workspaceArea->getImageWindow(qName);
             if (win) {
                 win->saveUndoState();
                 win->setElement(element, true);
+                if (visible) m_workspaceArea->showElementView(qName);
             } else {
-                m_workspaceArea->addElementView(qName, element);
+                m_workspaceArea->addElementView(qName, element, visible);
             }
             for (auto* dlg : findChildren<AlgorithmDialog*>()) {
                 dlg->refreshWorkspaceElements();
@@ -1663,9 +1664,8 @@ void MainWindow::updateWindowMenu() {
     connect(tileAct, &QAction::triggered, m_workspaceArea, &QMdiArea::tileSubWindows);
     m_windowMenu->addAction(tileAct);
 
-    // Categorize remaining MDI windows
+    // Categorize tool/dialog subwindows and workspace image/batch elements
     QList<QMdiSubWindow*> processes;
-    QList<QMdiSubWindow*> images;
 
     for (auto* subWindow : m_workspaceArea->subWindowList()) {
         if (!subWindow || !subWindow->widget() || !subWindow->isVisible()) continue;
@@ -1673,10 +1673,8 @@ void MainWindow::updateWindowMenu() {
         // Skip LogWindow itself as it is handled first
         if (qobject_cast<LogWindow*>(subWindow->widget())) continue;
 
-        if (qobject_cast<WorkspaceImageWindow*>(subWindow->widget()) ||
-            qobject_cast<BatchImageWidget*>(subWindow->widget())) {
-            images.append(subWindow);
-        } else {
+        if (!qobject_cast<WorkspaceImageWindow*>(subWindow->widget()) &&
+            !qobject_cast<BatchImageWidget*>(subWindow->widget())) {
             processes.append(subWindow);
         }
     }
@@ -1694,14 +1692,17 @@ void MainWindow::updateWindowMenu() {
         }
     }
 
-    // Add separator before images if images exist and we have added either builtins or algorithms
-    if (!images.isEmpty()) {
+    // Add separator before images if registered workspace elements exist
+    std::vector<std::string> allElementNames = m_workspace.elementNames();
+    if (!allElementNames.empty()) {
         m_windowMenu->addSeparator();
-        for (auto* sub : images) {
-            QAction* act = new QAction(sub->windowTitle(), this);
-            connect(act, &QAction::triggered, this, [sub]() {
-                sub->show();
-                sub->setFocus();
+        for (const auto& nameStd : allElementNames) {
+            QString qName = QString::fromStdString(nameStd);
+            QAction* act = new QAction(qName, this);
+            act->setCheckable(true);
+            act->setChecked(m_workspaceArea->isElementViewVisible(qName));
+            connect(act, &QAction::triggered, this, [this, qName]() {
+                m_workspaceArea->showElementView(qName);
             });
             m_windowMenu->addAction(act);
         }
@@ -2336,7 +2337,50 @@ void MainWindow::saveWorkspaceSingleImages(const QString& projectDir) {
         dir.mkdir("images");
     }
     QDir imgDir(dir.filePath("images"));
-    
+
+    // Collect names of all active single image elements currently in workspace
+    QSet<QString> activeImageFiles;
+    for (const auto& name : m_workspace.elementNames()) {
+        WorkspaceElement elem = m_workspace.getElement(name);
+        if (std::holds_alternative<GrayscaleImagePtr>(elem) || std::holds_alternative<RGBImagePtr>(elem)) {
+            activeImageFiles.insert(QString::fromStdString(name) + ".fits");
+        }
+    }
+
+    // Identify any existing FITS files in images/ that are no longer active single images in m_workspace
+    QFileInfoList existingFiles = imgDir.entryInfoList({"*.fits"}, QDir::Files);
+    QStringList orphanedFiles;
+    QList<QFileInfo> filesToPurge;
+    for (const auto& fi : existingFiles) {
+        if (!activeImageFiles.contains(fi.fileName())) {
+            orphanedFiles << fi.fileName();
+            filesToPurge << fi;
+        }
+    }
+
+    // Prompt user with a single confirmation dialog before purging
+    if (!orphanedFiles.isEmpty()) {
+        QString msg = QString("The following %1 project image file(s) are no longer in the workspace:\n\n").arg(orphanedFiles.size());
+        int showCount = std::min(static_cast<int>(orphanedFiles.size()), 10);
+        for (int i = 0; i < showCount; ++i) {
+            msg += QString(" • %1\n").arg(orphanedFiles[i]);
+        }
+        if (orphanedFiles.size() > 10) {
+            msg += QString(" ... and %1 more.\n").arg(orphanedFiles.size() - 10);
+        }
+        msg += "\nWould you like to purge these orphaned image files from the project images folder?";
+
+        auto reply = QMessageBox::question(this, "Purge Orphaned Project Images", msg,
+                                          QMessageBox::Yes | QMessageBox::No,
+                                          QMessageBox::Yes);
+        if (reply == QMessageBox::Yes) {
+            for (const auto& fi : filesToPurge) {
+                QFile::remove(fi.absoluteFilePath());
+                qDebug() << "[MainWindow::saveWorkspaceSingleImages] Purged orphaned project image:" << fi.fileName();
+            }
+        }
+    }
+
     FitsIO writer;
     for (const auto& name : m_workspace.elementNames()) {
         WorkspaceElement elem = m_workspace.getElement(name);
