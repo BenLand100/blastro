@@ -22,7 +22,7 @@
 
 namespace blastro {
 
-bool WorkspaceRegistry::registerElement(const std::string& name, WorkspaceElement element) {
+bool WorkspaceRegistry::registerElement(const std::string& name, WorkspaceElement element, bool visible) {
     if (name.empty()) return false;
     ElementCallback cb;
     std::string typeStr = "Unknown Element";
@@ -47,19 +47,20 @@ bool WorkspaceRegistry::registerElement(const std::string& name, WorkspaceElemen
         }
     }
 
-    Logger::info("Workspace", QString("Registered %1: '%2' (%3)")
+    Logger::info("Workspace", QString("Registered %1: '%2' (%3)%4")
                  .arg(QString::fromStdString(typeStr))
                  .arg(QString::fromStdString(name))
-                 .arg(QString::fromStdString(details)));
+                 .arg(QString::fromStdString(details))
+                 .arg(visible ? "" : " [hidden]"));
 
     if (cb) {
-        cb(name);
+        cb(name, visible);
     }
     return true;
 }
 
 bool WorkspaceRegistry::unregisterElement(const std::string& name) {
-    ElementCallback cb;
+    UnregisterCallback cb;
     {
         std::lock_guard<std::mutex> lock(m_mutex);
         auto it = m_registry.find(name);

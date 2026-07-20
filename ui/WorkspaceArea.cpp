@@ -33,11 +33,15 @@ WorkspaceArea::WorkspaceArea(QWidget* parent)
     setStyleSheet("background-color: #121212;");
 }
 
-QMdiSubWindow* WorkspaceArea::addElementView(const QString& name, const WorkspaceElement& element) {
+QMdiSubWindow* WorkspaceArea::addElementView(const QString& name, const WorkspaceElement& element, bool visible) {
     if (m_subWindows.contains(name)) {
-        // Bring existing window to focus
-        m_subWindows[name]->setFocus();
-        return m_subWindows[name];
+        QMdiSubWindow* sub = m_subWindows[name];
+        if (visible) {
+            sub->show();
+            sub->raise();
+            sub->setFocus();
+        }
+        return sub;
     }
 
     WorkspaceImageWindow* viewWidget = new WorkspaceImageWindow(name, element, this);
@@ -69,15 +73,47 @@ QMdiSubWindow* WorkspaceArea::addElementView(const QString& name, const Workspac
         m_cascadeColumn = (m_cascadeColumn + 1) % maxCols;
     }
     
+    connect(viewWidget, &WorkspaceImageWindow::closeRequested, this, [this](const QString& closedName) {
+        if (m_subWindows.contains(closedName)) {
+            m_subWindows.remove(closedName);
+            emit elementClosed(closedName);
+        }
+    });
+
     // Connect window destroyed signal to clean up our local map and notify
     connect(sub, &QObject::destroyed, this, [this, name]() {
-        m_subWindows.remove(name);
-        emit elementClosed(name);
+        if (m_subWindows.contains(name)) {
+            m_subWindows.remove(name);
+            emit elementClosed(name);
+        }
     });
 
     m_subWindows[name] = sub;
-    sub->show();
+    if (visible) {
+        sub->show();
+    } else {
+        sub->hide();
+    }
     return sub;
+}
+
+void WorkspaceArea::showElementView(const QString& name) {
+    if (m_subWindows.contains(name)) {
+        QMdiSubWindow* sub = m_subWindows[name];
+        if (sub) {
+            sub->show();
+            sub->raise();
+            sub->setFocus();
+        }
+    }
+}
+
+bool WorkspaceArea::isElementViewVisible(const QString& name) const {
+    if (m_subWindows.contains(name)) {
+        QMdiSubWindow* sub = m_subWindows[name];
+        return sub && sub->isVisible();
+    }
+    return false;
 }
 
 void WorkspaceArea::removeElementView(const QString& name) {
@@ -85,6 +121,9 @@ void WorkspaceArea::removeElementView(const QString& name) {
         QMdiSubWindow* sub = m_subWindows[name];
         m_subWindows.remove(name);
         disconnect(sub, &QObject::destroyed, this, nullptr);
+        if (auto* win = qobject_cast<WorkspaceImageWindow*>(sub->widget())) {
+            disconnect(win, &WorkspaceImageWindow::closeRequested, this, nullptr);
+        }
         sub->close();
     }
 }
@@ -99,12 +138,21 @@ void WorkspaceArea::renameElementView(const QString& oldName, const QString& new
         // Update destruction connection
         disconnect(sub, &QObject::destroyed, this, nullptr);
         connect(sub, &QObject::destroyed, this, [this, newName]() {
-            m_subWindows.remove(newName);
-            emit elementClosed(newName);
+            if (m_subWindows.contains(newName)) {
+                m_subWindows.remove(newName);
+                emit elementClosed(newName);
+            }
         });
 
         if (auto* win = qobject_cast<WorkspaceImageWindow*>(sub->widget())) {
             win->updateName(newName);
+            disconnect(win, &WorkspaceImageWindow::closeRequested, this, nullptr);
+            connect(win, &WorkspaceImageWindow::closeRequested, this, [this, newName](const QString&) {
+                if (m_subWindows.contains(newName)) {
+                    m_subWindows.remove(newName);
+                    emit elementClosed(newName);
+                }
+            });
         }
     }
 }

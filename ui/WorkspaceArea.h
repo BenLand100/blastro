@@ -34,9 +34,15 @@ public:
     explicit WorkspaceArea(QWidget* parent = nullptr);
     ~WorkspaceArea() override = default;
 
-    // Adds a workspace element visually as an MDI window
-    QMdiSubWindow* addElementView(const QString& name, const WorkspaceElement& element);
+    // Adds a workspace element visually as an MDI window (visible or hidden)
+    QMdiSubWindow* addElementView(const QString& name, const WorkspaceElement& element, bool visible = true);
     
+    // Shows an existing element view, creating it if needed
+    void showElementView(const QString& name);
+
+    // Checks if an element view is currently visible on screen
+    bool isElementViewVisible(const QString& name) const;
+
     // Removes the view of a workspace element
     void removeElementView(const QString& name);
     
