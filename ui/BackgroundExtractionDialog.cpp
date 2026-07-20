@@ -23,6 +23,7 @@
 #include "core/GrayscaleImage.h"
 #include "core/RGBImage.h"
 #include "core/Preferences.h"
+#include "algorithms/ImageOperations.h"
 #include "WorkspaceArea.h"
 #include <QVBoxLayout>
 #include <QFormLayout>
@@ -30,7 +31,7 @@
 #include <QMessageBox>
 #include <QMainWindow>
 #include <QGroupBox>
-
+#include <QApplication>
 #include <QLabel>
 
 namespace blastro {
@@ -328,26 +329,105 @@ BackgroundExtractionDialog::BackgroundExtractionDialog(WorkspaceRegistry& worksp
 
 
 void BackgroundExtractionDialog::onApplyClicked() {
+    if (m_busy) return;
+
     auto win = getActiveImageWindow();
     if (!win) {
         QMessageBox::warning(this, "Apply Error", "No active image found to apply background extraction.");
-        close();
         return;
     }
 
-    // Clear preview before applying
-    if (m_previewChk->isChecked()) {
-        win->restoreOriginalImage();
-        m_previewChk->blockSignals(true);
-        m_previewChk->setChecked(false);
-        m_previewChk->blockSignals(false);
-        m_updatePreviewBtn->setEnabled(false);
-    }
+    // Dismiss preview first
+    clearPreview();
 
-    // Output same as input: in-place mutation via undo checkpoint + setElement
-    auto config = getConfig();
-    config["output_name"] = config.at("input_name"); // Ensure same name
-    emit algorithmExecuted(algorithmName(), config);
+    // Snapshot the inputs we need from the UI thread before going async
+    ImageVariant baseImg = ImageOperations::cloneImageVariant(win->originalImage());
+    if (baseImg.index() == 0 && std::get<0>(baseImg) == nullptr) return;
+
+    std::string method     = m_methodCombo->currentIndex() == 1 ? "RBF" : "Polynomial";
+    int    order           = m_orderSpin->value();
+    double rbfSmoothing    = m_rbfSmoothingSpin->value();
+    bool   normalize       = m_normalizeChk->isChecked();
+    int    gridSize        = std::max(m_gridColsSpin->value(), m_gridRowsSpin->value());
+    double huberDelta      = m_huberDelta;
+    bool   autoExclude     = m_autoExcludeChk->isChecked();
+    double maxDeviation    = autoExclude ? m_maxDeviationSpin->value() : 9999.0;
+    double maxStructure    = autoExclude ? m_maxStructureSpin->value() : 9999.0;
+    std::vector<std::pair<double,double>> ctrlPts =
+        win->imageView() ? win->imageView()->getBgeControlPoints() : std::vector<std::pair<double,double>>();
+    std::string frameName  = win->name().toStdString();
+
+    // Save undo state now (before the new image is computed)
+    win->saveUndoState();
+
+    // Disable UI while running
+    m_busy = true;
+    setEnabled(false);
+    QApplication::setOverrideCursor(Qt::WaitCursor);
+
+    QPointer<WorkspaceImageWindow> winPtr = win;
+
+    // Shared result storage
+    auto result    = std::make_shared<ImageVariant>();
+    auto errorMsg  = std::make_shared<QString>();
+
+    QThread* thread = QThread::create([=]() {
+        try {
+            if (std::holds_alternative<GrayscaleImagePtr>(baseImg)) {
+                auto gray = std::get<GrayscaleImagePtr>(baseImg);
+                auto res = BackgroundExtractor::extractGrayscale(
+                    gray, order, gridSize, huberDelta, normalize,
+                    nullptr, 0, 100, method, rbfSmoothing, ctrlPts, maxDeviation, maxStructure, frameName);
+                res->setMetadata(gray->metadata());
+                *result = res;
+            } else if (std::holds_alternative<RGBImagePtr>(baseImg)) {
+                auto rgb = std::get<RGBImagePtr>(baseImg);
+                auto res = BackgroundExtractor::extractRGB(
+                    rgb, order, gridSize, huberDelta, normalize,
+                    nullptr, method, rbfSmoothing, ctrlPts, maxDeviation, maxStructure, frameName);
+                res->setMetadata(rgb->metadata());
+                *result = res;
+            }
+        } catch (const std::exception& e) {
+            *errorMsg = QString::fromStdString(e.what());
+        } catch (...) {
+            *errorMsg = "Unknown error during background extraction";
+        }
+    });
+    thread->setParent(this);
+
+    connect(thread, &QThread::finished, this, [this, thread, winPtr, result, errorMsg]() {
+        thread->deleteLater();
+
+        QApplication::restoreOverrideCursor();
+        m_busy = false;
+        setEnabled(true);
+
+        if (!errorMsg->isEmpty()) {
+            QMessageBox::critical(this, "Apply Error",
+                QString("Error during background extraction:\n%1").arg(*errorMsg));
+            return;
+        }
+
+        if (!winPtr) return;
+
+        WorkspaceElement elem;
+        if (std::holds_alternative<GrayscaleImagePtr>(*result)) {
+            elem = std::get<GrayscaleImagePtr>(*result);
+        } else if (std::holds_alternative<RGBImagePtr>(*result)) {
+            elem = std::get<RGBImagePtr>(*result);
+        } else {
+            return;
+        }
+
+        // Hide BGE control points and commit result in-place (no MDI jump)
+        if (winPtr->imageView()) {
+            winPtr->imageView()->setShowBgeControlPoints(false);
+        }
+        winPtr->setElement(elem, /*preserveZoom=*/true);
+    }, Qt::QueuedConnection);
+
+    thread->start();
 }
 
 void BackgroundExtractionDialog::onPrefsClicked() {
@@ -464,29 +544,45 @@ void BackgroundExtractionDialog::onClearPointsClicked() {
 }
 
 void BackgroundExtractionDialog::onSubWindowActivated(QMdiSubWindow* sub) {
-    if (sub) {
-        if (auto* win = qobject_cast<WorkspaceImageWindow*>(sub->widget())) {
-            // Only update if the tracked window actually changed
-            if (m_currentTrackedSub != sub) {
-                // If a preview was active on the old window, clear it
-                bool wasPreviewActive = m_previewChk && m_previewChk->isChecked();
-                if (wasPreviewActive) {
-                    if (m_currentTrackedSub) {
-                        if (auto* oldWin = qobject_cast<WorkspaceImageWindow*>(m_currentTrackedSub->widget())) {
-                            oldWin->restoreOriginalImage();
-                        }
-                    }
-                    m_previewChk->blockSignals(true);
-                    m_previewChk->setChecked(false);
-                    m_previewChk->blockSignals(false);
-                    m_updatePreviewBtn->setEnabled(false);
-                }
-                if (!win->hasPreviewActive() || m_currentTrackedSub == sub) {
-                    m_currentTrackedSub = sub;
-                }
+    if (!sub) {
+        updateBgeModes();
+        return;
+    }
+
+    auto* newWin = qobject_cast<WorkspaceImageWindow*>(sub->widget());
+    if (!newWin) {
+        // Non-image window (e.g. this dialog) — do not change tracking
+        updateBgeModes();
+        return;
+    }
+
+    // A window with a preview from another dialog cannot steal tracking
+    if (newWin->hasPreviewActive() && (!m_previewChk || !m_previewChk->isChecked())) {
+        updateBgeModes();
+        return;
+    }
+
+    if (m_currentTrackedSub == sub) {
+        updateBgeModes();
+        return; // Already tracking this window
+    }
+
+    // Switching to a different image window: clear the existing preview
+    if (m_currentTrackedSub) {
+        if (auto* oldWin = qobject_cast<WorkspaceImageWindow*>(m_currentTrackedSub->widget())) {
+            if (m_previewChk && m_previewChk->isChecked()) {
+                oldWin->restoreOriginalImage();
             }
         }
     }
+    if (m_previewChk && m_previewChk->isChecked()) {
+        m_previewChk->blockSignals(true);
+        m_previewChk->setChecked(false);
+        m_previewChk->blockSignals(false);
+        m_updatePreviewBtn->setEnabled(false);
+    }
+
+    m_currentTrackedSub = sub;
     updateBgeModes();
 }
 
@@ -494,7 +590,15 @@ void BackgroundExtractionDialog::updateBgeModes() {
     auto* mdi = findWorkspaceArea();
     if (!mdi) return;
 
-    auto* activeWin = getActiveImageWindow();
+    // Determine the effective "active" window — prefer the tracked window when
+    // preview is running so BGE edit mode stays on the right image.
+    WorkspaceImageWindow* activeWin = nullptr;
+    if (m_currentTrackedSub) {
+        activeWin = qobject_cast<WorkspaceImageWindow*>(m_currentTrackedSub->widget());
+    }
+    if (!activeWin) {
+        activeWin = getActiveImageWindow();
+    }
 
     for (auto* sub : mdi->subWindowList()) {
         if (auto* win = qobject_cast<WorkspaceImageWindow*>(sub->widget())) {
@@ -563,40 +667,96 @@ void BackgroundExtractionDialog::restoreState(const QJsonObject& obj) {
 }
 
 void BackgroundExtractionDialog::updatePreview() {
-    auto* win = getActiveImageWindow();
+    if (m_busy) return;
+
+    // Resolve target window - use tracked sub if available, otherwise the active image window
+    WorkspaceImageWindow* win = nullptr;
+    if (m_currentTrackedSub) {
+        win = qobject_cast<WorkspaceImageWindow*>(m_currentTrackedSub->widget());
+    }
+    if (!win) {
+        win = getActiveImageWindow();
+        if (win) {
+            // Pin tracking so hasActivePreview()+getTargetWindow() identify this dialog as owner
+            if (auto* mdi = findWorkspaceArea()) {
+                for (auto* sub : mdi->subWindowList()) {
+                    if (qobject_cast<WorkspaceImageWindow*>(sub->widget()) == win) {
+                        m_currentTrackedSub = sub;
+                        break;
+                    }
+                }
+            }
+        }
+    }
     if (!win) return;
 
     ImageVariant baseImg = win->originalImage();
     if (baseImg.index() == 0 && std::get<0>(baseImg) == nullptr) return;
 
-    std::string method = m_methodCombo->currentIndex() == 1 ? "RBF" : "Polynomial";
-    int order = m_orderSpin->value();
+    std::string method  = m_methodCombo->currentIndex() == 1 ? "RBF" : "Polynomial";
+    int    order        = m_orderSpin->value();
     double rbfSmoothing = m_rbfSmoothingSpin->value();
-    bool normalize = m_normalizeChk->isChecked();
-    int gridSize = std::max(m_gridColsSpin->value(), m_gridRowsSpin->value());
-    double maxDeviation = m_maxDeviationSpin->value();
-    double maxStructure = m_maxStructureSpin->value();
+    bool   normalize    = m_normalizeChk->isChecked();
+    int    gridSize     = std::max(m_gridColsSpin->value(), m_gridRowsSpin->value());
+    bool   autoExclude  = m_autoExcludeChk->isChecked();
+    double maxDeviation = autoExclude ? m_maxDeviationSpin->value() : 9999.0;
+    double maxStructure = autoExclude ? m_maxStructureSpin->value() : 9999.0;
+    double huberDelta   = m_huberDelta;
+    std::vector<std::pair<double,double>> ctrlPts =
+        win->imageView() ? win->imageView()->getBgeControlPoints()
+                         : std::vector<std::pair<double,double>>();
 
-    std::vector<std::pair<double, double>> ctrlPts = win->imageView() ? win->imageView()->getBgeControlPoints() : std::vector<std::pair<double, double>>();
+    m_busy = true;
+    m_updatePreviewBtn->setEnabled(false);
+    QApplication::setOverrideCursor(Qt::WaitCursor);
 
-    ImageVariant previewResult;
-    try {
-        if (std::holds_alternative<GrayscaleImagePtr>(baseImg)) {
-            auto gray = std::get<GrayscaleImagePtr>(baseImg);
-            previewResult = BackgroundExtractor::extractGrayscale(
-                gray, order, gridSize, m_huberDelta, normalize,
-                nullptr, 0, 100, method, rbfSmoothing, ctrlPts, maxDeviation, maxStructure, "Preview");
-        } else if (std::holds_alternative<RGBImagePtr>(baseImg)) {
-            auto rgb = std::get<RGBImagePtr>(baseImg);
-            previewResult = BackgroundExtractor::extractRGB(
-                rgb, order, gridSize, m_huberDelta, normalize,
-                nullptr, method, rbfSmoothing, ctrlPts, maxDeviation, maxStructure, "Preview");
+    QPointer<WorkspaceImageWindow> winPtr = win;
+
+    auto result   = std::make_shared<ImageVariant>();
+    auto errorMsg = std::make_shared<QString>();
+
+    QThread* thread = QThread::create([=]() {
+        try {
+            if (std::holds_alternative<GrayscaleImagePtr>(baseImg)) {
+                auto gray = std::get<GrayscaleImagePtr>(baseImg);
+                *result = BackgroundExtractor::extractGrayscale(
+                    gray, order, gridSize, huberDelta, normalize,
+                    nullptr, 0, 100, method, rbfSmoothing, ctrlPts, maxDeviation, maxStructure, "Preview");
+            } else if (std::holds_alternative<RGBImagePtr>(baseImg)) {
+                auto rgb = std::get<RGBImagePtr>(baseImg);
+                *result = BackgroundExtractor::extractRGB(
+                    rgb, order, gridSize, huberDelta, normalize,
+                    nullptr, method, rbfSmoothing, ctrlPts, maxDeviation, maxStructure, "Preview");
+            }
+        } catch (const std::exception& e) {
+            *errorMsg = QString::fromStdString(e.what());
+        } catch (...) {
+            *errorMsg = "Unknown error during preview";
         }
-        win->setPreviewImage(previewResult);
-    } catch (const std::exception& e) {
-        QMessageBox::critical(this, "Preview Error", QString("Error during preview generation:\n%1").arg(e.what()));
-    }
+    });
+    thread->setParent(this);
+
+    connect(thread, &QThread::finished, this, [this, thread, winPtr, result, errorMsg]() {
+        thread->deleteLater();
+
+        QApplication::restoreOverrideCursor();
+        m_busy = false;
+        m_updatePreviewBtn->setEnabled(m_previewChk && m_previewChk->isChecked());
+
+        if (!errorMsg->isEmpty()) {
+            QMessageBox::critical(this, "Preview Error",
+                QString("Error during preview generation:\n%1").arg(*errorMsg));
+            return;
+        }
+        if (!winPtr) return;
+        if (result->index() == 0 && std::get<0>(*result) == nullptr) return;
+        winPtr->setPreviewImage(*result);
+    }, Qt::QueuedConnection);
+
+    thread->start();
 }
+
+
 
 bool BackgroundExtractionDialog::hasActivePreview() const {
     return m_previewChk && m_previewChk->isChecked();

@@ -28,6 +28,7 @@
 #include <QCheckBox>
 #include <QPushButton>
 #include <QComboBox>
+#include <QThread>
 
 namespace blastro {
 
@@ -86,6 +87,8 @@ private:
     int m_threads = -1;
 
     QPointer<QMdiSubWindow> m_currentTrackedSub;
+    bool m_busy = false; // true while an apply or preview thread is running
 };
+
 
 } // namespace blastro
