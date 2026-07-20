@@ -1,6 +1,7 @@
 # TODO
 
 * Double check pixel rejection when drizzle is enabled (satellite trail in lion nebula data)
+* Undo and redo need some attention, especially when PCL is involved
 * Test OSC workflow
  
 ## Core
