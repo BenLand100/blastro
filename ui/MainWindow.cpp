@@ -47,7 +47,8 @@
 #include "UpdateManagerDialog.h"
 #include "core/TempDirectory.h"
 #include "core/Preferences.h"
-#include "core/ProjectSerializer.h"
+#include "core/ProjectDataSerializer.h"
+#include "ui/ProjectUISerializer.h"
 #include "WorkspaceImageWindow.h"
 #include "PreprocessingWizardDialog.h"
 #include "BatchImageWidget.h"
@@ -981,7 +982,7 @@ void MainWindow::closeEvent(QCloseEvent* event) {
     }
 
     // Save session (dialog settings + tool window positions, no image data)
-    ProjectSerializer::saveSession(defaultSessionPath(),
+    ProjectUISerializer::saveSession(defaultSessionPath(),
                                    m_workspaceArea,
                                    buildDialogSet(),
                                    this);
@@ -1205,6 +1206,12 @@ void MainWindow::updateStatusReadout(int x, int y, bool isRGB, const std::vector
 void MainWindow::ensurePCLBridge() {
     if (!m_pclBridge) {
         m_pclBridge = std::make_unique<PCLBridge>(this);
+        PCLBridge::setSubWindowFactory([this](QWidget* widget, const QString& processId, const QString& title) {
+            createPCLPluginSubWindow(widget, processId, title);
+        });
+        PCLBridge::setExecuteProcessHandler([this](const QString& processId, void* hProcess) {
+            return executePCLProcessOnActiveImage(processId, hProcess);
+        });
         connect(m_pclBridge.get(), &PCLBridge::progressUpdated, this, [this](int percent) {
             if (m_progressBar) {
                 if (m_progressBar->isHidden()) {
@@ -2189,8 +2196,8 @@ void MainWindow::onToggleShowBgeControlPoints(bool checked) {
 
 // ── Project / session helpers ─────────────────────────────────────────────────
 
-DialogSet MainWindow::buildDialogSet() const {
-    DialogSet ds;
+UIDialogSet MainWindow::buildDialogSet() const {
+    UIDialogSet ds;
     ds.stretching  = m_stretchingDlg;
     ds.bge         = m_bgeDlg;
     ds.stacking    = m_stackingDlg;
@@ -2221,9 +2228,9 @@ void MainWindow::applyStartupOptions(const StartupOptions& opts) {
     if (!opts.projectPath.isEmpty()) {
         openProject(opts.projectPath);
     } else if (!opts.sessionPath.isEmpty()) {
-        ProjectSerializer::loadSession(opts.sessionPath, m_workspaceArea, buildDialogSet(), this);
+        ProjectUISerializer::loadSession(opts.sessionPath, m_workspaceArea, buildDialogSet(), this);
     } else if (!opts.noRestore) {
-        ProjectSerializer::loadSession(defaultSessionPath(), m_workspaceArea, buildDialogSet(), this);
+        ProjectUISerializer::loadSession(defaultSessionPath(), m_workspaceArea, buildDialogSet(), this);
     }
 
     int imageCounter = 1;
@@ -2284,7 +2291,7 @@ bool MainWindow::openProject(const QString& projectDir) {
     m_projectPath = projectDir;
     setWindowTitle(QString("BLastro — %1").arg(QDir(projectDir).dirName()));
 
-    bool ok = ProjectSerializer::loadProject(projectDir,
+    bool ok = ProjectUISerializer::loadProject(projectDir,
                                               m_workspace,
                                               m_workspaceArea,
                                               this,
@@ -2297,7 +2304,7 @@ bool MainWindow::openProject(const QString& projectDir) {
 bool MainWindow::saveProject() {
     if (m_projectPath.isEmpty()) return saveProjectAs("");
     saveWorkspaceSingleImages(m_projectPath);
-    return ProjectSerializer::saveProject(m_projectPath,
+    return ProjectUISerializer::saveProject(m_projectPath,
                                           m_workspace,
                                           m_workspaceArea,
                                           buildDialogSet(),
@@ -2313,7 +2320,7 @@ bool MainWindow::saveProjectAs(const QString& dir) {
     if (projectDir.isEmpty()) return false;
 
     // Ask about external references
-    QStringList external = ProjectSerializer::externalReferences(projectDir, m_workspace);
+    QStringList external = ProjectDataSerializer::externalReferences(projectDir, m_workspace);
     if (!external.isEmpty()) {
         auto result = QMessageBox::question(this, "External References",
             QString("The project contains %1 file(s) located outside the project folder.\n"
@@ -2323,7 +2330,7 @@ bool MainWindow::saveProjectAs(const QString& dir) {
             QMessageBox::Yes | QMessageBox::No | QMessageBox::Cancel);
         if (result == QMessageBox::Cancel) return false;
         if (result == QMessageBox::Yes) {
-            ProjectSerializer::copyReferencesIntoProject(projectDir, m_workspace);
+            ProjectDataSerializer::copyReferencesIntoProject(projectDir, m_workspace);
         }
     }
 
@@ -2332,7 +2339,7 @@ bool MainWindow::saveProjectAs(const QString& dir) {
     setWindowTitle(QString("BLastro — %1").arg(QDir(projectDir).dirName()));
     if (m_ppwDlg) m_ppwDlg->updateProcessDirLabel();
     saveWorkspaceSingleImages(projectDir);
-    return ProjectSerializer::saveProject(projectDir,
+    return ProjectUISerializer::saveProject(projectDir,
                                           m_workspace,
                                           m_workspaceArea,
                                           buildDialogSet(),

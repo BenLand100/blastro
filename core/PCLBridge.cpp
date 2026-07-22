@@ -5478,6 +5478,9 @@ protected:
     }
 };
 
+static PCLSubWindowFactory s_subWindowFactory;
+static PCLExecuteProcessHandler s_executeProcessHandler;
+
 bool PCLBridge::launchInterface(const QString &processId,
                                 QWidget *parentWindow) {
   if (!m_initialized) {
@@ -5735,14 +5738,11 @@ bool PCLBridge::launchInterface(const QString &processId,
   // Connect the Apply button to execute the process on the active image
   QObject::connect(
       applyButton, &QPushButton::clicked,
-      [this, processId, hProcess, parentWindow]() {
-        if (parentWindow && QMetaObject::invokeMethod(parentWindow, "executePCLProcessOnActiveImage",
-                                                     Q_ARG(QString, processId),
-                                                     Q_ARG(void*, hProcess))) {
+      [processId, hProcess]() {
+        if (s_executeProcessHandler && s_executeProcessHandler(processId, hProcess)) {
           // Process executed successfully via host window
         } else {
-          qWarning() << "[PCL Bridge] Cannot apply process: parent window is "
-                        "not valid host window.";
+          qWarning() << "[PCL Bridge] Cannot apply process: process execution handler failed or not set.";
         }
       });
 
@@ -5822,18 +5822,21 @@ bool PCLBridge::launchInterface(const QString &processId,
   });
 
   QString title = processId + " Process Interface";
-  bool invoked = false;
-  if (parentWindow) {
-    invoked = QMetaObject::invokeMethod(parentWindow, "createPCLPluginSubWindow",
-                                       Q_ARG(QWidget*, hostWidget),
-                                       Q_ARG(QString, processId),
-                                       Q_ARG(QString, title));
-  }
-  if (!invoked) {
+  if (s_subWindowFactory) {
+    s_subWindowFactory(hostWidget, processId, title);
+  } else {
     hostWidget->show();
   }
 
   return true;
+}
+
+void PCLBridge::setSubWindowFactory(PCLSubWindowFactory factory) {
+  s_subWindowFactory = std::move(factory);
+}
+
+void PCLBridge::setExecuteProcessHandler(PCLExecuteProcessHandler handler) {
+  s_executeProcessHandler = std::move(handler);
 }
 
 #include <QSettings>

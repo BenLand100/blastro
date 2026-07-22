@@ -210,11 +210,10 @@ LogWindow* LogWindow::instance() {
 void LogWindow::appendMessage(QtMsgType type, const QString& msg) {
     QMutexLocker locker(&s_mutex);
     if (s_instance) {
-        // Use QueuedConnection to guarantee thread safety when called from background threads
-        QMetaObject::invokeMethod(s_instance, "handleMessage",
-                                  Qt::QueuedConnection,
-                                  Q_ARG(int, static_cast<int>(type)),
-                                  Q_ARG(QString, msg));
+        // Use QueuedConnection with typed lambda for thread-safe main-thread dispatch
+        QMetaObject::invokeMethod(s_instance, [inst = s_instance, type, msg]() {
+            inst->handleMessage(static_cast<int>(type), msg);
+        }, Qt::QueuedConnection);
     }
 }
 
@@ -269,11 +268,9 @@ void LogWindow::handleMessage(int type, const QString& msg) {
 void LogWindow::appendRichMessage(const QString& channel, const QString& message, const QString& levelStr) {
     QMutexLocker locker(&s_mutex);
     if (s_instance) {
-        QMetaObject::invokeMethod(s_instance, "handleRichMessage",
-                                  Qt::QueuedConnection,
-                                  Q_ARG(QString, channel),
-                                  Q_ARG(QString, message),
-                                  Q_ARG(QString, levelStr));
+        QMetaObject::invokeMethod(s_instance, [inst = s_instance, channel, message, levelStr]() {
+            inst->handleRichMessage(channel, message, levelStr);
+        }, Qt::QueuedConnection);
     }
 }
 

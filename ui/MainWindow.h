@@ -21,7 +21,7 @@
 #include "WorkspaceArea.h"
 #include "ImageView.h"
 #include "core/PCLBridge.h"
-#include "core/ProjectSerializer.h"
+#include "ui/ProjectUISerializer.h"
 #include <QMainWindow>
 #include <QMenuBar>
 #include <QMenu>
@@ -121,6 +121,7 @@ struct StartupOptions {
 class MainWindow : public QMainWindow {
     Q_OBJECT
     friend class PreprocessingWizardDialog;
+    friend class ProjectUISerializer;
 public:
     explicit MainWindow(QWidget* parent = nullptr);
     ~MainWindow() override = default;
@@ -209,8 +210,8 @@ private:
     void createMenus();
     void addImageToWorkspace(const QString& name, const WorkspaceElement& element);
 
-    /// Build a DialogSet pointing to all persistent dialog members.
-    DialogSet buildDialogSet() const;
+    /// Build a UIDialogSet pointing to all persistent dialog members.
+    UIDialogSet buildDialogSet() const;
 
     /// Returns the default session file path (in app config dir).
     static QString defaultSessionPath();

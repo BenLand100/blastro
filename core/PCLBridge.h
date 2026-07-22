@@ -105,11 +105,17 @@ struct PCLModuleInfo {
     QString filepath;
 };
 
+using PCLSubWindowFactory = std::function<void(QWidget* widget, const QString& processId, const QString& title)>;
+using PCLExecuteProcessHandler = std::function<bool(const QString& processId, void* hProcess)>;
+
 class PCLBridge : public QObject {
     Q_OBJECT
 public:
     PCLBridge(QObject* parent = nullptr);
     ~PCLBridge();
+
+    static void setSubWindowFactory(PCLSubWindowFactory factory);
+    static void setExecuteProcessHandler(PCLExecuteProcessHandler handler);
 
     // Dynamically load a PCL .so module
     bool loadModule(const QString& path);

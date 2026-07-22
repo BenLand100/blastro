@@ -25,7 +25,7 @@ add_library(blastro_core
     TempDirectory.cpp
     Preferences.cpp
     Logger.cpp
-    ProjectSerializer.cpp
+    ProjectDataSerializer.cpp
     MathUtils.cpp
 )
 target_include_directories(blastro_core PUBLIC 
