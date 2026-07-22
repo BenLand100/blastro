@@ -17,6 +17,10 @@
 cmake_minimum_required(VERSION 3.16)
 project(BLastro LANGUAGES CXX)
 
+# Export compile_commands.json for language servers / indexing
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
+
 # Configure RPATH to look in relative lib/ directory at runtime
 set(CMAKE_SKIP_BUILD_RPATH FALSE)
 set(CMAKE_BUILD_WITH_INSTALL_RPATH FALSE)

@@ -1,4 +1,5 @@
-# BLastro 🌌
+# BLastro
+
 
 ![BLastro Logo](ui/icons/bl_spacey_icon.png)
 
@@ -75,7 +76,8 @@ Open **Preferences** (wrench icon or menu) and navigate to the **Update Reposito
 
 ## Contributing
 
-We welcome contributions! If you're interested in adding new algorithms or improving the PCL Bridge, please check out our [Developing Guide](Developing.md) for an architectural overview and instructions.
+We welcome contributions! If you're interested in adding new algorithms or improving the PCL Bridge, please check out our [Developing Guide](DEVELOPING.md) for an architectural overview and instructions.
+
 
 ## License
 

@@ -22,19 +22,6 @@
 #include "core/GrayscaleImage.h"
 #include "core/RGBImage.h"
 #include "core/ImageBatch.h"
-#include "ui/StretchingDialog.h"
-#include "ui/BackgroundExtractionDialog.h"
-#include "ui/StackingDialog.h"
-#include "ui/RegisterDialog.h"
-#include "ui/StarFindingDialog.h"
-#include "ui/AlignDialog.h"
-#include "ui/DebayerDialog.h"
-#include "ui/CalibrationDialog.h"
-#include "ui/PixelMathDialog.h"
-#include "ui/PreprocessingWizardDialog.h"
-#include "ui/PlatesolveDialog.h"
-#include "ui/WorkspaceImageWindow.h"
-#include "ui/LogWindow.h"
 #include <QMainWindow>
 #include <QMdiSubWindow>
 #include <QMdiArea>
@@ -79,47 +66,64 @@ static QString resolvePath(const QJsonObject& entry, const QString& projectDir) 
     return path; // absolute
 }
 
-// ─── dialog serialization ─────────────────────────────────────────────────────
+static QJsonObject serializeObjectState(QObject* obj) {
+    if (!obj) return QJsonObject();
+    QJsonObject res;
+    if (QMetaObject::invokeMethod(obj, "serializeState", Q_RETURN_ARG(QJsonObject, res))) {
+        return res;
+    }
+    if (QMetaObject::invokeMethod(obj, "serializeControlState", Q_RETURN_ARG(QJsonObject, res))) {
+        return res;
+    }
+    return res;
+}
+
+static void restoreObjectState(QObject* obj, const QJsonObject& state) {
+    if (!obj || state.isEmpty()) return;
+    if (!QMetaObject::invokeMethod(obj, "restoreState", Q_ARG(QJsonObject, state))) {
+        QMetaObject::invokeMethod(obj, "restoreControlState", Q_ARG(QJsonObject, state));
+    }
+}
 
 QJsonObject ProjectSerializer::serializeDialogs(const DialogSet& dialogs) {
     QJsonObject obj;
-    if (dialogs.stretching)  obj["stretching"]            = dialogs.stretching->serializeState();
-    if (dialogs.bge)         obj["background_extraction"] = dialogs.bge->serializeState();
-    if (dialogs.stacking)    obj["stacking"]              = dialogs.stacking->serializeState();
-    if (dialogs.registerDlg) obj["register"]              = dialogs.registerDlg->serializeState();
-    if (dialogs.starFinding) obj["star_finding"]          = dialogs.starFinding->serializeState();
-    if (dialogs.align)       obj["align"]                 = dialogs.align->serializeState();
-    if (dialogs.debayer)     obj["debayer"]               = dialogs.debayer->serializeState();
-    if (dialogs.calibration) obj["calibration"]           = dialogs.calibration->serializeState();
-    if (dialogs.pixelMath)   obj["pixel_math"]            = dialogs.pixelMath->serializeState();
-    if (dialogs.ppw)         obj["ppw_control"]           = dialogs.ppw->serializeControlState();
-    if (dialogs.platesolve)  obj["platesolve"]            = dialogs.platesolve->serializeState();
+    if (dialogs.stretching)  obj["stretching"]            = serializeObjectState(dialogs.stretching);
+    if (dialogs.bge)         obj["background_extraction"] = serializeObjectState(dialogs.bge);
+    if (dialogs.stacking)    obj["stacking"]              = serializeObjectState(dialogs.stacking);
+    if (dialogs.registerDlg) obj["register"]              = serializeObjectState(dialogs.registerDlg);
+    if (dialogs.starFinding) obj["star_finding"]          = serializeObjectState(dialogs.starFinding);
+    if (dialogs.align)       obj["align"]                 = serializeObjectState(dialogs.align);
+    if (dialogs.debayer)     obj["debayer"]               = serializeObjectState(dialogs.debayer);
+    if (dialogs.calibration) obj["calibration"]           = serializeObjectState(dialogs.calibration);
+    if (dialogs.pixelMath)   obj["pixel_math"]            = serializeObjectState(dialogs.pixelMath);
+    if (dialogs.ppw)         obj["ppw_control"]           = serializeObjectState(dialogs.ppw);
+    if (dialogs.platesolve)  obj["platesolve"]            = serializeObjectState(dialogs.platesolve);
     return obj;
 }
 
 void ProjectSerializer::restoreDialogs(const QJsonObject& obj, const DialogSet& dialogs) {
     if (dialogs.stretching  && obj.contains("stretching"))
-        dialogs.stretching->restoreState(obj["stretching"].toObject());
+        restoreObjectState(dialogs.stretching, obj["stretching"].toObject());
     if (dialogs.bge         && obj.contains("background_extraction"))
-        dialogs.bge->restoreState(obj["background_extraction"].toObject());
+        restoreObjectState(dialogs.bge, obj["background_extraction"].toObject());
     if (dialogs.stacking    && obj.contains("stacking"))
-        dialogs.stacking->restoreState(obj["stacking"].toObject());
+        restoreObjectState(dialogs.stacking, obj["stacking"].toObject());
     if (dialogs.registerDlg && obj.contains("register"))
-        dialogs.registerDlg->restoreState(obj["register"].toObject());
+        restoreObjectState(dialogs.registerDlg, obj["register"].toObject());
     if (dialogs.starFinding && obj.contains("star_finding"))
-        dialogs.starFinding->restoreState(obj["star_finding"].toObject());
+        restoreObjectState(dialogs.starFinding, obj["star_finding"].toObject());
     if (dialogs.align       && obj.contains("align"))
-        dialogs.align->restoreState(obj["align"].toObject());
+        restoreObjectState(dialogs.align, obj["align"].toObject());
     if (dialogs.debayer     && obj.contains("debayer"))
-        dialogs.debayer->restoreState(obj["debayer"].toObject());
+        restoreObjectState(dialogs.debayer, obj["debayer"].toObject());
     if (dialogs.calibration && obj.contains("calibration"))
-        dialogs.calibration->restoreState(obj["calibration"].toObject());
+        restoreObjectState(dialogs.calibration, obj["calibration"].toObject());
     if (dialogs.pixelMath   && obj.contains("pixel_math"))
-        dialogs.pixelMath->restoreState(obj["pixel_math"].toObject());
+        restoreObjectState(dialogs.pixelMath, obj["pixel_math"].toObject());
     if (dialogs.ppw         && obj.contains("ppw_control"))
-        dialogs.ppw->restoreControlState(obj["ppw_control"].toObject());
+        restoreObjectState(dialogs.ppw, obj["ppw_control"].toObject());
     if (dialogs.platesolve  && obj.contains("platesolve"))
-        dialogs.platesolve->restoreState(obj["platesolve"].toObject());
+        restoreObjectState(dialogs.platesolve, obj["platesolve"].toObject());
 }
 
 // ─── tool window serialization ────────────────────────────────────────────────
@@ -131,18 +135,18 @@ struct ToolWindowDef {
 
 static QList<ToolWindowDef> toolWindowDefs(const DialogSet& dialogs) {
     return {
-        { "StretchingDialog",          dialogs.stretching },
-        { "BackgroundExtractionDialog",dialogs.bge },
-        { "StackingDialog",            dialogs.stacking },
-        { "RegisterDialog",            dialogs.registerDlg },
-        { "StarFindingDialog",         dialogs.starFinding },
-        { "AlignDialog",               dialogs.align },
-        { "DebayerDialog",             dialogs.debayer },
-        { "CalibrationDialog",         dialogs.calibration },
-        { "PixelMathDialog",           dialogs.pixelMath },
-        { "PreprocessingWizardDialog", dialogs.ppw },
-        { "PlatesolveDialog",          dialogs.platesolve },
-        { "LogWindow",                 LogWindow::instance() }
+        { "StretchingDialog",          qobject_cast<QWidget*>(dialogs.stretching) },
+        { "BackgroundExtractionDialog",qobject_cast<QWidget*>(dialogs.bge) },
+        { "StackingDialog",            qobject_cast<QWidget*>(dialogs.stacking) },
+        { "RegisterDialog",            qobject_cast<QWidget*>(dialogs.registerDlg) },
+        { "StarFindingDialog",         qobject_cast<QWidget*>(dialogs.starFinding) },
+        { "AlignDialog",               qobject_cast<QWidget*>(dialogs.align) },
+        { "DebayerDialog",             qobject_cast<QWidget*>(dialogs.debayer) },
+        { "CalibrationDialog",         qobject_cast<QWidget*>(dialogs.calibration) },
+        { "PixelMathDialog",           qobject_cast<QWidget*>(dialogs.pixelMath) },
+        { "PreprocessingWizardDialog", qobject_cast<QWidget*>(dialogs.ppw) },
+        { "PlatesolveDialog",          qobject_cast<QWidget*>(dialogs.platesolve) },
+        { "LogWindow",                 qobject_cast<QWidget*>(dialogs.logWindow) }
     };
 }
 
@@ -321,19 +325,26 @@ bool ProjectSerializer::saveProject(const QString& projectDir,
 
     // MDI image windows
     QJsonArray mdiWindows;
-    for (auto* sub : mdi->subWindowList(QMdiArea::StackingOrder)) {
-        auto* win = qobject_cast<WorkspaceImageWindow*>(sub->widget());
-        if (!win) continue;
-        QJsonObject entry;
-        entry["element_name"] = win->name();
-        QJsonObject sw;
-        sw["x"] = sub->x(); sw["y"] = sub->y();
-        sw["width"] = sub->width(); sw["height"] = sub->height();
-        sw["minimized"] = sub->isMinimized();
-        sw["maximized"] = sub->isMaximized();
-        entry["subwindow"] = sw;
-        entry["window_state"] = win->serializeWindowState();
-        mdiWindows.append(entry);
+    if (mdi) {
+        for (auto* sub : mdi->subWindowList(QMdiArea::StackingOrder)) {
+            if (!sub->widget()) continue;
+            QString elemName;
+            QJsonObject winState;
+            if (QMetaObject::invokeMethod(sub->widget(), "name", Q_RETURN_ARG(QString, elemName)) && !elemName.isEmpty()) {
+                QJsonObject entry;
+                entry["element_name"] = elemName;
+                QJsonObject sw;
+                sw["x"] = sub->x(); sw["y"] = sub->y();
+                sw["width"] = sub->width(); sw["height"] = sub->height();
+                sw["minimized"] = sub->isMinimized();
+                sw["maximized"] = sub->isMaximized();
+                entry["subwindow"] = sw;
+                if (QMetaObject::invokeMethod(sub->widget(), "serializeWindowState", Q_RETURN_ARG(QJsonObject, winState))) {
+                    entry["window_state"] = winState;
+                }
+                mdiWindows.append(entry);
+            }
+        }
     }
     root["mdi_windows"] = mdiWindows;
 
@@ -400,8 +411,11 @@ bool ProjectSerializer::loadProject(const QString& projectDir,
         // Mapping from element name to sub-window
         QMap<QString, QMdiSubWindow*> subMap;
         for (auto* sub : mdi->subWindowList()) {
-            auto* win = qobject_cast<WorkspaceImageWindow*>(sub->widget());
-            if (win) subMap[win->name()] = sub;
+            if (!sub->widget()) continue;
+            QString winName;
+            if (QMetaObject::invokeMethod(sub->widget(), "name", Q_RETURN_ARG(QString, winName))) {
+                if (!winName.isEmpty()) subMap[winName] = sub;
+            }
         }
         QMdiSubWindow* activeSub = nullptr;
         for (const auto& val : root["mdi_windows"].toArray()) {
@@ -409,7 +423,6 @@ bool ProjectSerializer::loadProject(const QString& projectDir,
             QString name = entry["element_name"].toString();
             if (!subMap.contains(name)) continue;
             QMdiSubWindow* sub = subMap[name];
-            auto* win = qobject_cast<WorkspaceImageWindow*>(sub->widget());
             if (entry.contains("subwindow")) {
                 QJsonObject sw = entry["subwindow"].toObject();
                 sub->move(sw["x"].toInt(), sw["y"].toInt());
@@ -425,8 +438,8 @@ bool ProjectSerializer::loadProject(const QString& projectDir,
                     activeSub = sub;
                 }
             }
-            if (win && entry.contains("window_state")) {
-                win->restoreWindowState(entry["window_state"].toObject());
+            if (sub->widget() && entry.contains("window_state")) {
+                QMetaObject::invokeMethod(sub->widget(), "restoreWindowState", Q_ARG(QJsonObject, entry["window_state"].toObject()));
             }
         }
         if (activeSub) {

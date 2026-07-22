@@ -20,12 +20,12 @@
 #include "core/Logger.h"
 #include "core/PCLStubs.h"
 #include "core/Preferences.h"
-#include "ui/MainWindow.h"
 #include <QApplication>
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDebug>
 #include <QDialog>
+#include <QPushButton>
 #include <QDir>
 #include <QDirIterator>
 #include <QFile>
@@ -5736,12 +5736,13 @@ bool PCLBridge::launchInterface(const QString &processId,
   QObject::connect(
       applyButton, &QPushButton::clicked,
       [this, processId, hProcess, parentWindow]() {
-        MainWindow *mainWin = qobject_cast<MainWindow *>(parentWindow);
-        if (mainWin) {
-          mainWin->executePCLProcessOnActiveImage(processId, hProcess);
+        if (parentWindow && QMetaObject::invokeMethod(parentWindow, "executePCLProcessOnActiveImage",
+                                                     Q_ARG(QString, processId),
+                                                     Q_ARG(void*, hProcess))) {
+          // Process executed successfully via host window
         } else {
           qWarning() << "[PCL Bridge] Cannot apply process: parent window is "
-                        "not MainWindow.";
+                        "not valid host window.";
         }
       });
 
@@ -5820,11 +5821,15 @@ bool PCLBridge::launchInterface(const QString &processId,
     g_processParameters.erase(hProcess);
   });
 
-  MainWindow *mainWin = qobject_cast<MainWindow *>(parentWindow);
-  if (mainWin) {
-    mainWin->createPCLPluginSubWindow(hostWidget, processId,
-                                      processId + " Process Interface");
-  } else {
+  QString title = processId + " Process Interface";
+  bool invoked = false;
+  if (parentWindow) {
+    invoked = QMetaObject::invokeMethod(parentWindow, "createPCLPluginSubWindow",
+                                       Q_ARG(QWidget*, hostWidget),
+                                       Q_ARG(QString, processId),
+                                       Q_ARG(QString, title));
+  }
+  if (!invoked) {
     hostWidget->show();
   }
 

@@ -46,6 +46,8 @@ class DebayerDialog;
 class CalibrationDialog;
 class PixelMathDialog;
 class StarFindingDialog;
+class PreprocessingWizardDialog;
+class PlatesolveDialog;
 }
 
 namespace blastro {

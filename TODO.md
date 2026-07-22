@@ -1,5 +1,6 @@
 # TODO
 
+* Using a huge amount of (GPU) memory, likely related to number of images and image size. Need to explore, and fix. 
 * Test OSC workflow
 * Scripting interface -- algorithms, other manipulations, need a way to chain with logic
 

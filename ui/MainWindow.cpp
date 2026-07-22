@@ -2202,6 +2202,7 @@ DialogSet MainWindow::buildDialogSet() const {
     ds.pixelMath   = m_pixelMathDlg;
     ds.ppw         = m_ppwDlg;
     ds.platesolve  = m_platesolveDlg;
+    ds.logWindow   = LogWindow::instance();
     return ds;
 }
 

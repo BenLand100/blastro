@@ -23,37 +23,24 @@
 #include <QJsonArray>
 #include <QStringList>
 
-// Forward declarations to avoid pulling all dialog headers into every TU
-namespace blastro {
-class StretchingDialog;
-class BackgroundExtractionDialog;
-class StackingDialog;
-class RegisterDialog;
-class AlignDialog;
-class DebayerDialog;
-class CalibrationDialog;
-class PixelMathDialog;
-class PreprocessingWizardDialog;
-class PlatesolveDialog;
-class StarFindingDialog;
-}
 class QMainWindow;
 
 namespace blastro {
 
-/// Aggregates all serializable dialog instances for pass-through to ProjectSerializer.
+/// Aggregates serializable dialog instances as generic QObject pointers for ProjectSerializer.
 struct DialogSet {
-    StretchingDialog*          stretching  = nullptr;
-    BackgroundExtractionDialog* bge        = nullptr;
-    StackingDialog*            stacking    = nullptr;
-    RegisterDialog*            registerDlg = nullptr;
-    StarFindingDialog*         starFinding = nullptr;
-    AlignDialog*               align       = nullptr;
-    DebayerDialog*             debayer     = nullptr;
-    CalibrationDialog*         calibration = nullptr;
-    PixelMathDialog*           pixelMath   = nullptr;
-    PreprocessingWizardDialog* ppw         = nullptr;
-    PlatesolveDialog*          platesolve  = nullptr;
+    QObject* stretching  = nullptr;
+    QObject* bge        = nullptr;
+    QObject* stacking    = nullptr;
+    QObject* registerDlg = nullptr;
+    QObject* starFinding = nullptr;
+    QObject* align       = nullptr;
+    QObject* debayer     = nullptr;
+    QObject* calibration = nullptr;
+    QObject* pixelMath   = nullptr;
+    QObject* ppw         = nullptr;
+    QObject* platesolve  = nullptr;
+    QObject* logWindow   = nullptr;
 };
 
 /// Central service for reading and writing project files and session files.

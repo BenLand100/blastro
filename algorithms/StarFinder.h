@@ -18,20 +18,11 @@
 
 #pragma once
 #include "core/GrayscaleImage.h"
+#include "core/Star.h"
 #include <vector>
 #include <string>
 
 namespace blastro {
-
-struct Star {
-    double x = 0.0;
-    double y = 0.0;
-    double fwhm = 0.0;
-    double peak = 0.0;
-    double background = 0.0;
-    double eccentricity = 0.0;
-    double snr = 0.0;
-};
 
 class StarFinder {
 public:

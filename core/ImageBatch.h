@@ -19,7 +19,7 @@
 #pragma once
 #include "GrayscaleImage.h"
 #include "RGBImage.h"
-#include "algorithms/StarFinder.h"
+#include "Star.h"
 #include "ImageMetadata.h"
 #include <vector>
 #include <variant>

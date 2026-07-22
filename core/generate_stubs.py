@@ -17,9 +17,13 @@
 import os
 import re
 
-pcl_api_cpp = "/home/benland100/Desktop/blastro/thirdparty/PCL/src/pcl/APIInterface.cpp"
-stubs_h_path = "/home/benland100/Desktop/blastro/core/PCLStubs.h"
-stubs_cpp_path = "/home/benland100/Desktop/blastro/core/PCLStubs.cpp"
+script_dir = os.path.dirname(os.path.abspath(__file__))
+repo_root = os.path.abspath(os.path.join(script_dir, ".."))
+
+pcl_api_cpp = os.path.join(repo_root, "thirdparty/PCL/src/pcl/APIInterface.cpp")
+stubs_h_path = os.path.join(repo_root, "core/PCLStubs.h")
+stubs_cpp_path = os.path.join(repo_root, "core/PCLStubs.cpp")
+
 
 if not os.path.exists(pcl_api_cpp):
     print(f"Error: {pcl_api_cpp} does not exist.")
